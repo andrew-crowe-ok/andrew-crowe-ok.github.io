@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>UNM CS 412/512 WebGL Playground</title>
+  <style>
+    body {
+      background: #111;
+      color: #ccc;
+      font-family: monospace;
+    }
+
+    textarea {
+      background: #222;
+      color: #0f0;
+      font: 14px monospace;
+      width: 400px;
+      height: 250px;
+    }
+
+    canvas {
+      border: 1px solid #444;
+    }
+  </style>
+<script type="text/javascript" nonce="cdc73e8a91484986acec8ea4047" src="//local.adguard.org?ts=1787589401098&amp;type=content-script&amp;dmn=cdn.inst-fs-pdx-prod.inscloudgate.net&amp;url=https%3A%2F%2Fcdn.inst-fs-pdx-prod.inscloudgate.net%2F342ec520-3f70-4b61-9538-62a644c89db3%2Fhw1.html%3Ftoken%3DeyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCIsImtpZCI6ImNkbiJ9.eyJyZXNvdXJjZSI6Ii8zNDJlYzUyMC0zZjcwLTRiNjEtOTUzOC02MmE2NDRjODlkYjMvaHcxLmh0bWwiLCJ0ZW5hbnQiOiJjYW52YXMiLCJpYXQiOjE3ODc1NTgyNDUsImV4cCI6MTc4NzY0NDY0NSwianRpIjoiNmM1OGQ5NGYtZTRjYS00MjQyLTgwYWEtYzc0ZGVhZGVjZmRlIn0.tRdLcMp69yBGBg1ohmstbTnJtyA--eauIh1zlm9-_ElMqvy1jm5GMYL4VWu_wvf9-Er2eI62_gqD-3_bDYFHVQ%26download%3D1%26content_type%3Dtext%252Fhtml&amp;app=com.microsoft.edgemac&amp;css=3&amp;js=1&amp;rel=1&amp;rji=1&amp;sbe=1"></script><script type="text/javascript" nonce="cdc73e8a91484986acec8ea4047" src="//local.adguard.org?ts=1787589401098&amp;name=AdGuard%20Extra&amp;type=user-script"></script></head>
+
+<body>
+  <h2>WebGL Test</h2>
+  <p>Edit vertex and fragment shaders on the left, and you can see the result on the right instantly. <br>
+    Please copy your edits to the source code if you want to save them, as the playground doesn't save them to the file.
+  </p>
+
+  <div style="display: flex; gap: 10px; align-items: flex-start;">
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div>
+        <b>Vertex Shader</b><br>
+        <textarea id="vsEditor"></textarea>
+      </div>
+      <div>
+        <b>Fragment Shader</b><br>
+        <textarea id="fsEditor"></textarea>
+      </div>
+    </div>
+
+    <div>
+      <canvas id="glcanvas" width="600" height="600"></canvas>
+    </div>
+  </div>
+
+  <!-- Vertex Shader -->
+  <script id="vertex-shader" type="x-shader/x-vertex">#version 300 es
+  in vec3 aPosition;
+  in vec3 aColor;
+
+  uniform float uTime; //time in sec
+  out vec3 vColor;
+
+  void main() {
+    gl_Position = vec4(aPosition, 1.0);
+    vColor = aColor;
+  }
+  </script>
+
+  <!-- Fragment Shader -->
+  <script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
+  precision mediump float;
+  in vec3 vColor;
+
+  out vec4 fragColor;
+
+  void main() {
+    fragColor = vec4(vColor, 1.0);
+  }
+  </script>
+
+  <script src="triangle.js"></script>
+
+  <script>
+    function createShader(gl, type, source) {
+      let shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(shader));
+      }
+      return shader;
+    }
+
+    function createProgram(gl, vsSource, fsSource) {
+      let vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+      let fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+      let prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+      }
+      return prog;
+    }
+
+
+    // --- WebGL init ---
+    const canvas = document.getElementById("glcanvas");
+    // const gl = canvas.getContext("webgl2");
+    const gl = canvas.getContext("webgl2", { premultipliedAlpha: false });
+    if (!gl) alert("WebGL2 not supported");
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+
+    const vsEditor = document.getElementById("vsEditor");
+    const fsEditor = document.getElementById("fsEditor");
+    vsEditor.value = document.getElementById("vertex-shader").textContent;
+    fsEditor.value = document.getElementById("fragment-shader").textContent;
+
+    let program, posLoc, colorLoc, timeLoc;
+    let posBuffer, colorBuffer;
+
+    // --- Buffers ---
+    function initBuffers() {
+      posBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+      colorBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+    }
+
+    initBuffers();
+
+    function initShaderProgram() {
+      try {
+        program = createProgram(gl, vsEditor.value, fsEditor.value);
+        gl.useProgram(program);
+        posLoc = gl.getAttribLocation(program, "aPosition");
+        colorLoc = gl.getAttribLocation(program, "aColor");
+        timeLoc = gl.getUniformLocation(program, "uTime");
+      } catch (e) { console.error(e); }
+    }
+
+    initShaderProgram();
+
+    //hot compile when any input in the playground text area
+    vsEditor.onkeyup = initShaderProgram;
+    fsEditor.onkeyup = initShaderProgram;
+
+    let startTime = Date.now();
+    function render() {
+      //clear the canvas
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.enable(gl.DEPTH_TEST);
+
+      // Position buffer binding
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+      gl.enableVertexAttribArray(posLoc);
+      gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+      // Color buffer binding
+      gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+      gl.enableVertexAttribArray(colorLoc);
+      gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+      //delta time in ms
+      let deltaTime = Date.now() - startTime;
+      //set time in seconds
+      gl.uniform1f(timeLoc, deltaTime/1000.0);
+
+      // Draw content
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    // Initialize when page loads
+    window.onload = function () {
+      setInterval(render, 30);
+    };
+  </script>
+</body>
+
+</html>

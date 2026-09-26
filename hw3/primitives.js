@@ -11,7 +11,15 @@ const positions = new Float32Array([
 ]);
 
 const colors = new Float32Array([
-  1,0,0,  0,1,0,  0,0,1, 1,1,0, 1,0,1, 0,1,1, 1,1,0, 1,0,1
+  // Warm sunset fire palette (coral, orange, gold, magenta)
+  1.0, 0.15, 0.25,  // 0: bright coral red
+  1.0, 0.55, 0.0,   // 1: electric orange
+  1.0, 0.85, 0.1,   // 2: vivid gold
+  0.9, 0.1,  0.55,  // 3: hot rose
+  1.0, 0.25, 0.7,   // 4: neon pink
+  1.0, 0.45, 0.05,  // 5: sunset amber
+  0.85, 0.1, 0.95,  // 6: electric violet
+  1.0, 0.75, 0.2    // 7: warm yellow
 ]);
 
 
@@ -45,14 +53,22 @@ function createTrapezoidalPrism() {
     [4, 0, 3, 7]  // Left
   ];
 
+  // Cool cyan / emerald / deep blue cyberpunk palette
+  const faceColors = [
+    [0.0,  0.95, 0.85], // Front: bright turquoise / cyan
+    [0.1,  0.4,  0.95], // Back: royal blue
+    [0.2,  1.0,  0.35], // Top: electric neon lime
+    [0.05, 0.65, 0.9],  // Bottom: deep oceanic teal
+    [0.0,  0.9,  1.0],  // Right: vibrant sky cyan
+    [0.4,  0.2,  0.95]  // Left: electric indigo / violet
+  ];
+
   const positions = [];
   const colors = [];
   const indices = [];
 
   faces.forEach((face, faceIndex) => {
-    const r = (faceIndex % 2 === 0) ? 1.0 : 0.2;
-    const g = (faceIndex % 3 === 0) ? 1.0 : 0.2;
-    const b = (faceIndex % 4 === 0) ? 1.0 : 0.2;
+    const [r, g, b] = faceColors[faceIndex];
 
     face.forEach(cornerIndex => {
       positions.push(...v[cornerIndex]);

@@ -37,21 +37,45 @@ Press F12 to see the console for debugging.</p>
     <div style="display: flex; flex-direction: column; gap: 10px;">
       <div>
         <b>Vertex Shader</b><br>
-        <textarea id="vertEditor"></textarea>
+        <textarea id="vertEditor" autocomplete="off" spellcheck="false"></textarea>
       </div>
       <div>
         <b>Fragment Shader</b><br>
-        <textarea id="fragEditor"></textarea>
+        <textarea id="fragEditor" autocomplete="off" spellcheck="false"></textarea>
       </div>
+      <div id="shaderError" style="color: #ff5555; font-size: 12px; max-width: 400px; white-space: pre-wrap;"></div>
     </div>
     <div>
       <canvas id="glcanvas" width="400" height="400"></canvas>
       
+      <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 15px;">
+        <div>
+          <b>Object Scaling</b><br>
+          <label>Cube: <input type="range" id="scaleCube" min="0.1" max="2.0" step="0.1" value="1.0"></label><br>
+          <label>Prism: <input type="range" id="scalePrism" min="0.1" max="2.0" step="0.1" value="1.0"></label><br>
+          <label>Sphere: <input type="range" id="scaleSphere" min="0.1" max="2.0" step="0.1" value="1.0"></label>
+        </div>
+
+        <div>
+          <b>Rotation (Y-axis)</b><br>
+          <label>Cube: <input type="range" id="rotCube" min="-180" max="180" step="5" value="0"></label><br>
+          <label>Prism: <input type="range" id="rotPrism" min="-180" max="180" step="5" value="0"></label><br>
+          <label>Sphere: <input type="range" id="rotSphere" min="-180" max="180" step="5" value="0"></label>
+        </div>
+
+        <div>
+          <b>Translation (Y-axis)</b><br>
+          <label>Cube: <input type="range" id="transYCube" min="-2.0" max="2.0" step="0.1" value="0.0"></label><br>
+          <label>Prism: <input type="range" id="transYPrism" min="-2.0" max="2.0" step="0.1" value="0.0"></label><br>
+          <label>Sphere: <input type="range" id="transYSphere" min="-2.0" max="2.0" step="0.1" value="0.0"></label>
+        </div>
+      </div>
+
       <div style="margin-top: 15px;">
-        <b>Object Scaling</b><br>
-        <label>Cube: <input type="range" id="scaleCube" min="0.1" max="2.0" step="0.1" value="1.0"></label><br>
-        <label>Prism: <input type="range" id="scalePrism" min="0.1" max="2.0" step="0.1" value="1.0"></label><br>
-        <label>Sphere: <input type="range" id="scaleSphere" min="0.1" max="2.0" step="0.1" value="1.0"></label>
+        <b>Sphere Actions</b><br>
+        <button id="sliceSphereBtn" style="margin-top: 6px; padding: 6px 14px; background: #222; color: #0f0; border: 1px solid #444; font-family: monospace; font-size: 13px; cursor: pointer; border-radius: 4px; transition: all 0.2s;">
+          Slice Sphere
+        </button>
       </div>
     </div>
   </div>
@@ -77,11 +101,12 @@ void main() {
   <script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
 precision mediump float;
 in vec3 vColor;
+uniform float uAlpha;
 
 out vec4 fragColor;
 
 void main() {
-  fragColor = vec4(vColor,1.0);
+  fragColor = vec4(vColor, uAlpha);
 }
 </script>
 
@@ -117,64 +142,104 @@ void main() {
     const gl = canvas.getContext("webgl2");
     if (!gl) alert("WebGL2 not supported");
 
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
     let vertEditor = document.getElementById("vertEditor");
     let fragEditor = document.getElementById("fragEditor");
-    vertEditor.value = document.getElementById("vertex-shader").textContent;
-    fragEditor.value = document.getElementById("fragment-shader").textContent;
+    vertEditor.value = document.getElementById("vertex-shader").textContent.trim();
+    fragEditor.value = document.getElementById("fragment-shader").textContent.trim();
 
-    let program, posLoc, colorLoc, timeLoc, uMVM, uPM, uMTM;
+    let program, posLoc, colorLoc, timeLoc, uMVM, uPM, uMTM, uAlphaLoc;
     let sceneObjects = [];
     let vbo, nbo, ibo;
 
     // Buffers
     function createMeshBuffers(gl, posData, colorData, indexData) {
-    let vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, posData, gl.STATIC_DRAW);
+      let vbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, posData, gl.STATIC_DRAW);
 
-    let nbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
-    gl.bufferData(gl.ARRAY_BUFFER, colorData, gl.STATIC_DRAW);
+      let nbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
+      gl.bufferData(gl.ARRAY_BUFFER, colorData, gl.STATIC_DRAW);
 
-    let ibo = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
+      let ibo = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
 
-    return { vbo, nbo, ibo, indexCount: indexData.length };
-  }
+      return { vbo, nbo, ibo, indexCount: indexData.length };
+    }
 
-  function initBuffers() {
-    sceneObjects = [];
+    function initBuffers() {
+      sceneObjects = [];
 
-    // 1. Cube
-    const cubeBuffers = createMeshBuffers(gl, positions, colors, indices);
-    sceneObjects.push({
-      buffers: cubeBuffers,
-      translation: [-2.0, 0.0, 0.0] // Shifted further left
-    });
+      // 1. Cube
+      const cubeBuffers = createMeshBuffers(gl, positions, colors, indices);
+      sceneObjects.push({
+        type: 'cube',
+        buffers: cubeBuffers,
+        translation: [-2.0, 0.0, 0.0],
+        scaleId: 'scaleCube',
+        rotId: 'rotCube',
+        transId: 'transYCube'
+      });
 
-    // 2. Trapezoidal Prism
-    const prismData = createTrapezoidalPrism();
-    const prismBuffers = createMeshBuffers(gl, prismData.positions, prismData.colors, prismData.indices);
-    sceneObjects.push({
-      buffers: prismBuffers,
-      translation: [0.0, 0.0, 0.0] // Centered
-    });
+      // 2. Trapezoidal Prism
+      const prismData = createTrapezoidalPrism();
+      const prismBuffers = createMeshBuffers(gl, prismData.positions, prismData.colors, prismData.indices);
+      sceneObjects.push({
+        type: 'prism',
+        buffers: prismBuffers,
+        translation: [0.0, 0.0, 0.0],
+        scaleId: 'scalePrism',
+        rotId: 'rotPrism',
+        transId: 'transYPrism'
+      });
 
-    // 3. Sphere
-    const sphereData = createSphere();
-    const sphereBuffers = createMeshBuffers(gl, sphereData.positions, sphereData.colors, sphereData.indices);
-    sceneObjects.push({
-      buffers: sphereBuffers,
-      translation: [3.0, 0.0, 0.0] // Shifted right
-    });
-  }
-  initBuffers();
-    
+      // 3. Right Hemisphere
+      const rightHemiData = createHemisphere('right');
+      const rightHemiBuffers = createMeshBuffers(gl, rightHemiData.positions, rightHemiData.colors, rightHemiData.indices);
+      sceneObjects.push({
+        type: 'rightHemi',
+        buffers: rightHemiBuffers,
+        translation: [3.0, 0.0, 0.0],
+        scaleId: 'scaleSphere',
+        rotId: 'rotSphere',
+        transId: 'transYSphere'
+      });
+
+      // 4. Left Hemisphere
+      const leftHemiData = createHemisphere('left');
+      const leftHemiBuffers = createMeshBuffers(gl, leftHemiData.positions, leftHemiData.colors, leftHemiData.indices);
+      sceneObjects.push({
+        type: 'leftHemi',
+        buffers: leftHemiBuffers,
+        translation: [3.0, 0.0, 0.0],
+        scaleId: 'scaleSphere',
+        rotId: 'rotSphere',
+        transId: 'transYSphere'
+      });
+
+      // 5. Cutting Plane
+      const planeData = createCuttingPlane(1.4);
+      const planeBuffers = createMeshBuffers(gl, planeData.positions, planeData.colors, planeData.indices);
+      sceneObjects.push({
+        type: 'plane',
+        buffers: planeBuffers,
+        translation: [3.0, 0.0, 0.0],
+        scaleId: 'scaleSphere',
+        rotId: 'rotSphere',
+        transId: 'transYSphere'
+      });
+    }
+    initBuffers();
 
     function initShaderProgram() {
+      const errDiv = document.getElementById("shaderError");
       try {
-        program = createProgram(gl, vertEditor.value, fragEditor.value);
+        let newProgram = createProgram(gl, vertEditor.value, fragEditor.value);
+        program = newProgram;
         gl.useProgram(program);
         posLoc = gl.getAttribLocation(program, "aPosition");
         colorLoc = gl.getAttribLocation(program, "aColor");
@@ -182,7 +247,12 @@ void main() {
         uMVM = gl.getUniformLocation(program, "uModelViewMatrix");
         uPM = gl.getUniformLocation(program, "uProjectionMatrix");
         uMTM = gl.getUniformLocation(program, "uModelTransformationMatrix");
-      } catch (e) { console.error(e); }
+        uAlphaLoc = gl.getUniformLocation(program, "uAlpha");
+        if (errDiv) errDiv.textContent = "";
+      } catch (e) {
+        console.error(e);
+        if (errDiv) errDiv.textContent = e.message;
+      }
     }
     initShaderProgram();
     vertEditor.onkeyup = initShaderProgram;
@@ -232,7 +302,24 @@ void main() {
 
     let startTime = Date.now();
 
+    // Slicing animation state
+    let isSlicing = false;
+    let sliceStartTime = 0;
+    const sliceBtn = document.getElementById("sliceSphereBtn");
+
+    sliceBtn.addEventListener("click", () => {
+      if (isSlicing) return;
+      isSlicing = true;
+      sliceStartTime = Date.now();
+      sliceBtn.disabled = true;
+      sliceBtn.style.opacity = "0.5";
+      sliceBtn.style.cursor = "not-allowed";
+      sliceBtn.textContent = "Cutting...";
+    });
+
     function render() {
+      if (!program) return;
+      gl.useProgram(program);
       gl.enable(gl.DEPTH_TEST);
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -255,19 +342,93 @@ void main() {
       gl.uniformMatrix4fv(uPM, false, proj);
       gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
 
-      sceneObjects.forEach((obj, index) => {
+      // Slicing Animation Timeline
+      let hemiOffset = 0.0;
+      let planeY = 0.0;
+      let planeAlpha = 1.0;
+      let showPlane = false;
+
+      if (isSlicing) {
+        let t = (Date.now() - sliceStartTime) / 1000.0;
+
+        if (t < 0.8) {
+          // Phase 1: Plane falls from y = 3.0 down into the sphere (y = 0.0)
+          let p = t / 0.8;
+          let easeIn = p * p;
+          planeY = 3.0 * (1.0 - easeIn);
+          showPlane = true;
+          planeAlpha = 1.0;
+          hemiOffset = 0.0;
+        } else if (t < 1.6) {
+          // Phase 2: Plane slices through, sphere separates into two half spheres
+          let p = (t - 0.8) / 0.8;
+          let easeOut = Math.sin(p * Math.PI / 2);
+          hemiOffset = 0.45 * easeOut;
+          planeY = 0.0;
+          showPlane = true;
+          planeAlpha = 1.0;
+        } else if (t < 2.4) {
+          // Phase 3: Plane fades out and de-spawns
+          let p = (t - 1.6) / 0.8;
+          hemiOffset = 0.45;
+          planeY = 0.0;
+          planeAlpha = Math.max(0.0, 1.0 - p);
+          showPlane = (planeAlpha > 0.01);
+        } else if (t < 3.5) {
+          // Phase 4: Sphere halves stay separated for ~1 second
+          hemiOffset = 0.45;
+          showPlane = false;
+          sliceBtn.textContent = "Resetting...";
+        } else if (t < 4.3) {
+          // Phase 5: Sphere halves rejoin smoothly
+          let p = (t - 3.5) / 0.8;
+          let easeInOut = 0.5 - 0.5 * Math.cos(p * Math.PI);
+          hemiOffset = 0.45 * (1.0 - easeInOut);
+          showPlane = false;
+        } else {
+          // Phase 6: Completed, reset sphere and allow button to be pressed again
+          isSlicing = false;
+          hemiOffset = 0.0;
+          showPlane = false;
+          sliceBtn.disabled = false;
+          sliceBtn.style.opacity = "1.0";
+          sliceBtn.style.cursor = "pointer";
+          sliceBtn.textContent = "Slice Sphere";
+        }
+      }
+
+      sceneObjects.forEach((obj) => {
+        if (obj.type === 'plane' && !showPlane) return;
+
+        const transYVal = parseFloat(document.getElementById(obj.transId).value);
+        const rotValDeg = parseFloat(document.getElementById(obj.rotId).value);
+        const rotValRad = rotValDeg * Math.PI / 180.0;
+        const scaleVal = parseFloat(document.getElementById(obj.scaleId).value);
+
         let mtm = mat4Identity();
-        mtm = mat4Translate(mtm, obj.translation);
+        // Base translation + slider Y-translation
+        mtm = mat4Translate(mtm, [obj.translation[0], obj.translation[1] + transYVal, obj.translation[2]]);
+        // Global mouse rotation
         mtm = multiplyMat4(mtm, cubeRotation);
-        
-        // Read the corresponding slider value (0: Cube, 1: Prism, 2: Sphere)
-        const sliderIds = ['scaleCube', 'scalePrism', 'scaleSphere'];
-        const scaleVal = parseFloat(document.getElementById(sliderIds[index]).value);
-        
-        // Apply the scale transformation
+        // Individual object local Y-rotation
+        mtm = mat4RotateY(mtm, rotValRad);
+        // Individual object scaling
         mtm = mat4Scale(mtm, [scaleVal, scaleVal, scaleVal]);
+
+        // Local displacement for cut animation
+        if (obj.type === 'rightHemi') {
+          mtm = mat4Translate(mtm, [hemiOffset, 0.0, 0.0]);
+        } else if (obj.type === 'leftHemi') {
+          mtm = mat4Translate(mtm, [-hemiOffset, 0.0, 0.0]);
+        } else if (obj.type === 'plane') {
+          mtm = mat4Translate(mtm, [0.0, planeY, 0.0]);
+        }
         
         gl.uniformMatrix4fv(uMTM, false, mtm);
+
+        if (uAlphaLoc) {
+          gl.uniform1f(uAlphaLoc, obj.type === 'plane' ? planeAlpha : 1.0);
+        }
 
         gl.bindBuffer(gl.ARRAY_BUFFER, obj.buffers.vbo);
         gl.enableVertexAttribArray(posLoc);
@@ -284,6 +445,9 @@ void main() {
 
     // Initialize when page loads
     window.onload = function () {
+      vertEditor.value = document.getElementById("vertex-shader").textContent.trim();
+      fragEditor.value = document.getElementById("fragment-shader").textContent.trim();
+      initShaderProgram();
       setInterval(render, 30);
     }
 

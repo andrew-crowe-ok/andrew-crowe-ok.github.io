@@ -125,3 +125,137 @@ function createSphere(radius = 1, latBands = 20, longBands = 20) {
   };
 }
 
+function createHemisphere(type = 'right', radius = 1, latBands = 20, longBands = 20) {
+  const positions = [];
+  const colors = [];
+  const indices = [];
+
+  const numLatRings = Math.floor(latBands / 2);
+
+  // Generate outer shell vertices
+  for (let latNumber = 0; latNumber <= numLatRings; latNumber++) {
+    const theta = latNumber * Math.PI / latBands;
+    const sinTheta = Math.sin(theta);
+    const cosTheta = Math.cos(theta);
+
+    for (let longNumber = 0; longNumber <= longBands; longNumber++) {
+      const phi = longNumber * 2 * Math.PI / longBands;
+      const sinPhi = Math.sin(phi);
+      const cosPhi = Math.cos(phi);
+
+      const bx = cosPhi * sinTheta;
+      const by = cosTheta;
+      const bz = sinPhi * sinTheta;
+
+      let x, y, z;
+      if (type === 'right') {
+        // Rotated -90 deg around Z: (x, y, z) -> (y, -x, z), x >= 0
+        x = by * radius;
+        y = -bx * radius;
+        z = bz * radius;
+      } else if (type === 'left') {
+        // Rotated +90 deg around Z: (x, y, z) -> (-y, x, z), x <= 0
+        x = -by * radius;
+        y = bx * radius;
+        z = bz * radius;
+      } else if (type === 'bottom') {
+        x = bx * radius;
+        y = -by * radius;
+        z = bz * radius;
+      } else { // 'top'
+        x = bx * radius;
+        y = by * radius;
+        z = bz * radius;
+      }
+
+      positions.push(x, y, z);
+      colors.push((x + 1) / 2, (y + 1) / 2, (z + 1) / 2);
+    }
+  }
+
+  // Generate shell triangle indices
+  for (let latNumber = 0; latNumber < numLatRings; latNumber++) {
+    for (let longNumber = 0; longNumber < longBands; longNumber++) {
+      const first = (latNumber * (longBands + 1)) + longNumber;
+      const second = first + longBands + 1;
+
+      indices.push(first, second, first + 1);
+      indices.push(second, second + 1, first + 1);
+    }
+  }
+
+  // Generate flat circular cap at the cut face
+  const centerIndex = positions.length / 3;
+  positions.push(0, 0, 0);
+  // Interior sliced color: warm amber/orange
+  colors.push(1.0, 0.55, 0.15);
+
+  const capStart = positions.length / 3;
+  for (let longNumber = 0; longNumber <= longBands; longNumber++) {
+    const phi = longNumber * 2 * Math.PI / longBands;
+    const c = Math.cos(phi);
+    const s = Math.sin(phi);
+
+    let cx, cy, cz;
+    if (type === 'right' || type === 'left') {
+      // Cut is at x = 0 in YZ plane
+      cx = 0;
+      cy = radius * c;
+      cz = radius * s;
+    } else {
+      // Cut is at y = 0 in XZ plane
+      cx = radius * c;
+      cy = 0;
+      cz = radius * s;
+    }
+
+    positions.push(cx, cy, cz);
+    colors.push(0.95, 0.45, 0.1);
+  }
+
+  for (let longNumber = 0; longNumber < longBands; longNumber++) {
+    const p1 = capStart + longNumber;
+    const p2 = capStart + longNumber + 1;
+    // Two-sided cap triangles so they are visible from all angles
+    indices.push(centerIndex, p1, p2);
+    indices.push(centerIndex, p2, p1);
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    colors: new Float32Array(colors),
+    indices: new Uint16Array(indices)
+  };
+}
+
+function createCuttingPlane(size = 1.4) {
+  // Vertical blade in the YZ plane (x = 0)
+  const positions = new Float32Array([
+    0, -size, -size,
+    0,  size, -size,
+    0,  size,  size,
+    0, -size,  size
+  ]);
+
+  // Glowing energetic cyan blade
+  const colors = new Float32Array([
+    0.35, 0.9, 1.0,
+    0.35, 0.9, 1.0,
+    0.35, 0.9, 1.0,
+    0.35, 0.9, 1.0
+  ]);
+
+  // Double-sided quad
+  const indices = new Uint16Array([
+    0, 1, 2,  0, 2, 3,
+    2, 1, 0,  3, 2, 0
+  ]);
+
+  return {
+    positions,
+    colors,
+    indices
+  };
+}
+
+

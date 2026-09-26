@@ -46,6 +46,13 @@ Press F12 to see the console for debugging.</p>
     </div>
     <div>
       <canvas id="glcanvas" width="400" height="400"></canvas>
+      
+      <div style="margin-top: 15px;">
+        <b>Object Scaling</b><br>
+        <label>Cube: <input type="range" id="scaleCube" min="0.1" max="2.0" step="0.1" value="1.0"></label><br>
+        <label>Prism: <input type="range" id="scalePrism" min="0.1" max="2.0" step="0.1" value="1.0"></label><br>
+        <label>Sphere: <input type="range" id="scaleSphere" min="0.1" max="2.0" step="0.1" value="1.0"></label>
+      </div>
     </div>
   </div>
 
@@ -143,7 +150,7 @@ void main() {
     const cubeBuffers = createMeshBuffers(gl, positions, colors, indices);
     sceneObjects.push({
       buffers: cubeBuffers,
-      translation: [-2.5, 0.0, 0.0] // Shifted further left
+      translation: [-2.0, 0.0, 0.0] // Shifted further left
     });
 
     // 2. Trapezoidal Prism
@@ -159,7 +166,7 @@ void main() {
     const sphereBuffers = createMeshBuffers(gl, sphereData.positions, sphereData.colors, sphereData.indices);
     sceneObjects.push({
       buffers: sphereBuffers,
-      translation: [2.5, 0.0, 0.0] // Shifted right
+      translation: [3.0, 0.0, 0.0] // Shifted right
     });
   }
   initBuffers();
@@ -220,7 +227,7 @@ void main() {
     let projOrtho = matMul(
     box2Cube(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, zNear, zFar),
     flipZ()
-);
+    );
     let proj = projOrtho;
 
     let startTime = Date.now();
@@ -248,10 +255,17 @@ void main() {
       gl.uniformMatrix4fv(uPM, false, proj);
       gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
 
-      sceneObjects.forEach(obj => {
+      sceneObjects.forEach((obj, index) => {
         let mtm = mat4Identity();
         mtm = mat4Translate(mtm, obj.translation);
         mtm = multiplyMat4(mtm, cubeRotation);
+        
+        // Read the corresponding slider value (0: Cube, 1: Prism, 2: Sphere)
+        const sliderIds = ['scaleCube', 'scalePrism', 'scaleSphere'];
+        const scaleVal = parseFloat(document.getElementById(sliderIds[index]).value);
+        
+        // Apply the scale transformation
+        mtm = mat4Scale(mtm, [scaleVal, scaleVal, scaleVal]);
         
         gl.uniformMatrix4fv(uMTM, false, mtm);
 

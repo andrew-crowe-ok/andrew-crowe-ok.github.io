@@ -145,6 +145,26 @@ function mat4RotateY(matrix, angle) {
     return result;
 }
 
+// Matrix scaling
+function mat4Scale(matrix, scale) {
+    const result = new Float32Array(matrix);
+    result[0]  = matrix[0]  * scale[0];
+    result[1]  = matrix[1]  * scale[0];
+    result[2]  = matrix[2]  * scale[0];
+    result[3]  = matrix[3]  * scale[0];
+    
+    result[4]  = matrix[4]  * scale[1];
+    result[5]  = matrix[5]  * scale[1];
+    result[6]  = matrix[6]  * scale[1];
+    result[7]  = matrix[7]  * scale[1];
+    
+    result[8]  = matrix[8]  * scale[2];
+    result[9]  = matrix[9]  * scale[2];
+    result[10] = matrix[10] * scale[2];
+    result[11] = matrix[11] * scale[2];
+    
+    return result;
+}
 
 // [optional] Helper function converting math format row-major matrices into a flat column-major array.
 // function mat4FromRows(m00, m01, m02, m03,

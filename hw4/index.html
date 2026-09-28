@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>CS 412 HW4: Hierarchical Joint Demonstration</title>
+  <style>
+    body {
+      background: #111;
+      color: #ccc;
+      font-family: monospace;
+      padding: 15px;
+    }
+
+    textarea {
+      background: #222;
+      color: #0f0;
+      font: 13px monospace;
+      width: 400px;
+      height: 220px;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 6px;
+    }
+
+    canvas {
+      border: 1px solid #444;
+      background: #000;
+      border-radius: 4px;
+    }
+
+    .panel {
+      background: #181818;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 12px;
+    }
+
+    .slider-row {
+      margin: 8px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .slider-row label {
+      width: 140px;
+    }
+
+    .slider-row input[type="range"] {
+      flex: 1;
+    }
+
+    .val-badge {
+      display: inline-block;
+      width: 45px;
+      text-align: right;
+      color: #0f0;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>CS 412 HW4: Hierarchical Joint Demonstration</h2>
+  <p>
+    Drag the joint sliders to see forward kinematics in action: 
+    moving the <b>Shoulder</b> automatically carries the <b>Elbow</b> and <b>Forearm</b> along with it.<br>
+    • <b>Mouse drag:</b> Orbit camera in 3D &nbsp;|&nbsp; 
+    • <b>Arrow keys & W/S:</b> Move camera position &nbsp;|&nbsp; 
+    • <b>F12:</b> Developer console.
+  </p>
+
+  <div style="display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap;">
+    <!-- Shader Editors -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div>
+        <b>Vertex Shader</b><br>
+        <textarea id="vertEditor" autocomplete="off" spellcheck="false"></textarea>
+      </div>
+      <div>
+        <b>Fragment Shader</b><br>
+        <textarea id="fragEditor" autocomplete="off" spellcheck="false"></textarea>
+      </div>
+      <div id="shaderError" style="color: #ff5555; font-size: 12px; max-width: 400px; white-space: pre-wrap;"></div>
+    </div>
+
+    <!-- Canvas & Controls -->
+    <div>
+      <canvas id="glcanvas" width="460" height="460"></canvas>
+
+      <div class="panel">
+        <b style="color: #fff; font-size: 14px;">Joint Controls (Kinematic Chain)</b>
+
+        <div class="slider-row">
+          <label for="baseYaw">Base Yaw (Y-axis):</label>
+          <input type="range" id="baseYaw" min="-180" max="180" step="1" value="0">
+          <span class="val-badge" id="baseYawVal">0°</span>
+        </div>
+
+        <div class="slider-row">
+          <label for="shoulderPitch">Shoulder (Z-axis):</label>
+          <input type="range" id="shoulderPitch" min="-90" max="90" step="1" value="25">
+          <span class="val-badge" id="shoulderPitchVal">25°</span>
+        </div>
+
+        <div class="slider-row">
+          <label for="elbowPitch">Elbow (Z-axis):</label>
+          <input type="range" id="elbowPitch" min="-135" max="135" step="1" value="-45">
+          <span class="val-badge" id="elbowPitchVal">-45°</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Vertex shader -->
+  <script id="vertex-shader" type="x-shader/x-vertex">#version 300 es
+precision mediump float;
+in vec3 aPosition;
+in vec3 aColor;
+
+uniform float uTime;
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+uniform mat4 uModelTransformationMatrix;
+
+out vec3 vColor;
+
+void main() {
+  vec3 pos = aPosition;
+
+  // Transform vertex into clip space
+  gl_Position = uProjectionMatrix * uModelViewMatrix * uModelTransformationMatrix * vec4(pos, 1.0);
+
+  // Subtle dynamic neon color shimmer
+  vec3 neon = vec3(
+    0.5 + 0.5 * sin(uTime * 2.0 + aPosition.x * 2.0),
+    0.5 + 0.5 * sin(uTime * 2.0 + aPosition.y * 2.0 + 2.094),
+    0.5 + 0.5 * sin(uTime * 2.0 + aPosition.z * 2.0 + 4.189)
+  );
+
+  vColor = clamp(mix(aColor, neon, 0.25) * 1.1, 0.0, 1.0);
+}
+  </script>
+
+  <!-- Fragment Shader -->
+  <script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
+precision mediump float;
+in vec3 vColor;
+uniform float uTime;
+uniform float uAlpha;
+
+out vec4 fragColor;
+
+void main() {
+  float pulse = 0.90 + 0.10 * sin(uTime * 3.0);
+  fragColor = vec4(vColor * pulse, uAlpha);
+}
+  </script>
+
+  <!-- Included Math & Primitive libraries -->
+  <script src="primitives.js"></script>
+  <script src="transformations.js"></script>
+
+  <script>
+    function createShader(gl, type, source) {
+      let shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(shader));
+      }
+      return shader;
+    }
+
+    function createProgram(gl, vsSource, fsSource) {
+      let vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+      let fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+      let prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+      }
+      return prog;
+    }
+
+    // WebGL setup
+    const canvas = document.getElementById("glcanvas");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) alert("WebGL2 not supported");
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    let vertEditor = document.getElementById("vertEditor");
+    let fragEditor = document.getElementById("fragEditor");
+    vertEditor.value = document.getElementById("vertex-shader").textContent.trim();
+    fragEditor.value = document.getElementById("fragment-shader").textContent.trim();
+
+    let program, posLoc, colorLoc, timeLoc, uMVM, uPM, uMTM, uAlphaLoc;
+    let cubeBuffers, prismBuffers, sphereBuffers;
+
+    // Buffer creation utility
+    function createMeshBuffers(gl, posData, colorData, indexData) {
+      let vbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, posData, gl.STATIC_DRAW);
+
+      let nbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
+      gl.bufferData(gl.ARRAY_BUFFER, colorData, gl.STATIC_DRAW);
+
+      let ibo = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
+
+      return { vbo, nbo, ibo, indexCount: indexData.length };
+    }
+
+    function initBuffers() {
+      // 1. Cube primitive (for lower arm & base stand)
+      cubeBuffers = createMeshBuffers(gl, positions, colors, indices);
+
+      // 2. Trapezoidal Prism (for forearm)
+      const prismData = createTrapezoidalPrism();
+      prismBuffers = createMeshBuffers(gl, prismData.positions, prismData.colors, prismData.indices);
+
+      // 3. Sphere primitive (for joint pivots / bearings)
+      const sphereData = createSphere(1.0, 24, 24);
+      sphereBuffers = createMeshBuffers(gl, sphereData.positions, sphereData.colors, sphereData.indices);
+    }
+    initBuffers();
+
+    function initShaderProgram() {
+      const errDiv = document.getElementById("shaderError");
+      try {
+        let newProgram = createProgram(gl, vertEditor.value, fragEditor.value);
+        program = newProgram;
+        gl.useProgram(program);
+        posLoc = gl.getAttribLocation(program, "aPosition");
+        colorLoc = gl.getAttribLocation(program, "aColor");
+        timeLoc = gl.getUniformLocation(program, "uTime");
+        uMVM = gl.getUniformLocation(program, "uModelViewMatrix");
+        uPM = gl.getUniformLocation(program, "uProjectionMatrix");
+        uMTM = gl.getUniformLocation(program, "uModelTransformationMatrix");
+        uAlphaLoc = gl.getUniformLocation(program, "uAlpha");
+        if (errDiv) errDiv.textContent = "";
+      } catch (e) {
+        console.error(e);
+        if (errDiv) errDiv.textContent = e.message;
+      }
+    }
+    initShaderProgram();
+    vertEditor.onkeyup = initShaderProgram;
+    fragEditor.onkeyup = initShaderProgram;
+
+    // Mouse camera rotation & keyboard navigation
+    let mouseDown = false, lastX, lastY, sceneRotX = 0.2, sceneRotY = -0.4;
+    let camX = 0, camY = 0, camZ = -7;
+
+    canvas.addEventListener('mousedown', e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
+    canvas.addEventListener('mouseup', () => mouseDown = false);
+    canvas.addEventListener('mousemove', e => {
+      if (!mouseDown) return;
+      let dx = e.clientX - lastX;
+      let dy = e.clientY - lastY;
+      sceneRotY += dx * 0.01;
+      sceneRotX += dy * 0.01;
+      lastX = e.clientX; lastY = e.clientY;
+    });
+
+    document.addEventListener('keydown', e => {
+      const step = 0.2;
+      switch (e.key) {
+        case 'ArrowUp': camY -= step; break;
+        case 'ArrowDown': camY += step; break;
+        case 'ArrowLeft': camX += step; break;
+        case 'ArrowRight': camX -= step; break;
+        case 'w': camZ += step; break;
+        case 's': camZ += step; break;
+      }
+    });
+
+    // Projection setup
+    let fov = Math.PI / 4, aspect = canvas.width / canvas.height, zNear = 0.1, zFar = 100;
+    let orthoSize = 3.2;
+
+    let projOrtho = matMul(
+      box2Cube(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, zNear, zFar),
+      flipZ()
+    );
+    let proj = projOrtho;
+
+    let startTime = Date.now();
+
+    // Helper: Draw a mesh with given model transformation matrix
+    function drawMesh(buffers, modelMatrix, alpha = 1.0) {
+      gl.uniformMatrix4fv(uMTM, false, modelMatrix);
+      if (uAlphaLoc) gl.uniform1f(uAlphaLoc, alpha);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.vbo);
+      gl.enableVertexAttribArray(posLoc);
+      gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.nbo);
+      gl.enableVertexAttribArray(colorLoc);
+      gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.ibo);
+      gl.drawElements(gl.TRIANGLES, buffers.indexCount, gl.UNSIGNED_SHORT, 0);
+    }
+
+    function render() {
+      if (!program) return;
+      gl.useProgram(program);
+      gl.enable(gl.DEPTH_TEST);
+      gl.clearColor(0.05, 0.05, 0.05, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      // Camera view rotation matrix from mouse dragging
+      let cx = Math.cos(sceneRotY), sx = Math.sin(sceneRotY);
+      let cy = Math.cos(sceneRotX), sy = Math.sin(sceneRotX);
+      let rotX = [1, 0, 0, 0, 0, cy, sy, 0, 0, -sy, cy, 0, 0, 0, 0, 1];
+      let rotY = [cx, 0, -sx, 0, 0, 1, 0, 0, sx, 0, cx, 0, 0, 0, 0, 1];
+      let viewRotation = multiplyMat4(rotY, rotX);
+
+      let modelViewMatrix = mat4Identity();
+      modelViewMatrix = mat4Translate(modelViewMatrix, [camX, camY, camZ]);
+
+      let deltaTime = Date.now() - startTime;
+      gl.uniform1f(timeLoc, deltaTime / 1000.0);
+      gl.uniformMatrix4fv(uPM, false, proj);
+      gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
+
+      // Read joint control sliders
+      const baseYawDeg = parseFloat(document.getElementById("baseYaw").value);
+      const shoulderPitchDeg = parseFloat(document.getElementById("shoulderPitch").value);
+      const elbowPitchDeg = parseFloat(document.getElementById("elbowPitch").value);
+
+      document.getElementById("baseYawVal").textContent = baseYawDeg + "°";
+      document.getElementById("shoulderPitchVal").textContent = shoulderPitchDeg + "°";
+      document.getElementById("elbowPitchVal").textContent = elbowPitchDeg + "°";
+
+      const baseYawRad = baseYawDeg * Math.PI / 180.0;
+      const shoulderPitchRad = shoulderPitchDeg * Math.PI / 180.0;
+      const elbowPitchRad = elbowPitchDeg * Math.PI / 180.0;
+
+      // ==============================================================
+      // HIERARCHICAL KINEMATIC CHAIN
+      // ==============================================================
+
+      // 0. World Root: place the mechanism slightly below center and apply global orbit
+      let rootMatrix = mat4Identity();
+      rootMatrix = multiplyMat4(rootMatrix, viewRotation);
+      rootMatrix = mat4Translate(rootMatrix, [0.0, -1.4, 0.0]);
+
+      // --- Pedestal / Ground Base (Static on ground) ---
+      let pedestalMatrix = mat4Translate(rootMatrix, [0.0, -0.15, 0.0]);
+      pedestalMatrix = mat4Scale(pedestalMatrix, [0.9, 0.15, 0.9]);
+      drawMesh(cubeBuffers, pedestalMatrix);
+
+      // --- LEVEL 1: BASE TURNTABLE & SHOULDER JOINT ---
+      // Apply Base Yaw (rotation around Y-axis)
+      let shoulderFrame = mat4RotateY(rootMatrix, baseYawRad);
+
+      // Apply Shoulder Pitch (rotation around Z-axis)
+      shoulderFrame = mat4RotateZ(shoulderFrame, shoulderPitchRad);
+
+      // 1a. Draw Shoulder Joint Bearing (Sphere) at the pivot point (0, 0, 0)
+      let shoulderBearingMat = mat4Scale(shoulderFrame, [0.38, 0.38, 0.38]);
+      drawMesh(sphereBuffers, shoulderBearingMat);
+
+      // 1b. Draw Lower Arm (Cube)
+      // Length L1 = 1.6. Since cube is [-1, 1] (height 2),
+      // we shift up by L1 / 2 = 0.8 so its bottom aligns with the shoulder pivot.
+      let lowerArmMat = mat4Translate(shoulderFrame, [0.0, 0.8, 0.0]);
+      lowerArmMat = mat4Scale(lowerArmMat, [0.22, 0.8, 0.22]);
+      drawMesh(cubeBuffers, lowerArmMat);
+
+      // --- LEVEL 2: ELBOW JOINT & FOREARM (CHAINED CHILD) ---
+      // Move to the TIP of the lower arm by advancing by the full length L1 (1.6)
+      // along the unscaled shoulderFrame:
+      let elbowFrame = mat4Translate(shoulderFrame, [0.0, 1.6, 0.0]);
+
+      // Apply Elbow Pitch (rotation around Z-axis relative to lower arm)
+      elbowFrame = mat4RotateZ(elbowFrame, elbowPitchRad);
+
+      // 2a. Draw Elbow Joint Bearing (Sphere) at the elbow pivot
+      let elbowBearingMat = mat4Scale(elbowFrame, [0.32, 0.32, 0.32]);
+      drawMesh(sphereBuffers, elbowBearingMat);
+
+      // 2b. Draw Forearm / Upper Arm (Trapezoidal Prism)
+      // Length L2 = 1.4. Prism extends along Y [-1, 1].
+      // Shift up by L2 / 2 = 0.7, scale height to 0.7:
+      let forearmMat = mat4Translate(elbowFrame, [0.0, 0.7, 0.0]);
+      forearmMat = mat4Scale(forearmMat, [0.18, 0.7, 0.18]);
+      drawMesh(prismBuffers, forearmMat);
+
+      // 2c. Draw Wrist / End Tip (Sphere at the tip of forearm)
+      let wristFrame = mat4Translate(elbowFrame, [0.0, 1.4, 0.0]);
+      let wristMat = mat4Scale(wristFrame, [0.22, 0.22, 0.22]);
+      drawMesh(sphereBuffers, wristMat);
+    }
+
+    // Initialize when page loads
+    window.onload = function () {
+      vertEditor.value = document.getElementById("vertex-shader").textContent.trim();
+      fragEditor.value = document.getElementById("fragment-shader").textContent.trim();
+      initShaderProgram();
+      setInterval(render, 30);
+    }
+  </script>
+</body>
+
+</html>

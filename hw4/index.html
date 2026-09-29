@@ -3,58 +3,63 @@
 
 <head>
   <meta charset="utf-8">
-  <title>CS 412 HW4: Transparent Articulated Joints & Centered Unit Vectors (î, ĵ, k̂)</title>
+  <title>CS 412 HW4: 4-Level Hierarchical Articulated Robotic Arm</title>
   <style>
     body {
       background: #111;
-      color: #ccc;
-      font-family: monospace;
-      padding: 15px;
+      color: #ddd;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      padding: 15px 25px;
       margin: 0;
     }
 
-    textarea {
-      background: #222;
-      color: #0f0;
-      font: 13px monospace;
-      width: 360px;
-      height: 200px;
-      border: 1px solid #444;
-      border-radius: 4px;
-      padding: 6px;
-      box-sizing: border-box;
+    h2 {
+      margin: 0 0 4px 0;
+      color: #fff;
+      font-size: 20px;
+    }
+
+    .subtitle {
+      color: #888;
+      font-size: 13px;
+      margin-bottom: 15px;
+      line-height: 1.4;
     }
 
     canvas {
-      border: 1px solid #444;
-      background: #000;
-      border-radius: 4px;
+      border: 1px solid #333;
+      background: #080808;
+      border-radius: 6px;
       display: block;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
     }
 
     .panel {
       background: #181818;
-      border: 1px solid #333;
+      border: 1px solid #2e2e2e;
       border-radius: 6px;
-      padding: 12px;
+      padding: 12px 14px;
       margin-top: 10px;
       box-sizing: border-box;
     }
 
     .slider-row {
-      margin: 8px 0;
+      margin: 7px 0;
       display: flex;
       align-items: center;
       gap: 10px;
+      font-size: 13px;
     }
 
     .slider-row label {
-      width: 140px;
-      font-size: 13px;
+      width: 150px;
+      color: #bbb;
     }
 
     .slider-row input[type="range"] {
       flex: 1;
+      accent-color: #3b82f6;
+      cursor: pointer;
     }
 
     .val-badge {
@@ -62,17 +67,19 @@
       width: 45px;
       text-align: right;
       color: #0f0;
+      font-family: monospace;
       font-weight: bold;
     }
 
     /* Matrix Inspector HUD */
     .matrix-card {
       background: #181818;
-      border: 1px solid #383838;
+      border: 1px solid #2e2e2e;
       border-radius: 6px;
       padding: 14px;
-      width: 390px;
+      width: 410px;
       box-sizing: border-box;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
     }
 
     .matrix-table {
@@ -84,7 +91,7 @@
     }
 
     .matrix-table th {
-      padding: 4px 6px;
+      padding: 5px 4px;
       font-size: 11px;
       border-radius: 4px;
       text-align: center;
@@ -103,7 +110,6 @@
       border-radius: 4px;
       font-size: 13px;
       font-weight: bold;
-      transition: background 0.1s;
     }
 
     .td-x { color: #ff8787; border-left: 2px solid #ff4444; }
@@ -119,6 +125,7 @@
       margin-top: 8px;
       font-size: 12px;
       line-height: 1.6;
+      font-family: monospace;
     }
 
     .btn-toggle {
@@ -126,9 +133,9 @@
       color: #aaa;
       border: 1px solid #444;
       border-radius: 4px;
-      padding: 4px 10px;
+      padding: 5px 10px;
       cursor: pointer;
-      font-family: monospace;
+      font-family: inherit;
       font-size: 12px;
     }
     .btn-toggle.active {
@@ -136,85 +143,108 @@
       color: #fff;
       border-color: #3b82f6;
     }
+
+    textarea {
+      background: #222;
+      color: #0f0;
+      font: 12px monospace;
+      width: 100%;
+      height: 160px;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 6px;
+      box-sizing: border-box;
+    }
   </style>
 </head>
 
 <body>
-  <h2 style="margin-top: 0;">CS 412 HW4: Transparent Articulated Joints & Centered Unit Vectors (î, ĵ, k̂)</h2>
-  <p style="margin-bottom: 15px; line-height: 1.4;">
-    • <b>Transparent Objects:</b> The limb hulls are semi-transparent acrylic/glass so you can see their internal <b>î, ĵ, k̂ unit vectors</b> centered inside them.<br>
-    • <b>Unit Vectors:</b> <span style="color:#ff6b6b;">Red = î (X)</span>, <span style="color:#51cf66;">Green = ĵ (Y, along arm)</span>, <span style="color:#4dabf7;">Blue = k̂ (Z, pivot axis)</span>.<br>
-    • <b>Controls:</b> Mouse drag to orbit 3D camera &nbsp;|&nbsp; Arrow keys & W/S to move camera.
-  </p>
+  <h2>CS 412 HW4: 4-Level Hierarchical Articulated Robotic Arm</h2>
+  <div class="subtitle">
+    • <b>4-Level Kinematic Tree:</b> Base (Level 1) → Lower Arm (Level 2) → Forearm (Level 3) → Wrist & Gripper Claw (Level 4).<br>
+    • <b>Chained Transformations:</b> Moving a parent segment automatically transforms all its descendant segments.<br>
+    • <b>Navigation:</b> Mouse drag to orbit 3D view &nbsp;|&nbsp; Arrow keys & W/S to move camera.
+  </div>
 
-  <div style="display: flex; gap: 15px; align-items: flex-start; flex-wrap: wrap;">
-    <!-- Column 1: Shader Editors -->
-    <div style="display: flex; flex-direction: column; gap: 8px; width: 360px;">
-      <div>
-        <b>Vertex Shader</b><br>
-        <textarea id="vertEditor" autocomplete="off" spellcheck="false"></textarea>
-      </div>
-      <div>
-        <b>Fragment Shader</b><br>
-        <textarea id="fragEditor" autocomplete="off" spellcheck="false"></textarea>
-      </div>
-      <div id="shaderError" style="color: #ff5555; font-size: 12px; max-width: 360px; white-space: pre-wrap;"></div>
-    </div>
-
-    <!-- Column 2: WebGL Canvas & Joint Sliders -->
-    <div style="width: 460px;">
-      <canvas id="glcanvas" width="460" height="420"></canvas>
+  <div style="display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap;">
+    <!-- Column 1: WebGL Canvas & Joint Angle Sliders -->
+    <div style="width: 500px;">
+      <canvas id="glcanvas" width="500" height="440"></canvas>
 
       <div class="panel">
-        <b style="color: #fff; font-size: 13px;">Joint Angle & Appearance Controls</b>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <b style="color: #fff; font-size: 14px;">Kinematic Joint Controls</b>
+          <span style="font-size: 11px; color: #888;">4 Articulated Levels</span>
+        </div>
 
+        <!-- Level 1 -->
         <div class="slider-row">
-          <label for="baseYaw">Base Yaw (Y-axis):</label>
+          <label for="baseYaw"><b>L1: Base Yaw</b> (Y-axis):</label>
           <input type="range" id="baseYaw" min="-180" max="180" step="1" value="0">
           <span class="val-badge" id="baseYawVal">0°</span>
         </div>
 
+        <!-- Level 2 -->
         <div class="slider-row">
-          <label for="shoulderPitch">Shoulder (Z-axis):</label>
+          <label for="shoulderPitch"><b>L2: Shoulder</b> (Z-axis):</label>
           <input type="range" id="shoulderPitch" min="-90" max="90" step="1" value="25">
           <span class="val-badge" id="shoulderPitchVal">25°</span>
         </div>
 
+        <!-- Level 3 -->
         <div class="slider-row">
-          <label for="elbowPitch">Elbow (Z-axis):</label>
-          <input type="range" id="elbowPitch" min="-135" max="135" step="1" value="-45">
-          <span class="val-badge" id="elbowPitchVal">-45°</span>
+          <label for="elbowPitch"><b>L3: Elbow</b> (Z-axis):</label>
+          <input type="range" id="elbowPitch" min="-135" max="135" step="1" value="-40">
+          <span class="val-badge" id="elbowPitchVal">-40°</span>
         </div>
 
+        <!-- Level 4: Wrist -->
         <div class="slider-row">
-          <label for="hullOpacity" style="color: #74c0fc;">Hull Opacity:</label>
-          <input type="range" id="hullOpacity" min="0.05" max="1.0" step="0.05" value="0.40">
-          <span class="val-badge" id="hullOpacityVal" style="color: #74c0fc;">40%</span>
+          <label for="wristPitch"><b>L4: Wrist Pitch</b> (Z-axis):</label>
+          <input type="range" id="wristPitch" min="-90" max="90" step="1" value="15">
+          <span class="val-badge" id="wristPitchVal">15°</span>
         </div>
 
-        <hr style="border: 0; border-top: 1px solid #333; margin: 10px 0;">
+        <!-- Level 4: Gripper Claw -->
+        <div class="slider-row">
+          <label for="gripperAngle" style="color: #f59e0b;"><b>L4: Gripper Claw</b> (Open):</label>
+          <input type="range" id="gripperAngle" min="0" max="40" step="1" value="18">
+          <span class="val-badge" id="gripperAngleVal" style="color: #f59e0b;">18°</span>
+        </div>
 
-        <div style="display: flex; flex-direction: column; gap: 6px; font-size: 12px;">
-          <label><input type="checkbox" id="showCenteredAxes" checked> <b>Show Centered Unit Vectors (î, ĵ, k̂) inside objects</b></label>
-          <label><input type="checkbox" id="showJointAxes"> Show Joint Pivot Axes (at joints)</label>
-          <label><input type="checkbox" id="showOrigin"> Show World Origin (0,0,0)</label>
+        <!-- Hull Opacity -->
+        <div class="slider-row" style="margin-top: 10px; border-top: 1px solid #2a2a2a; padding-top: 8px;">
+          <label for="hullOpacity" style="color: #74c0fc;">Object Transparency:</label>
+          <input type="range" id="hullOpacity" min="0.05" max="1.0" step="0.05" value="0.45">
+          <span class="val-badge" id="hullOpacityVal" style="color: #74c0fc;">45%</span>
+        </div>
+
+        <div style="display: flex; gap: 15px; font-size: 12px; margin-top: 8px; color: #aaa;">
+          <label><input type="checkbox" id="showCenteredAxes" checked> Centered (î, ĵ, k̂) Vectors</label>
+          <label><input type="checkbox" id="showJointAxes"> Joint Pivot Axes</label>
+          <label><input type="checkbox" id="showOrigin"> World Origin</label>
         </div>
       </div>
     </div>
 
-    <!-- Column 3: Real-Time Matrix Inspector HUD -->
+    <!-- Column 2: Real-Time Transformation Matrix Inspector HUD -->
     <div class="matrix-card">
-      <b style="color: #fff; font-size: 14px;">Transformation Matrix Inspector</b>
-      <p style="font-size: 12px; color: #888; margin: 4px 0 10px 0;">Live inspection of object reference frames & unit vectors.</p>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <b style="color: #fff; font-size: 15px;">Matrix Math Inspector</b>
+        <span style="font-size: 11px; color: #888;">M = T · R · S</span>
+      </div>
+      <p style="font-size: 12px; color: #999; margin: 4px 0 10px 0;">Live inspection of 4×4 coordinate frames & unit vectors.</p>
 
       <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-        <label style="font-size: 12px;">Target:</label>
-        <select id="inspectJoint" style="flex: 1; background: #222; color: #0f0; border: 1px solid #444; padding: 4px; font-family: monospace; border-radius: 4px;">
-          <option value="lowerArmCenter" selected>Lower Arm Center (î, ĵ, k̂)</option>
-          <option value="forearmCenter">Forearm Center (î, ĵ, k̂)</option>
-          <option value="shoulder">Shoulder Joint Pivot</option>
-          <option value="elbow">Elbow Joint Pivot</option>
-          <option value="wrist">Wrist End Tip</option>
+        <label style="font-size: 12px; color: #ccc;">Target Part:</label>
+        <select id="inspectJoint" style="flex: 1; background: #222; color: #0f0; border: 1px solid #444; padding: 5px; font-family: monospace; border-radius: 4px; font-size: 12px;">
+          <option value="lowerArmCenter" selected>L2: Lower Arm Center (î, ĵ, k̂)</option>
+          <option value="forearmCenter">L3: Forearm Center (î, ĵ, k̂)</option>
+          <option value="wrist">L4: Wrist Hub Frame</option>
+          <option value="leftClaw">L4: Left Claw Finger</option>
+          <option value="rightClaw">L4: Right Claw Finger</option>
+          <option value="shoulder">L1/L2: Shoulder Joint Pivot</option>
+          <option value="elbow">L2/L3: Elbow Joint Pivot</option>
           <option value="root">Base / World Root</option>
         </select>
       </div>
@@ -231,7 +261,7 @@
             <th class="th-x" title="Column 0: Local î unit vector (X)">Col 0: î (Right)</th>
             <th class="th-y" title="Column 1: Local ĵ unit vector (Y)">Col 1: ĵ (Up/Arm)</th>
             <th class="th-z" title="Column 2: Local k̂ unit vector (Z)">Col 2: k̂ (Pivot)</th>
-            <th class="th-t" title="Column 3: Center position (Tx, Ty, Tz)">Col 3: Pos (T)</th>
+            <th class="th-t" title="Column 3: Origin position (Tx, Ty, Tz)">Col 3: Pos (T)</th>
           </tr>
         </thead>
         <tbody>
@@ -264,20 +294,40 @@
 
       <!-- Basis Vector Breakdown -->
       <div class="vector-box">
-        <b style="color: #ddd;">Centered Unit Vectors & Position:</b><br>
-        • <span style="color: #ffd43b;">Center Pos (T):</span> <span id="infoPos">(0.00, 0.00, 0.00)</span><br>
-        • <span style="color: #69db7c;">Vector ĵ (Up/Arm):</span> <span id="infoY">[0.00, 1.00, 0.00]</span> (along limb)<br>
-        • <span style="color: #74c0fc;">Vector k̂ (Pivot):</span> <span id="infoZ">[0.00, 0.00, 1.00]</span> (rotation axis)<br>
+        <b style="color: #eee;">Unit Vectors & Position:</b><br>
+        • <span style="color: #ffd43b;">Position (T):</span> <span id="infoPos">(0.00, 0.00, 0.00)</span><br>
+        • <span style="color: #69db7c;">Vector ĵ (Arm):</span> <span id="infoY">[0.00, 1.00, 0.00]</span><br>
+        • <span style="color: #74c0fc;">Vector k̂ (Pivot):</span> <span id="infoZ">[0.00, 0.00, 1.00]</span><br>
         • <span style="color: #ff8787;">Vector î (Right):</span> <span id="infoX">[1.00, 0.00, 0.00]</span>
       </div>
 
-      <div style="font-size: 11px; color: #888; margin-top: 10px; line-height: 1.4;">
-        <b>Insight:</b> The vectors <b>î, ĵ, k̂</b> inside each transparent segment show its exact orientation in 3D. Notice that <b>ĵ (Green)</b> always shoots straight through the center of the arm!
+      <div style="font-size: 12px; color: #888; margin-top: 10px; line-height: 1.5; background: #131313; border: 1px solid #222; border-radius: 4px; padding: 8px;">
+        <b style="color: #ccc;">Matrix Multiplication Formula:</b><br>
+        <span style="color: #3b82f6;">M_child_world</span> = <span style="color: #10b981;">M_parent_world</span> × <span style="color: #f59e0b;">M_child_local</span><br>
+        Each part moves relative to its parent. The chained product produces the global 3D world pose.
       </div>
     </div>
   </div>
 
-  <!-- Vertex shader -->
+  <!-- Collapsible Shader Section (Kept accessible, but out of main view) -->
+  <details style="margin-top: 20px; max-width: 930px; background: #151515; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 12px;">
+    <summary style="cursor: pointer; color: #aaa; font-size: 13px; font-weight: bold;">
+      ⚙️ Shader Source Code (Click to expand/edit)
+    </summary>
+    <div style="display: flex; gap: 15px; margin-top: 10px;">
+      <div style="flex: 1;">
+        <b style="font-size: 12px;">Vertex Shader (GLSL ES 3.00)</b>
+        <textarea id="vertEditor" spellcheck="false"></textarea>
+      </div>
+      <div style="flex: 1;">
+        <b style="font-size: 12px;">Fragment Shader (GLSL ES 3.00)</b>
+        <textarea id="fragEditor" spellcheck="false"></textarea>
+      </div>
+    </div>
+    <div id="shaderError" style="color: #ff5555; font-size: 12px; margin-top: 6px; white-space: pre-wrap;"></div>
+  </details>
+
+  <!-- Default Vertex Shader Script -->
   <script id="vertex-shader" type="x-shader/x-vertex">#version 300 es
 precision mediump float;
 in vec3 aPosition;
@@ -292,22 +342,20 @@ out vec3 vColor;
 
 void main() {
   vec3 pos = aPosition;
-
-  // Transform vertex into clip space
   gl_Position = uProjectionMatrix * uModelViewMatrix * uModelTransformationMatrix * vec4(pos, 1.0);
 
-  // Subtle dynamic neon color shimmer
+  // Subtle clean neon tint
   vec3 neon = vec3(
     0.5 + 0.5 * sin(uTime * 2.0 + aPosition.x * 2.0),
     0.5 + 0.5 * sin(uTime * 2.0 + aPosition.y * 2.0 + 2.094),
     0.5 + 0.5 * sin(uTime * 2.0 + aPosition.z * 2.0 + 4.189)
   );
 
-  vColor = clamp(mix(aColor, neon, 0.20) * 1.1, 0.0, 1.0);
+  vColor = clamp(mix(aColor, neon, 0.18) * 1.1, 0.0, 1.0);
 }
   </script>
 
-  <!-- Fragment Shader -->
+  <!-- Default Fragment Shader Script -->
   <script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
 precision mediump float;
 in vec3 vColor;
@@ -317,12 +365,12 @@ uniform float uAlpha;
 out vec4 fragColor;
 
 void main() {
-  float pulse = 0.92 + 0.08 * sin(uTime * 3.0);
+  float pulse = 0.94 + 0.06 * sin(uTime * 3.0);
   fragColor = vec4(vColor * pulse, uAlpha);
 }
   </script>
 
-  <!-- Included Math & Primitive libraries -->
+  <!-- External Math & Geometry Scripts -->
   <script src="primitives.js"></script>
   <script src="transformations.js"></script>
 
@@ -366,7 +414,7 @@ void main() {
     let program, posLoc, colorLoc, timeLoc, uMVM, uPM, uMTM, uAlphaLoc;
     let cubeBuffers, prismBuffers, sphereBuffers, axesBuffers;
 
-    // Buffer creation utility for indexed triangles
+    // Buffer creation for indexed meshes
     function createMeshBuffers(gl, posData, colorData, indexData) {
       let vbo = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -390,11 +438,9 @@ void main() {
 
       function addArrow(dir, color) {
         const tip = dir;
-        // Main shaft
         p.push(0, 0, 0,  tip[0], tip[1], tip[2]);
         for (let i = 0; i < 2; i++) c.push(...color);
 
-        // Perpendicular cross axes for 3D barbs
         let u, v;
         if (Math.abs(dir[0]) > 0.5) {
           u = [0, 0.08, 0]; v = [0, 0, 0.08];
@@ -405,8 +451,6 @@ void main() {
         }
 
         const barbBase = [tip[0] * 0.80, tip[1] * 0.80, tip[2] * 0.80];
-
-        // 4 cross-barbs so the arrowhead looks 3D from any viewing angle
         p.push(tip[0], tip[1], tip[2], barbBase[0] + u[0], barbBase[1] + u[1], barbBase[2] + u[2]);
         p.push(tip[0], tip[1], tip[2], barbBase[0] - u[0], barbBase[1] - u[1], barbBase[2] - u[2]);
         p.push(tip[0], tip[1], tip[2], barbBase[0] + v[0], barbBase[1] + v[1], barbBase[2] + v[2]);
@@ -415,12 +459,9 @@ void main() {
         for (let i = 0; i < 8; i++) c.push(...color);
       }
 
-      // X Axis (î): Bright Red
-      addArrow([1, 0, 0], [1.0, 0.15, 0.15]);
-      // Y Axis (ĵ): Bright Green
-      addArrow([0, 1, 0], [0.15, 1.0, 0.25]);
-      // Z Axis (k̂): Bright Blue/Cyan
-      addArrow([0, 0, 1], [0.25, 0.65, 1.0]);
+      addArrow([1, 0, 0], [1.0, 0.15, 0.15]); // î: Red
+      addArrow([0, 1, 0], [0.15, 1.0, 0.25]); // ĵ: Green
+      addArrow([0, 0, 1], [0.25, 0.65, 1.0]); // k̂: Blue
 
       let vbo = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -471,7 +512,7 @@ void main() {
 
     // Mouse camera rotation & keyboard navigation
     let mouseDown = false, lastX, lastY, sceneRotX = 0.2, sceneRotY = -0.4;
-    let camX = 0, camY = 0, camZ = -7;
+    let camX = 0, camY = 0, camZ = -7.5;
 
     canvas.addEventListener('mousedown', e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
     canvas.addEventListener('mouseup', () => mouseDown = false);
@@ -513,7 +554,7 @@ void main() {
 
     // Projection setup
     let fov = Math.PI / 4, aspect = canvas.width / canvas.height, zNear = 0.1, zFar = 100;
-    let orthoSize = 3.2;
+    let orthoSize = 3.4;
 
     let projOrtho = matMul(
       box2Cube(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, zNear, zFar),
@@ -523,7 +564,6 @@ void main() {
 
     let startTime = Date.now();
 
-    // Helper: Draw a mesh with given model transformation matrix
     function drawMesh(buffers, modelMatrix, alpha = 1.0) {
       gl.uniformMatrix4fv(uMTM, false, modelMatrix);
       if (uAlphaLoc) gl.uniform1f(uAlphaLoc, alpha);
@@ -540,11 +580,10 @@ void main() {
       gl.drawElements(gl.TRIANGLES, buffers.indexCount, gl.UNSIGNED_SHORT, 0);
     }
 
-    // Helper: Draw 3D RGB coordinate axes tripod
     function drawAxes(buffers, modelMatrix, scale = 0.6) {
       let m = mat4Scale(modelMatrix, [scale, scale, scale]);
       gl.uniformMatrix4fv(uMTM, false, m);
-      if (uAlphaLoc) gl.uniform1f(uAlphaLoc, 1.0); // Axes are always fully opaque & vibrant
+      if (uAlphaLoc) gl.uniform1f(uAlphaLoc, 1.0);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, buffers.vbo);
       gl.enableVertexAttribArray(posLoc);
@@ -557,7 +596,6 @@ void main() {
       gl.drawArrays(gl.LINES, 0, buffers.vertexCount);
     }
 
-    // Helper: Update Matrix Inspector HUD table and geometric interpretation
     function updateMatrixHUD(matrix) {
       for (let r = 0; r < 4; r++) {
         for (let c = 0; c < 4; c++) {
@@ -570,13 +608,9 @@ void main() {
         }
       }
 
-      // Column 0: î (X-axis)
       let xx = matrix[0], xy = matrix[1], xz = matrix[2];
-      // Column 1: ĵ (Y-axis / along arm)
       let yx = matrix[4], yy = matrix[5], yz = matrix[6];
-      // Column 2: k̂ (Z-axis / pivot)
       let zx = matrix[8], zy = matrix[9], zz = matrix[10];
-      // Column 3: Position (Center Tx, Ty, Tz)
       let tx = matrix[12], ty = matrix[13], tz = matrix[14];
 
       const fmtVec = (x, y, z) => `[${x >= 0 ? '+' : ''}${x.toFixed(2)}, ${y >= 0 ? '+' : ''}${y.toFixed(2)}, ${z >= 0 ? '+' : ''}${z.toFixed(2)}]`;
@@ -592,10 +626,10 @@ void main() {
       if (!program) return;
       gl.useProgram(program);
       gl.enable(gl.DEPTH_TEST);
-      gl.clearColor(0.05, 0.05, 0.05, 1);
+      gl.clearColor(0.06, 0.06, 0.06, 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-      // Camera view matrix: translation combined with mouse orbit rotation
+      // Camera view rotation and position
       let cx = Math.cos(sceneRotY), sx = Math.sin(sceneRotY);
       let cy = Math.cos(sceneRotX), sy = Math.sin(sceneRotX);
       let rotX = [1, 0, 0, 0, 0, cy, sy, 0, 0, -sy, cy, 0, 0, 0, 0, 1];
@@ -611,111 +645,168 @@ void main() {
       gl.uniformMatrix4fv(uPM, false, proj);
       gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
 
-      // Read joint control sliders & opacity
+      // Read joint controls
       const baseYawDeg = parseFloat(document.getElementById("baseYaw").value);
       const shoulderPitchDeg = parseFloat(document.getElementById("shoulderPitch").value);
       const elbowPitchDeg = parseFloat(document.getElementById("elbowPitch").value);
+      const wristPitchDeg = parseFloat(document.getElementById("wristPitch").value);
+      const gripperAngleDeg = parseFloat(document.getElementById("gripperAngle").value);
       const hullOpacity = parseFloat(document.getElementById("hullOpacity").value);
 
       document.getElementById("baseYawVal").textContent = baseYawDeg + "°";
       document.getElementById("shoulderPitchVal").textContent = shoulderPitchDeg + "°";
       document.getElementById("elbowPitchVal").textContent = elbowPitchDeg + "°";
+      document.getElementById("wristPitchVal").textContent = wristPitchDeg + "°";
+      document.getElementById("gripperAngleVal").textContent = gripperAngleDeg + "°";
       document.getElementById("hullOpacityVal").textContent = Math.round(hullOpacity * 100) + "%";
 
       const baseYawRad = baseYawDeg * Math.PI / 180.0;
       const shoulderPitchRad = shoulderPitchDeg * Math.PI / 180.0;
       const elbowPitchRad = elbowPitchDeg * Math.PI / 180.0;
+      const wristPitchRad = wristPitchDeg * Math.PI / 180.0;
+      const gripperRad = gripperAngleDeg * Math.PI / 180.0;
 
       // ==============================================================
-      // HIERARCHICAL KINEMATIC CHAIN (WORLD & LOCAL FRAMES)
+      // 4-LEVEL HIERARCHICAL KINEMATIC CHAIN
       // ==============================================================
 
-      // 0. Base / World Root: Position mechanism slightly below center
-      let rootWorld = mat4Translate(mat4Identity(), [0.0, -1.4, 0.0]);
+      // 0. World Root (Position base on floor)
+      let rootWorld = mat4Translate(mat4Identity(), [0.0, -1.5, 0.0]);
 
-      // --- Pedestal / Ground Base ---
+      // --- Pedestal / Ground Base (Static on floor) ---
       let pedestalMatrix = mat4Translate(rootWorld, [0.0, -0.15, 0.0]);
       pedestalMatrix = mat4Scale(pedestalMatrix, [0.9, 0.15, 0.9]);
 
-      // --- LEVEL 1: BASE TURNTABLE & SHOULDER JOINT ---
-      let shoulderLocal = mat4RotateY(mat4Identity(), baseYawRad);
-      shoulderLocal = mat4RotateZ(shoulderLocal, shoulderPitchRad);
-      let shoulderWorld = multiplyMat4(rootWorld, shoulderLocal);
+      // -------------------------------------------------------------
+      // LEVEL 1: BASE TURNTABLE & SHOULDER PIVOT
+      // -------------------------------------------------------------
+      // Base yaw (Y-axis rotation) relative to Root
+      let baseLocal = mat4RotateY(mat4Identity(), baseYawRad);
+      let baseWorld = multiplyMat4(rootWorld, baseLocal);
 
-      // 1a. Shoulder Joint Bearing (Sphere) at the pivot (0,0,0)
-      let shoulderBearingMat = mat4Scale(shoulderWorld, [0.38, 0.38, 0.38]);
+      // Turntable cylinder/disk geometry
+      let turntableMat = mat4Translate(baseWorld, [0.0, 0.12, 0.0]);
+      turntableMat = mat4Scale(turntableMat, [0.65, 0.12, 0.65]);
 
-      // 1b. Lower Arm (Cube) - Length L1 = 1.6
-      // Shift up by 0.8 so its bottom aligns with shoulder pivot:
-      let lowerArmMat = mat4Translate(shoulderWorld, [0.0, 0.8, 0.0]);
-      lowerArmMat = mat4Scale(lowerArmMat, [0.22, 0.8, 0.22]);
+      // Shoulder joint frame (at top of turntable base):
+      let shoulderJointLocal = mat4Translate(mat4Identity(), [0.0, 0.25, 0.0]);
+      shoulderJointLocal = mat4RotateZ(shoulderJointLocal, shoulderPitchRad);
+      let shoulderWorld = multiplyMat4(baseWorld, shoulderJointLocal);
 
-      // Lower Arm Geometric Center Frame (where î, ĵ, k̂ are centered inside the limb)
-      let lowerArmCenterWorld = mat4Translate(shoulderWorld, [0.0, 0.8, 0.0]);
-      let lowerArmCenterLocal = mat4Translate(shoulderLocal, [0.0, 0.8, 0.0]);
+      // Shoulder Joint Bearing (Sphere)
+      let shoulderBearingMat = mat4Scale(shoulderWorld, [0.35, 0.35, 0.35]);
 
-      // --- LEVEL 2: ELBOW JOINT & FOREARM (CHAINED CHILD) ---
-      let elbowLocal = mat4Translate(mat4Identity(), [0.0, 1.6, 0.0]);
+      // -------------------------------------------------------------
+      // LEVEL 2: LOWER ARM
+      // -------------------------------------------------------------
+      // Lower Arm Beam (Cube, Length L1 = 1.5)
+      let lowerArmMat = mat4Translate(shoulderWorld, [0.0, 0.75, 0.0]);
+      lowerArmMat = mat4Scale(lowerArmMat, [0.20, 0.75, 0.20]);
+
+      // Lower Arm Geometric Center Frame (for internal î, ĵ, k̂ vectors)
+      let lowerArmCenterWorld = mat4Translate(shoulderWorld, [0.0, 0.75, 0.0]);
+      let lowerArmCenterLocal = mat4Translate(shoulderJointLocal, [0.0, 0.75, 0.0]);
+
+      // -------------------------------------------------------------
+      // LEVEL 3: ELBOW JOINT & FOREARM / UPPER ARM
+      // -------------------------------------------------------------
+      // Elbow frame is at the tip of Lower Arm (L1 = 1.5):
+      let elbowLocal = mat4Translate(mat4Identity(), [0.0, 1.5, 0.0]);
       elbowLocal = mat4RotateZ(elbowLocal, elbowPitchRad);
       let elbowWorld = multiplyMat4(shoulderWorld, elbowLocal);
 
-      // 2a. Elbow Joint Bearing (Sphere)
-      let elbowBearingMat = mat4Scale(elbowWorld, [0.32, 0.32, 0.32]);
+      // Elbow Joint Bearing (Sphere)
+      let elbowBearingMat = mat4Scale(elbowWorld, [0.30, 0.30, 0.30]);
 
-      // 2b. Forearm / Upper Arm (Trapezoidal Prism) - Length L2 = 1.4
-      let forearmMat = mat4Translate(elbowWorld, [0.0, 0.7, 0.0]);
-      forearmMat = mat4Scale(forearmMat, [0.18, 0.7, 0.18]);
+      // Forearm Beam (Trapezoidal Prism, Length L2 = 1.3)
+      let forearmMat = mat4Translate(elbowWorld, [0.0, 0.65, 0.0]);
+      forearmMat = mat4Scale(forearmMat, [0.17, 0.65, 0.17]);
 
-      // Forearm Geometric Center Frame (where î, ĵ, k̂ are centered inside the limb)
-      let forearmCenterWorld = mat4Translate(elbowWorld, [0.0, 0.7, 0.0]);
-      let forearmCenterLocal = mat4Translate(elbowLocal, [0.0, 0.7, 0.0]);
+      // Forearm Geometric Center Frame (for internal î, ĵ, k̂ vectors)
+      let forearmCenterWorld = mat4Translate(elbowWorld, [0.0, 0.65, 0.0]);
+      let forearmCenterLocal = mat4Translate(elbowLocal, [0.0, 0.65, 0.0]);
 
-      // --- LEVEL 3: WRIST / END EFFECTOR TIP ---
-      let wristLocal = mat4Translate(mat4Identity(), [0.0, 1.4, 0.0]);
+      // -------------------------------------------------------------
+      // LEVEL 4: WRIST & DUAL-FINGER GRIPPER CLAW
+      // -------------------------------------------------------------
+      // Wrist frame is at the tip of Forearm (L2 = 1.3):
+      let wristLocal = mat4Translate(mat4Identity(), [0.0, 1.3, 0.0]);
+      wristLocal = mat4RotateZ(wristLocal, wristPitchRad);
       let wristWorld = multiplyMat4(elbowWorld, wristLocal);
-      let wristMat = mat4Scale(wristWorld, [0.22, 0.22, 0.22]);
+
+      // Wrist Hub (Sphere)
+      let wristHubMat = mat4Scale(wristWorld, [0.22, 0.22, 0.22]);
+
+      // Gripper Palm Crossbar (Cube)
+      let palmMat = mat4Translate(wristWorld, [0.0, 0.14, 0.0]);
+      palmMat = mat4Scale(palmMat, [0.28, 0.06, 0.12]);
+
+      // LEVEL 4 (Branch A): Left Claw Finger
+      let leftClawLocal = mat4Translate(wristLocal, [-0.22, 0.18, 0.0]);
+      leftClawLocal = mat4RotateZ(leftClawLocal, -gripperRad);
+      let leftClawWorld = mat4Translate(wristWorld, [-0.22, 0.18, 0.0]);
+      leftClawWorld = mat4RotateZ(leftClawWorld, -gripperRad);
+
+      let leftClawMat = mat4Translate(leftClawWorld, [0.0, 0.20, 0.0]);
+      leftClawMat = mat4Scale(leftClawMat, [0.05, 0.20, 0.05]);
+
+      // LEVEL 4 (Branch B): Right Claw Finger
+      let rightClawLocal = mat4Translate(wristLocal, [0.22, 0.18, 0.0]);
+      rightClawLocal = mat4RotateZ(rightClawLocal, gripperRad);
+      let rightClawWorld = mat4Translate(wristWorld, [0.22, 0.18, 0.0]);
+      rightClawWorld = mat4RotateZ(rightClawWorld, gripperRad);
+
+      let rightClawMat = mat4Translate(rightClawWorld, [0.0, 0.20, 0.0]);
+      rightClawMat = mat4Scale(rightClawMat, [0.05, 0.20, 0.05]);
 
       // ==============================================================
       // PASS 1: DRAW OPAQUE INTERNAL î, ĵ, k̂ UNIT VECTORS & AXES
       // ==============================================================
-      // Rendered with depthMask(true) so vector lines are sharp & write depth
       gl.enable(gl.DEPTH_TEST);
       gl.depthMask(true);
 
       const showCenteredAxes = document.getElementById("showCenteredAxes").checked;
       if (showCenteredAxes) {
-        // Draw î, ĵ, k̂ centered right inside each transparent limb!
-        drawAxes(axesBuffers, lowerArmCenterWorld, 0.65);
-        drawAxes(axesBuffers, forearmCenterWorld, 0.55);
+        drawAxes(axesBuffers, lowerArmCenterWorld, 0.60);
+        drawAxes(axesBuffers, forearmCenterWorld, 0.50);
+        drawAxes(axesBuffers, wristWorld, 0.35);
       }
 
       const showJointAxes = document.getElementById("showJointAxes").checked;
       if (showJointAxes) {
-        drawAxes(axesBuffers, shoulderWorld, 0.50);
-        drawAxes(axesBuffers, elbowWorld, 0.45);
-        drawAxes(axesBuffers, wristWorld, 0.35);
+        drawAxes(axesBuffers, baseWorld, 0.55);
+        drawAxes(axesBuffers, shoulderWorld, 0.45);
+        drawAxes(axesBuffers, elbowWorld, 0.40);
       }
 
       const showOrigin = document.getElementById("showOrigin").checked;
       if (showOrigin) {
-        drawAxes(axesBuffers, rootWorld, 0.80);
+        drawAxes(axesBuffers, rootWorld, 0.75);
       }
 
       // ==============================================================
-      // PASS 2: DRAW TRANSPARENT ACRYLIC / GLASS HULLS OVER THE VECTORS
+      // PASS 2: DRAW TRANSPARENT ACRYLIC HULLS OVER THE VECTORS
       // ==============================================================
-      // Rendered with depthMask(false) so front and back faces blend smoothly
-      // without self-occlusion artifacts, letting you look right through the glass!
       gl.depthMask(false);
 
+      // Level 1: Pedestal & Turntable Base
+      drawMesh(cubeBuffers, pedestalMatrix, hullOpacity);
+      drawMesh(cubeBuffers, turntableMat, hullOpacity);
       drawMesh(sphereBuffers, shoulderBearingMat, hullOpacity);
+
+      // Level 2: Lower Arm
       drawMesh(cubeBuffers, lowerArmMat, hullOpacity);
+
+      // Level 3: Elbow & Forearm
       drawMesh(sphereBuffers, elbowBearingMat, hullOpacity);
       drawMesh(prismBuffers, forearmMat, hullOpacity);
-      drawMesh(sphereBuffers, wristMat, hullOpacity);
-      drawMesh(cubeBuffers, pedestalMatrix, hullOpacity);
 
-      // Restore depth write for the next frame's gl.clear
+      // Level 4: Wrist & Gripper Claw
+      drawMesh(sphereBuffers, wristHubMat, hullOpacity);
+      drawMesh(cubeBuffers, palmMat, hullOpacity);
+      drawMesh(cubeBuffers, leftClawMat, hullOpacity);
+      drawMesh(cubeBuffers, rightClawMat, hullOpacity);
+
       gl.depthMask(true);
 
       // ==============================================================
@@ -728,12 +819,16 @@ void main() {
         targetMatrix = (inspectSpaceMode === "world") ? lowerArmCenterWorld : lowerArmCenterLocal;
       } else if (inspectJoint === "forearmCenter") {
         targetMatrix = (inspectSpaceMode === "world") ? forearmCenterWorld : forearmCenterLocal;
-      } else if (inspectJoint === "shoulder") {
-        targetMatrix = (inspectSpaceMode === "world") ? shoulderWorld : shoulderLocal;
-      } else if (inspectJoint === "elbow") {
-        targetMatrix = (inspectSpaceMode === "world") ? elbowWorld : elbowLocal;
       } else if (inspectJoint === "wrist") {
         targetMatrix = (inspectSpaceMode === "world") ? wristWorld : wristLocal;
+      } else if (inspectJoint === "leftClaw") {
+        targetMatrix = (inspectSpaceMode === "world") ? leftClawWorld : leftClawLocal;
+      } else if (inspectJoint === "rightClaw") {
+        targetMatrix = (inspectSpaceMode === "world") ? rightClawWorld : rightClawLocal;
+      } else if (inspectJoint === "shoulder") {
+        targetMatrix = (inspectSpaceMode === "world") ? shoulderWorld : shoulderJointLocal;
+      } else if (inspectJoint === "elbow") {
+        targetMatrix = (inspectSpaceMode === "world") ? elbowWorld : elbowLocal;
       } else {
         targetMatrix = rootWorld;
       }

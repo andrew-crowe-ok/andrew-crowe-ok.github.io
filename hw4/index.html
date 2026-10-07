@@ -9,74 +9,46 @@
       background: #111;
       color: #ccc;
       font-family: monospace;
-    }
-
-    textarea {
-      background: #222;
-      color: #0f0;
-      font: 14px monospace;
-      width: 400px;
-      height: 250px;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      gap: 15px;
     }
 
     canvas {
       border: 1px solid #444;
+      background: #000;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+    }
+
+    .controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
     }
   </style>
 </head>
 
 <body>
-  <h2>Interactive Controls & Geometric Primitives</h2>
-  <p>Edit vertex and fragment shaders on the left to get the result instantly.<br>
-  Use mouse to drag and rotate the cube. <br>
-Use arrow keys and w, s keys to move the camera.<br>
-Save your code to source file if you want to save it.<br>
-Press F12 to see the console for debugging.</p>
-
-  <div style="display: flex; gap: 10px; align-items: flex-start;">
-    <div style="display: flex; flex-direction: column; gap: 10px;">
-      <div>
-        <b>Vertex Shader</b><br>
-        <textarea id="vertEditor" autocomplete="off" spellcheck="false"></textarea>
-      </div>
-      <div>
-        <b>Fragment Shader</b><br>
-        <textarea id="fragEditor" autocomplete="off" spellcheck="false"></textarea>
-      </div>
-      <div id="shaderError" style="color: #ff5555; font-size: 12px; max-width: 400px; white-space: pre-wrap;"></div>
+  <canvas id="glcanvas" width="750" height="560"></canvas>
+  <div class="controls">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <label for="leverSlider" style="width: 130px; text-align: right;">Section 1 (X):</label>
+      <input type="range" id="leverSlider" min="-45" max="45" step="1" value="0" style="width: 240px;">
+      <span id="leverValue" style="width: 45px;">0°</span>
     </div>
-    <div>
-      <canvas id="glcanvas" width="400" height="400"></canvas>
-      
-      <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 15px;">
-        <div>
-          <b>Object Scaling</b><br>
-          <label>Cube: <input type="range" id="scaleCube" min="0.1" max="2.0" step="0.1" value="1.0"></label><br>
-          <label>Prism: <input type="range" id="scalePrism" min="0.1" max="2.0" step="0.1" value="1.0"></label><br>
-          <label>Sphere: <input type="range" id="scaleSphere" min="0.1" max="2.0" step="0.1" value="1.0"></label>
-        </div>
-
-        <div>
-          <b>Rotation (Y-axis)</b><br>
-          <label>Cube: <input type="range" id="rotCube" min="-180" max="180" step="5" value="0"></label><br>
-          <label>Prism: <input type="range" id="rotPrism" min="-180" max="180" step="5" value="0"></label><br>
-          <label>Sphere: <input type="range" id="rotSphere" min="-180" max="180" step="5" value="0"></label>
-        </div>
-
-        <div>
-          <b>Translation (Y-axis)</b><br>
-          <label>Cube: <input type="range" id="transYCube" min="-2.0" max="2.0" step="0.1" value="0.0"></label><br>
-          <label>Prism: <input type="range" id="transYPrism" min="-2.0" max="2.0" step="0.1" value="0.0"></label><br>
-          <label>Sphere: <input type="range" id="transYSphere" min="-2.0" max="2.0" step="0.1" value="0.0"></label>
-        </div>
-      </div>
-
-      <div style="margin-top: 15px;">
-        <b>Sphere Actions</b><br>
-        <button id="sliceSphereBtn" style="margin-top: 6px; padding: 6px 14px; background: #222; color: #0f0; border: 1px solid #444; font-family: monospace; font-size: 13px; cursor: pointer; border-radius: 4px; transition: all 0.2s;">
-          Slice Sphere
-        </button>
-      </div>
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <label for="joint1Slider" style="width: 130px; text-align: right;">Section 2 (Z):</label>
+      <input type="range" id="joint1Slider" min="-90" max="90" step="1" value="0" style="width: 240px;">
+      <span id="joint1Value" style="width: 45px;">0°</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px; margin-top: 5px;">
+      <button id="spinBtn" style="padding: 6px 12px; cursor: pointer; border-radius: 4px; background: #444; color: #fff; border: 1px solid #666;">Toggle Spin</button>
     </div>
   </div>
 
@@ -112,8 +84,8 @@ void main() {
 }
 </script>
 
-  <script src="primitives.js"></script>
-  <script src="transformations.js"></script>
+  <script src="primitives.js?v=3"></script>
+  <script src="transformations.js?v=3"></script>
 
   <script>
     function createShader(gl, type, source) {
@@ -147,12 +119,8 @@ void main() {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    let vertEditor = document.getElementById("vertEditor");
-    let fragEditor = document.getElementById("fragEditor");
-    vertEditor.value = document.getElementById("vertex-shader").textContent.trim();
-    fragEditor.value = document.getElementById("fragment-shader").textContent.trim();
-
     let program, posLoc, colorLoc, timeLoc, uMVM, uPM, uMTM, uAlphaLoc;
+    let hemisphereBuffers, cuboidBuffers, sphereBuffers;
     let sceneObjects = [];
     let vbo, nbo, ibo;
 
@@ -174,7 +142,6 @@ void main() {
     }
 
     function initBuffers() {
-
       const hemiData = createHemisphere('top', 1.0, 20, 20);
       hemisphereBuffers = createMeshBuffers(
         gl, 
@@ -183,17 +150,29 @@ void main() {
         hemiData.indices
       );
 
-      //cubeBuffers = createMeshBuffers(gl, cubePos, cubeColors, cubeIndices);
-      //prismBuffers = createMeshBuffers(gl, prismPos, prismCol, prismInd);
-      //sphereBuffers = createMeshBuffers(gl, spherePos, sphereColors, sphereIndices);
-      //planeBuffers = createMeshBuffers(gl, planePos, planeColors, planeIndices);
+      const cuboidData = createCuboid(2.0, 2.0, 2.0);
+      cuboidBuffers = createMeshBuffers(
+        gl,
+        cuboidData.positions,
+        cuboidData.colors, 
+        cuboidData.indices
+      );
+
+      const sphereData = createSphere(1.0, 20, 20);
+      sphereBuffers = createMeshBuffers(
+        gl,
+        sphereData.positions,
+        sphereData.colors,
+        sphereData.indices
+      );
     }
     initBuffers();
 
     function initShaderProgram() {
-      const errDiv = document.getElementById("shaderError");
       try {
-        let newProgram = createProgram(gl, vertEditor.value, fragEditor.value);
+        const vsSource = document.getElementById("vertex-shader").textContent.trim();
+        const fsSource = document.getElementById("fragment-shader").textContent.trim();
+        let newProgram = createProgram(gl, vsSource, fsSource);
         program = newProgram;
         gl.useProgram(program);
         posLoc = gl.getAttribLocation(program, "aPosition");
@@ -203,28 +182,22 @@ void main() {
         uPM = gl.getUniformLocation(program, "uProjectionMatrix");
         uMTM = gl.getUniformLocation(program, "uModelTransformationMatrix");
         uAlphaLoc = gl.getUniformLocation(program, "uAlpha");
-        if (errDiv) errDiv.textContent = "";
       } catch (e) {
         console.error(e);
-        if (errDiv) errDiv.textContent = e.message;
       }
     }
     initShaderProgram();
-    vertEditor.onkeyup = initShaderProgram;
-    fragEditor.onkeyup = initShaderProgram;
 
     // Mouse and keyboard interactions
-    let mouseDown = false, lastX, lastY, cubeRotX = 0, cubeRotY = 0;
-    let camX = 0, camY = 0, camZ = -6;
+    let mouseDown = false, lastX, lastY, sceneRotX = 0.35, sceneRotY = 0;
+    let camX = 0, camY = -1.6, camZ = -8;
 
     canvas.addEventListener('mousedown', e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
     canvas.addEventListener('mouseup', () => mouseDown = false);
     canvas.addEventListener('mousemove', e => {
       if (!mouseDown) return;
       let dx = e.clientX - lastX;
-      let dy = e.clientY - lastY;
-      cubeRotY += dx * 0.01;
-      cubeRotX += dy * 0.01;
+      sceneRotY += dx * 0.01;
       lastX = e.clientX; lastY = e.clientY;
     });
 
@@ -244,7 +217,7 @@ void main() {
     // Projection setup
     let fov = Math.PI / 4, aspect = canvas.width / canvas.height, zNear = 0.1, zFar = 100;
 
-    let orthoSize = 2.5;
+    let orthoSize = 4.8;
 
     // Perspective and Orthographic projection
     let projPerspective = perspective(fov, aspect, zNear, zFar);
@@ -256,18 +229,52 @@ void main() {
     let proj = projOrtho;
 
     let startTime = Date.now();
-
-    // Spinning animation state
+    let lastFrameTime = startTime;
     let isSpinning = false;
-    let spinStartTime = 0;
-    const spinBtn = document.getElementById("sliceSphereBtn");
+    let spinAngle = 0;
 
-    spinBtn.addEventListener("click", () => {
-      isSpinning = true;
-      spinStartTime = Date.now();
-    });
+    const spinBtn = document.getElementById("spinBtn");
+    if (spinBtn) {
+      spinBtn.addEventListener("click", () => {
+        isSpinning = !isSpinning;
+      });
+    }
+
+    const leverSlider = document.getElementById("leverSlider");
+    const leverVal = document.getElementById("leverValue");
+    if (leverSlider && leverVal) {
+      leverSlider.addEventListener("input", (e) => {
+        leverVal.textContent = e.target.value + "°";
+      });
+    }
+
+    const joint1Slider = document.getElementById("joint1Slider");
+    const joint1Val = document.getElementById("joint1Value");
+    if (joint1Slider && joint1Val) {
+      joint1Slider.addEventListener("input", (e) => {
+        joint1Val.textContent = e.target.value + "°";
+      });
+    }
+
+    function mat4RotateZ(matrix, angle) {
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      const result = new Float32Array(matrix);
+      const m0 = matrix[0], m1 = matrix[1], m2 = matrix[2],  m3 = matrix[3];
+      const m4 = matrix[4], m5 = matrix[5], m6 = matrix[6],  m7 = matrix[7];
+      result[0] = m0 * c + m4 * s;
+      result[1] = m1 * c + m5 * s;
+      result[2] = m2 * c + m6 * s;
+      result[3] = m3 * c + m7 * s;
+      result[4] = m4 * c - m0 * s;
+      result[5] = m5 * c - m1 * s;
+      result[6] = m6 * c - m2 * s;
+      result[7] = m7 * c - m3 * s;
+      return result;
+    }
 
     function drawPrimitive(buffers, modelMatrix) {
+      if (!buffers) return;
       gl.uniformMatrix4fv(uMTM, false, modelMatrix);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, buffers.vbo);
@@ -283,50 +290,104 @@ void main() {
     }
 
     function render() {
-      if (!program) return;
-      gl.useProgram(program);
-      gl.enable(gl.DEPTH_TEST);
-      gl.clearColor(0, 0, 0, 1);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      try {
+        if (!program) return;
+        gl.useProgram(program);
+        gl.enable(gl.DEPTH_TEST);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.viewport(0, 0, canvas.width, canvas.height);
 
-      // rotation matrices
-      let cx = Math.cos(cubeRotY), sx = Math.sin(cubeRotY);
-      let cy = Math.cos(cubeRotX), sy = Math.sin(cubeRotX);
-      let rotX = [1, 0, 0, 0, 0, cy, sy, 0, 0, -sy, cy, 0, 0, 0, 0, 1];
-      let rotY = [cx, 0, -sx, 0, 0, 1, 0, 0, sx, 0, cx, 0, 0, 0, 0, 1];
-      let cubeRotation = multiplyMat4(rotY, rotX);
-      
-      const hemisphereRotation = 0.0;
+        // rotation matrices
+        let cx = Math.cos(sceneRotY), sx = Math.sin(sceneRotY);
+        let cy = Math.cos(sceneRotX), sy = Math.sin(sceneRotX);
+        let rotX = [1, 0, 0, 0, 0, cy, sy, 0, 0, -sy, cy, 0, 0, 0, 0, 1];
+        let rotY = [cx, 0, -sx, 0, 0, 1, 0, 0, sx, 0, cx, 0, 0, 0, 0, 1];
+        let sceneRotation = multiplyMat4(rotY, rotX);
+        
+        const hemisphereRotation = 0.0;
+        const s1Deg = parseFloat(leverSlider ? leverSlider.value : 0) || 0;
+        const s1Rad = s1Deg * Math.PI / 180.0;
+        const s2Deg = parseFloat(joint1Slider ? joint1Slider.value : 0) || 0;
+        const s2Rad = s2Deg * Math.PI / 180.0;
 
-      let modelViewMatrix = mat4Identity();
-      let deltaTime = Date.now() - startTime;
+        let modelViewMatrix = mat4Identity();
+        let now = Date.now();
+        let deltaTime = now - startTime;
+        let frameDelta = now - lastFrameTime;
+        lastFrameTime = now;
 
-      // camera translation
-      modelViewMatrix = mat4Translate(modelViewMatrix, [camX, camY, camZ]);
-      
-      //set time in seconds
-      gl.uniform1f(timeLoc, deltaTime/1000.0);
-      gl.uniformMatrix4fv(uPM, false, proj);
-      gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
+        if (isSpinning) {
+          spinAngle += frameDelta * 0.003;
+        }
 
-      function drawBase(parentMatrix) {
-        let model = mat4Translate(parentMatrix, [0, 0, 0]);
-        model = mat4RotateY(model, hemisphereRotation);
-      
-        drawPrimitive(hemisphereBuffers, mat4Scale(model, [1, 1, 1]));
+        // camera translation
+        modelViewMatrix = mat4Translate(modelViewMatrix, [camX, camY, camZ]);
+        
+        //set time in seconds
+        gl.uniform1f(timeLoc, deltaTime/1000.0);
+        gl.uniformMatrix4fv(uPM, false, proj);
+        gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
 
-        drawFirstSection(model);
+        function drawBase(parentMatrix) {
+          let model = mat4Translate(parentMatrix, [0, 0, 0]);
+          model = mat4RotateY(model, hemisphereRotation);
+        
+          drawPrimitive(hemisphereBuffers, mat4Scale(model, [1, 1, 1]));
+
+          drawFirstSection(model);
+        }
+
+        function drawFirstSection(parentMatrix){
+          let model = mat4RotateX(parentMatrix, s1Rad);
+          model = mat4Translate(model, [0, 1.5, 0]);
+        
+          drawPrimitive(cuboidBuffers, mat4Scale(model, [0.15, 1.25, 0.15]));
+
+          drawFirstJoint(model);
+        }
+
+        function drawFirstJoint(parentMatrix){
+          let model = mat4Translate(parentMatrix, [0, 1.5, 0]);
+          model = mat4RotateZ(model, hemisphereRotation);
+        
+          drawPrimitive(sphereBuffers, mat4Scale(model, [0.35, 0.35, 0.35]));
+
+          drawSecondSection(model);
+        }
+
+        function drawSecondSection(parentMatrix) {
+          let model = mat4RotateZ(parentMatrix, s2Rad);
+          model = mat4Translate(model, [0, 1.5, 0]);
+
+          drawPrimitive(cuboidBuffers, mat4Scale(model, [0.15, 1.25, 0.15]));
+
+          drawSecondJoint(model);
+        }
+
+        function drawSecondJoint(parentMatrix) {
+          let model = mat4Translate(parentMatrix, [0, 1.5, 0]);
+          
+          drawPrimitive(sphereBuffers, mat4Scale(model, [0.35, 0.35, 0.35]));
+
+          drawThirdSection(model);
+        }
+
+        function drawThirdSection(parentMatrix) {
+          let model = mat4Translate(parentMatrix, [0, 0.35, 0]);
+          model = mat4RotateY(model, spinAngle);
+          
+          drawPrimitive(cuboidBuffers, mat4Scale(model, [0.8, 0.05, 0.8]));
+        }
+
+        drawBase(sceneRotation);
+      } catch (err) {
+        console.error("Render loop error:", err);
       }
-
-      function drawFirstSection(parentMatrix){return 0;}
-
-      drawBase(cubeRotation);
     }
 
     // Initialize when page loads
     window.onload = function () {
-      vertEditor.value = document.getElementById("vertex-shader").textContent.trim();
-      fragEditor.value = document.getElementById("fragment-shader").textContent.trim();
       initShaderProgram();
       setInterval(render, 30);
     }

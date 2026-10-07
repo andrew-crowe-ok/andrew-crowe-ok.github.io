@@ -145,6 +145,28 @@ function mat4RotateY(matrix, angle) {
     return result;
 }
 
+// Matrix rotation around Z axis
+function mat4RotateZ(matrix, angle) {
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const result = new Float32Array(matrix);
+
+    const m0 = matrix[0], m1 = matrix[1], m2 = matrix[2],  m3 = matrix[3];
+    const m4 = matrix[4], m5 = matrix[5], m6 = matrix[6],  m7 = matrix[7];
+
+    result[0] = m0 * c + m4 * s;
+    result[1] = m1 * c + m5 * s;
+    result[2] = m2 * c + m6 * s;
+    result[3] = m3 * c + m7 * s;
+
+    result[4] = m4 * c - m0 * s;
+    result[5] = m5 * c - m1 * s;
+    result[6] = m6 * c - m2 * s;
+    result[7] = m7 * c - m3 * s;
+
+    return result;
+}
+
 // Matrix scaling
 function mat4Scale(matrix, scale) {
     const result = new Float32Array(matrix);

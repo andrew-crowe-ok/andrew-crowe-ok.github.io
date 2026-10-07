@@ -120,7 +120,7 @@ void main() {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     let program, posLoc, colorLoc, timeLoc, uMVM, uPM, uMTM, uAlphaLoc;
-    let hemisphereBuffers, cuboidBuffers, sphereBuffers;
+    let hemisphereBuffers, cuboidBuffers, sphereBuffers, prismBuffers;
     let sceneObjects = [];
     let vbo, nbo, ibo;
 
@@ -164,6 +164,21 @@ void main() {
         sphereData.positions,
         sphereData.colors,
         sphereData.indices
+      );
+
+      const prismData = createTrapezoidalPrism();
+      const tintedColors = new Float32Array(prismData.colors.length);
+      for (let i = 0; i < prismData.colors.length; i += 3) {
+        // Gold/bronze tint to contrast with the plane
+        tintedColors[i] = Math.min(1.0, prismData.colors[i] * 1.8);
+        tintedColors[i+1] = Math.min(1.0, prismData.colors[i+1] * 1.4);
+        tintedColors[i+2] = prismData.colors[i+2] * 0.5;
+      }
+      prismBuffers = createMeshBuffers(
+        gl,
+        prismData.positions,
+        tintedColors,
+        prismData.indices
       );
     }
     initBuffers();
@@ -378,6 +393,9 @@ void main() {
           model = mat4RotateY(model, spinAngle);
           
           drawPrimitive(cuboidBuffers, mat4Scale(model, [0.8, 0.05, 0.8]));
+
+          let prismModel = mat4Translate(model, [0, 0.20, 0]);
+          drawPrimitive(prismBuffers, mat4Scale(prismModel, [0.8, 0.15, 0.8]));
         }
 
         drawBase(sceneRotation);

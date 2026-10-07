@@ -185,7 +185,11 @@ function createHemisphere(type = 'right', radius = 1, latBands = 20, longBands =
       }
 
       positions.push(x, y, z);
-      colors.push((x + 1) / 2, (y + 1) / 2, (z + 1) / 2);
+      if (x < 0) {
+        colors.push(0.5, 0.0, 0.0);
+      } else {
+        colors.push(1.0, 0.5, 1.0);
+      }
     }
   }
 
@@ -203,8 +207,7 @@ function createHemisphere(type = 'right', radius = 1, latBands = 20, longBands =
   // Generate flat circular cap at the cut face
   const centerIndex = positions.length / 3;
   positions.push(0, 0, 0);
-  // Interior sliced color: warm amber/orange
-  colors.push(1.0, 0.55, 0.15);
+  colors.push(0.5, 0.5, 0.5);
 
   const capStart = positions.length / 3;
   for (let longNumber = 0; longNumber <= longBands; longNumber++) {
@@ -226,7 +229,11 @@ function createHemisphere(type = 'right', radius = 1, latBands = 20, longBands =
     }
 
     positions.push(cx, cy, cz);
-    colors.push(0.95, 0.45, 0.1);
+    if (cx < 0) {
+      colors.push(0.0, 0.0, 0.0);
+    } else {
+      colors.push(1.0, 1.0, 1.0);
+    }
   }
 
   for (let longNumber = 0; longNumber < longBands; longNumber++) {

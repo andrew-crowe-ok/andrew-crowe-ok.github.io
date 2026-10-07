@@ -86,7 +86,7 @@ precision mediump float;
 in vec3 aPosition;
 in vec3 aColor;
 
-uniform float uTime; //time in sec
+uniform float uTime;
 uniform mat4 uModelViewMatrix;
 uniform mat4 uProjectionMatrix;
 uniform mat4 uModelTransformationMatrix;
@@ -94,22 +94,8 @@ uniform mat4 uModelTransformationMatrix;
 out vec3 vColor;
 
 void main() {
-  // 3D wavy ripple across the geometry using uTime
-  vec3 pos = aPosition;
-  float wave = sin(uTime * 3.0 + pos.x * 2.5 + pos.z * 2.5);
-  pos.y += 0.12 * wave;
-
-  gl_Position = uProjectionMatrix * uModelViewMatrix * uModelTransformationMatrix * vec4(pos, 1.0);
-
-  // Dynamic neon palette with 120-degree phase shifts across R, G, B
-  vec3 neon = vec3(
-    0.5 + 0.5 * sin(uTime * 2.5 + aPosition.x * 2.0),
-    0.5 + 0.5 * sin(uTime * 2.5 + aPosition.y * 2.0 + 2.094),
-    0.5 + 0.5 * sin(uTime * 2.5 + aPosition.z * 2.0 + 4.189)
-  );
-
-  // Blend distinct object colors with dynamic neon wave shimmer
-  vColor = clamp(mix(aColor, neon, 0.35) * 1.2, 0.0, 1.0);
+  gl_Position = uProjectionMatrix * uModelViewMatrix * uModelTransformationMatrix * vec4(aPosition, 1.0);
+  vColor = aColor;
 }
 </script>
   <!-- Fragment Shader -->
@@ -122,9 +108,7 @@ uniform float uAlpha;
 out vec4 fragColor;
 
 void main() {
-  // Pulsating electric neon glow
-  float pulse = 0.85 + 0.15 * sin(uTime * 4.0);
-  fragColor = vec4(vColor * pulse, uAlpha);
+  fragColor = vec4(vColor, 1.0);
 }
 </script>
 
@@ -190,10 +174,19 @@ void main() {
     }
 
     function initBuffers() {
-      cubeBuffers = createMeshBuffers(gl, cubePos, cubeColors, cubeIndices);
-      prismBuffers = createMeshBuffers(gl, prismPos, prismColors, prismIndices);
-      sphereBuffers = createMeshBuffers(gl, spherePos, sphereColors, sphereIndices);
-      planeBuffers = createMeshBuffers(gl, planePos, planeColors, planeIndices);
+
+      const hemiData = createHemisphere('top', 1.0, 20, 20);
+      hemisphereBuffers = createMeshBuffers(
+        gl, 
+        hemiData.positions, 
+        hemiData.colors, 
+        hemiData.indices
+      );
+
+      //cubeBuffers = createMeshBuffers(gl, cubePos, cubeColors, cubeIndices);
+      //prismBuffers = createMeshBuffers(gl, prismPos, prismCol, prismInd);
+      //sphereBuffers = createMeshBuffers(gl, spherePos, sphereColors, sphereIndices);
+      //planeBuffers = createMeshBuffers(gl, planePos, planeColors, planeIndices);
     }
     initBuffers();
 
@@ -274,6 +267,21 @@ void main() {
       spinStartTime = Date.now();
     });
 
+    function drawPrimitive(buffers, modelMatrix) {
+      gl.uniformMatrix4fv(uMTM, false, modelMatrix);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.vbo);
+      gl.enableVertexAttribArray(posLoc);
+      gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.nbo);
+      gl.enableVertexAttribArray(colorLoc);
+      gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.ibo);
+      gl.drawElements(gl.TRIANGLES, buffers.indexCount, gl.UNSIGNED_SHORT, 0);
+    }
+
     function render() {
       if (!program) return;
       gl.useProgram(program);
@@ -287,6 +295,8 @@ void main() {
       let rotX = [1, 0, 0, 0, 0, cy, sy, 0, 0, -sy, cy, 0, 0, 0, 0, 1];
       let rotY = [cx, 0, -sx, 0, 0, 1, 0, 0, sx, 0, cx, 0, 0, 0, 0, 1];
       let cubeRotation = multiplyMat4(rotY, rotX);
+      
+      const hemisphereRotation = 0.0;
 
       let modelViewMatrix = mat4Identity();
       let deltaTime = Date.now() - startTime;
@@ -298,6 +308,19 @@ void main() {
       gl.uniform1f(timeLoc, deltaTime/1000.0);
       gl.uniformMatrix4fv(uPM, false, proj);
       gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
+
+      function drawBase(parentMatrix) {
+        let model = mat4Translate(parentMatrix, [0, 0, 0]);
+        model = mat4RotateY(model, hemisphereRotation);
+      
+        drawPrimitive(hemisphereBuffers, mat4Scale(model, [1, 1, 1]));
+
+        drawFirstSection(model);
+      }
+
+      function drawFirstSection(parentMatrix){return 0;}
+
+      drawBase(cubeRotation);
     }
 
     // Initialize when page loads

@@ -1,5 +1,5 @@
 // cube
-const positions = new Float32Array([
+const cubePos = new Float32Array([
   -1, -1, -1,  // 0
    1, -1, -1,  // 1
    1,  1, -1,  // 2
@@ -10,7 +10,7 @@ const positions = new Float32Array([
   -1,  1,  1   // 7
 ]);
 
-const colors = new Float32Array([
+const cubeColors = new Float32Array([
   // Warm sunset fire palette (coral, orange, gold, magenta)
   1.0, 0.15, 0.25,  // 0: bright coral red
   1.0, 0.55, 0.0,   // 1: electric orange
@@ -23,7 +23,7 @@ const colors = new Float32Array([
 ]);
 
 
-const indices = new Uint16Array([
+const cubeIndices = new Uint16Array([
   // Front
   4, 5, 6,   4, 6, 7,
   // Back

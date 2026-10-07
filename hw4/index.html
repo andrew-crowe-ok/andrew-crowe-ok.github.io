@@ -190,66 +190,10 @@ void main() {
     }
 
     function initBuffers() {
-      sceneObjects = [];
-
-      // 1. Cube
-      const cubeBuffers = createMeshBuffers(gl, positions, colors, indices);
-      sceneObjects.push({
-        type: 'cube',
-        buffers: cubeBuffers,
-        translation: [-2.5, 0.0, 0.0],
-        scaleId: 'scaleCube',
-        rotId: 'rotCube',
-        transId: 'transYCube'
-      });
-
-      // 2. Trapezoidal Prism
-      const prismData = createTrapezoidalPrism();
-      const prismBuffers = createMeshBuffers(gl, prismData.positions, prismData.colors, prismData.indices);
-      sceneObjects.push({
-        type: 'prism',
-        buffers: prismBuffers,
-        translation: [2.5, 0.0, 0.0],
-        scaleId: 'scalePrism',
-        rotId: 'rotPrism',
-        transId: 'transYPrism'
-      });
-
-      // 3. Right Hemisphere
-      const rightHemiData = createHemisphere('right');
-      const rightHemiBuffers = createMeshBuffers(gl, rightHemiData.positions, rightHemiData.colors, rightHemiData.indices);
-      sceneObjects.push({
-        type: 'rightHemi',
-        buffers: rightHemiBuffers,
-        translation: [0.0, 0.0, 0.0],
-        scaleId: 'scaleSphere',
-        rotId: 'rotSphere',
-        transId: 'transYSphere'
-      });
-
-      // 4. Left Hemisphere
-      const leftHemiData = createHemisphere('left');
-      const leftHemiBuffers = createMeshBuffers(gl, leftHemiData.positions, leftHemiData.colors, leftHemiData.indices);
-      sceneObjects.push({
-        type: 'leftHemi',
-        buffers: leftHemiBuffers,
-        translation: [0.0, 0.0, 0.0],
-        scaleId: 'scaleSphere',
-        rotId: 'rotSphere',
-        transId: 'transYSphere'
-      });
-
-      // 5. Cutting Plane
-      const planeData = createCuttingPlane(1.4);
-      const planeBuffers = createMeshBuffers(gl, planeData.positions, planeData.colors, planeData.indices);
-      sceneObjects.push({
-        type: 'plane',
-        buffers: planeBuffers,
-        translation: [0.0, 0.0, 0.0],
-        scaleId: 'scaleSphere',
-        rotId: 'rotSphere',
-        transId: 'transYSphere'
-      });
+      cubeBuffers = createMeshBuffers(gl, cubePos, cubeColors, cubeIndices);
+      prismBuffers = createMeshBuffers(gl, prismPos, prismColors, prismIndices);
+      sphereBuffers = createMeshBuffers(gl, spherePos, sphereColors, sphereIndices);
+      planeBuffers = createMeshBuffers(gl, planePos, planeColors, planeIndices);
     }
     initBuffers();
 
@@ -320,19 +264,14 @@ void main() {
 
     let startTime = Date.now();
 
-    // Slicing animation state
-    let isSlicing = false;
-    let sliceStartTime = 0;
-    const sliceBtn = document.getElementById("sliceSphereBtn");
+    // Spinning animation state
+    let isSpinning = false;
+    let spinStartTime = 0;
+    const spinBtn = document.getElementById("sliceSphereBtn");
 
-    sliceBtn.addEventListener("click", () => {
-      if (isSlicing) return;
-      isSlicing = true;
-      sliceStartTime = Date.now();
-      sliceBtn.disabled = true;
-      sliceBtn.style.opacity = "0.5";
-      sliceBtn.style.cursor = "not-allowed";
-      sliceBtn.textContent = "Cutting...";
+    spinBtn.addEventListener("click", () => {
+      isSpinning = true;
+      spinStartTime = Date.now();
     });
 
     function render() {
@@ -359,106 +298,6 @@ void main() {
       gl.uniform1f(timeLoc, deltaTime/1000.0);
       gl.uniformMatrix4fv(uPM, false, proj);
       gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
-
-      // Slicing Animation Timeline
-      let hemiOffset = 0.0;
-      let planeY = 0.0;
-      let planeAlpha = 1.0;
-      let showPlane = false;
-
-      if (isSlicing) {
-        let t = (Date.now() - sliceStartTime) / 1000.0;
-
-        if (t < 0.8) {
-          // Phase 1: Plane falls from y = 3.0 down into the sphere (y = 0.0)
-          let p = t / 0.8;
-          let easeIn = p * p;
-          planeY = 3.0 * (1.0 - easeIn);
-          showPlane = true;
-          planeAlpha = 1.0;
-          hemiOffset = 0.0;
-        } else if (t < 1.6) {
-          // Phase 2: Plane slices through, sphere separates into two half spheres
-          let p = (t - 0.8) / 0.8;
-          let easeOut = Math.sin(p * Math.PI / 2);
-          hemiOffset = 0.45 * easeOut;
-          planeY = 0.0;
-          showPlane = true;
-          planeAlpha = 1.0;
-        } else if (t < 2.4) {
-          // Phase 3: Plane fades out and de-spawns
-          let p = (t - 1.6) / 0.8;
-          hemiOffset = 0.45;
-          planeY = 0.0;
-          planeAlpha = Math.max(0.0, 1.0 - p);
-          showPlane = (planeAlpha > 0.01);
-        } else if (t < 3.5) {
-          // Phase 4: Sphere halves stay separated for ~1 second
-          hemiOffset = 0.45;
-          showPlane = false;
-          sliceBtn.textContent = "Resetting...";
-        } else if (t < 4.3) {
-          // Phase 5: Sphere halves rejoin smoothly
-          let p = (t - 3.5) / 0.8;
-          let easeInOut = 0.5 - 0.5 * Math.cos(p * Math.PI);
-          hemiOffset = 0.45 * (1.0 - easeInOut);
-          showPlane = false;
-        } else {
-          // Phase 6: Completed, reset sphere and allow button to be pressed again
-          isSlicing = false;
-          hemiOffset = 0.0;
-          showPlane = false;
-          sliceBtn.disabled = false;
-          sliceBtn.style.opacity = "1.0";
-          sliceBtn.style.cursor = "pointer";
-          sliceBtn.textContent = "Slice Sphere";
-        }
-      }
-
-      sceneObjects.forEach((obj) => {
-        if (obj.type === 'plane' && !showPlane) return;
-
-        const transYVal = parseFloat(document.getElementById(obj.transId).value);
-        const rotValDeg = parseFloat(document.getElementById(obj.rotId).value);
-        const rotValRad = rotValDeg * Math.PI / 180.0;
-        const scaleVal = parseFloat(document.getElementById(obj.scaleId).value);
-
-        let mtm = mat4Identity();
-        // Base translation + slider Y-translation
-        mtm = mat4Translate(mtm, [obj.translation[0], obj.translation[1] + transYVal, obj.translation[2]]);
-        // Global mouse rotation
-        mtm = multiplyMat4(mtm, cubeRotation);
-        // Individual object local Y-rotation
-        mtm = mat4RotateY(mtm, rotValRad);
-        // Individual object scaling
-        mtm = mat4Scale(mtm, [scaleVal, scaleVal, scaleVal]);
-
-        // Local displacement for cut animation
-        if (obj.type === 'rightHemi') {
-          mtm = mat4Translate(mtm, [hemiOffset, 0.0, 0.0]);
-        } else if (obj.type === 'leftHemi') {
-          mtm = mat4Translate(mtm, [-hemiOffset, 0.0, 0.0]);
-        } else if (obj.type === 'plane') {
-          mtm = mat4Translate(mtm, [0.0, planeY, 0.0]);
-        }
-        
-        gl.uniformMatrix4fv(uMTM, false, mtm);
-
-        if (uAlphaLoc) {
-          gl.uniform1f(uAlphaLoc, obj.type === 'plane' ? planeAlpha : 1.0);
-        }
-
-        gl.bindBuffer(gl.ARRAY_BUFFER, obj.buffers.vbo);
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
-
-        gl.bindBuffer(gl.ARRAY_BUFFER, obj.buffers.nbo);
-        gl.enableVertexAttribArray(colorLoc);
-        gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
-        
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, obj.buffers.ibo);
-        gl.drawElements(gl.TRIANGLES, obj.buffers.indexCount, gl.UNSIGNED_SHORT, 0);
-      });
     }
 
     // Initialize when page loads

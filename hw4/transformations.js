@@ -165,16 +165,3 @@ function mat4Scale(matrix, scale) {
     
     return result;
 }
-
-// [optional] Helper function converting math format row-major matrices into a flat column-major array.
-// function mat4FromRows(m00, m01, m02, m03,
-//                       m10, m11, m12, m13,
-//                       m20, m21, m22, m23,
-//                       m30, m31, m32, m33) {
-//     return new Float32Array([
-//         m00, m10, m20, m30,   // column 0
-//         m01, m11, m21, m31,   // column 1
-//         m02, m12, m22, m32,   // column 2
-//         m03, m13, m23, m33    // column 3
-//     ]);
-// }

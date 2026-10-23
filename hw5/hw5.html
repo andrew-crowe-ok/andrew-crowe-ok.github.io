@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Newton's Cradle</title>
+  <style>
+    body { background: #111; color: #ccc; font-family: monospace; margin: 20px; }
+    canvas { border: 1px solid #444; }
+    .layout { display: flex; gap: 20px; align-items: flex-start; }
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: #1a1a1a;
+      padding: 12px;
+      border: 1px solid #333;
+      width: 320px;
+    }
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: #222;
+      padding: 8px;
+      border: 1px solid #3a3a3a;
+      border-radius: 4px;
+    }
+    .slider-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; }
+    button {
+      background: #333;
+      color: #eee;
+      border: 1px solid #555;
+      font-family: monospace;
+      padding: 6px 8px;
+      cursor: pointer;
+    }
+    button:hover { background: #444; }
+    button:active { background: #555; }
+  </style>
+</head>
+
+<body>
+  <div class="layout">
+    <!-- Viewing Window (Left) -->
+    <canvas id="glcanvas" width="500" height="500"></canvas>
+
+    <!-- UI Controls (Right) -->
+    <div class="controls">
+      <!-- Shading Toggle -->
+      <div class="control-group">
+        <b>Shading Mode</b>
+        <button id="toggleShadingBtn">Disable Shading</button>
+      </div>
+
+      <!-- Light Intensities (0 to 3) -->
+      <div class="control-group">
+        <b>Light Intensities (0.0 to 3.0)</b>
+        <label class="slider-row">
+          Light 1 Intensity: <input type="range" id="sliderLight1Intensity" min="0" max="3" step="0.05" value="1.00">
+          <span id="valLight1Intensity">1.00</span>
+        </label>
+        <label class="slider-row">
+          Light 2 Intensity: <input type="range" id="sliderLight2Intensity" min="0" max="3" step="0.05" value="1.00">
+          <span id="valLight2Intensity">1.00</span>
+        </label>
+      </div>
+
+      <!-- Segment Movements -->
+      <div class="control-group">
+        <b>Segment Movements</b>
+        <label class="slider-row">
+          Lower Arm: <input type="range" id="sliderLowerArm" min="-1.57" max="1.57" step="0.05" value="0.00">
+          <span id="valLowerArm">0.00</span>
+        </label>
+        <label class="slider-row">
+          Upper Arm: <input type="range" id="sliderUpperArm" min="-1.57" max="1.57" step="0.05" value="0.00">
+          <span id="valUpperArm">0.00</span>
+        </label>
+      </div>
+
+      <!-- Light 2 Color Controls -->
+      <div class="control-group">
+        <b>Light 2 Color (RGB)</b>
+        <label class="slider-row">
+          R: <input type="range" id="sliderR" min="0" max="1" step="0.05" value="1.00">
+          <span id="valR">1.00</span>
+        </label>
+        <label class="slider-row">
+          G: <input type="range" id="sliderG" min="0" max="1" step="0.05" value="1.00">
+          <span id="valG">1.00</span>
+        </label>
+        <label class="slider-row">
+          B: <input type="range" id="sliderB" min="0" max="1" step="0.05" value="1.00">
+          <span id="valB">1.00</span>
+        </label>
+        <button id="randomColorBtn">Randomize Color</button>
+      </div>
+
+      <!-- Animation Start / Stop -->
+      <div class="control-group">
+        <b>Animation</b>
+        <button id="toggleAnimBtn">Stop Pendulum</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="transforms.js"></script>
+  <script src="models.js"></script>
+  <script src="main.js"></script>
+</body>
+
+</html>

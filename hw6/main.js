@@ -255,7 +255,7 @@ resize();
 const lightWorld = [3, 4, 5];
 
 // Interactive controls
-let dragRotX = 0, dragRotY = -0.5;      // mouse drag
+let dragRotX = 0.35, dragRotY = -0.5;      // mouse drag
 let camX = 0, camY = 0, camZ = -7;      // arrow keys, w, s
 let sliderAngle = 0;                    // degrees
 let spinning = false, spinAngle = 0;    // Start/Stop button

@@ -19,4 +19,12 @@ function drawShip(parent) {
 // Level 2: saucer section, a squashed sphere
 function drawSaucer(parent) {
   drawPrimitive(sphereMesh, brickTexture, BUMP_MAPPING, multiply(parent, scale(1.6, 0.18, 1.6)));
+
+  // The child gets the unscaled saucer frame, so it isn't squashed too
+  drawBridge(multiply(parent, translate(0, 0.14, 0)));
+}
+
+// Level 3: bridge dome, half buried in the saucer's top (saucer top is y = 0.18)
+function drawBridge(parent) {
+  drawPrimitive(sphereMesh, normalTexture, NORMAL_MAPPING, multiply(parent, scale(0.45, 0.14, 0.45)));
 }

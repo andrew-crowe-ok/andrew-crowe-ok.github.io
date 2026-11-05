@@ -307,13 +307,7 @@ function render(time) {
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
 
   gl.activeTexture(gl.TEXTURE0);
-  for (const { mesh, texture, mapping, offset } of objects) {
-    gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(...offset), rotation)));
-    gl.uniform1i(uMapping, mapping);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.bindVertexArray(mesh.vao);
-    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
-  }
+  drawShip(multiply(view, rotation));
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);

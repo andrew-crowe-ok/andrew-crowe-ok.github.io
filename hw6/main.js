@@ -189,6 +189,10 @@ function createMesh({ positions, normals, tangents, texCoords, indices }) {
 const cubeMesh = createMesh(createCube());
 const cylinderMesh = createMesh(createCylinder());
 
+// Carried over from HW 5: built but not drawn, ready for the cradle below
+const sphereMesh = createMesh(createSphere(28, 28));
+const pyramidMesh = createMesh(createPyramid());
+
 function loadTexture(url) {
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -210,6 +214,39 @@ function loadTexture(url) {
 
 const brickTexture = loadTexture("brick.png");
 const normalTexture = loadTexture("texture2.jpg");
+
+// HW 5 textures. antelope.jpg is 3.4 MB, so these are fetched on first use
+// rather than on page load; either way the texture starts as a 1x1 placeholder
+// and fills in once the image decodes.
+const textureCache = new Map();
+function getTexture(url) {
+  if (!textureCache.has(url)) textureCache.set(url, loadTexture(url));
+  return textureCache.get(url);
+}
+
+// HW 5 Newton's cradle: the whole hierarchy is available, but neither it nor
+// its textures exist until getCradle() is called, and nothing draws it yet.
+// To show it, add this to render():
+//   const cradle = getCradle();
+//   cradle.update(t, true, rotation);
+//   drawSceneTree(cradle.root, view, (node, frame) => {
+//     gl.uniformMatrix4fv(uModelView, false, multiply(frame, node.shape));
+//     gl.uniform1i(uMapping, BUMP_MAPPING);
+//     gl.bindTexture(gl.TEXTURE_2D, node.texture ?? brickTexture);
+//     gl.bindVertexArray(node.mesh.vao);
+//     gl.drawElements(gl.TRIANGLES, node.mesh.count, gl.UNSIGNED_SHORT, 0);
+//   });
+let cradleInstance = null;
+function getCradle() {
+  return cradleInstance ??= createNewtonsCradle({
+    cubeMesh,
+    cylinderMesh,
+    sphereMesh,
+    pyramidMesh,
+    pyramidTexture: getTexture("antelope.jpg"),
+    ballTexture: getTexture("mars2.jpg")
+  });
+}
 
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1;
 const objects = [

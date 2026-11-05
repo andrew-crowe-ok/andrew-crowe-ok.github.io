@@ -131,41 +131,19 @@ function createProgram(vsSource, fsSource) {
   }
 }
 
-// Shader editors
-const vertEditor = document.getElementById("vertEditor");
-const fragEditor = document.getElementById("fragEditor");
-const shaderError = document.getElementById("shaderError");
-vertEditor.value = VERTEX_SHADER;
-fragEditor.value = FRAGMENT_SHADER;
-
 let program, uModelView, uProjection, uLightPos, uMapping;
 
-function updateProgram() {
-  try {
-    const prog = createProgram(vertEditor.value, fragEditor.value);
-    gl.deleteProgram(program);
-    program = prog;
-    gl.useProgram(program);
-    uModelView = gl.getUniformLocation(program, "uModelView");
-    uProjection = gl.getUniformLocation(program, "uProjection");
-    uLightPos = gl.getUniformLocation(program, "uLightPos");
-    uMapping = gl.getUniformLocation(program, "uMapping");
-    gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
-    shaderError.textContent = "";
-  } catch (e) {
-    shaderError.textContent = e.message.replace(/\0/g, "");
-  }
+try {
+  program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
+} catch (e) {
+  console.error(e.message.replace(/\0/g, ""));
 }
-updateProgram();
-
-// Debounce: recompiling on every keystroke is slow and most intermediate edits fail
-let recompileTimer = 0;
-function queueUpdateProgram() {
-  clearTimeout(recompileTimer);
-  recompileTimer = setTimeout(updateProgram, 200);
-}
-vertEditor.addEventListener("input", queueUpdateProgram);
-fragEditor.addEventListener("input", queueUpdateProgram);
+gl.useProgram(program);
+uModelView = gl.getUniformLocation(program, "uModelView");
+uProjection = gl.getUniformLocation(program, "uProjection");
+uLightPos = gl.getUniformLocation(program, "uLightPos");
+uMapping = gl.getUniformLocation(program, "uMapping");
+gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
 
 function bindAttribute(name, data, size) {
   gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
@@ -256,7 +234,24 @@ const objects = [
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
-const projection = perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
+
+// Full-window canvas: match the drawing buffer to the displayed size and keep the
+// scene framed. Vertical FOV is 45 deg; on windows narrower than 16:10 it widens so
+// the horizontal FOV never drops below the 16:10 value and both models stay visible.
+const BASE_FOVY = Math.PI / 4, MIN_ASPECT = 1.6;
+let projection;
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(canvas.clientWidth * dpr);
+  canvas.height = Math.round(canvas.clientHeight * dpr);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  const aspect = canvas.width / canvas.height;
+  const fovy = aspect >= MIN_ASPECT ? BASE_FOVY
+    : 2 * Math.atan(Math.tan(BASE_FOVY / 2) * MIN_ASPECT / aspect);
+  projection = perspective(fovy, aspect, 0.1, 100);
+}
+window.addEventListener("resize", resize);
+resize();
 const lightWorld = [3, 4, 5];
 
 // Interactive controls
@@ -276,7 +271,6 @@ window.addEventListener("mousemove", e => {
 });
 
 document.addEventListener("keydown", e => {
-  if (e.target === vertEditor || e.target === fragEditor) return;
   const step = 0.2;
   switch (e.key) {
     case "ArrowUp": camY -= step; break;

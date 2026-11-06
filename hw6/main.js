@@ -6,7 +6,7 @@ in vec2 aTexCoord;
 
 uniform mat4 uModelView;
 uniform mat4 uProjection;
-
+${LENS_GLSL}
 out vec3 vPosition;
 out vec3 vNormal;
 out vec3 vTangent;
@@ -23,7 +23,8 @@ void main() {
 
   vTangent = mv * aTangent;
   vTexCoord = aTexCoord;
-  gl_Position = uProjection * p;
+  // The lens is rectilinear until the chase camera opens it out (camera.js)
+  gl_Position = project(uProjection, p);
 }
 `;
 
@@ -179,6 +180,7 @@ uProjection = gl.getUniformLocation(program, "uProjection");
 uLightPos = gl.getUniformLocation(program, "uLightPos");
 uMapping = gl.getUniformLocation(program, "uMapping");
 uLight2Pos = gl.getUniformLocation(program, "uLight2Pos");
+const setLens = lensUniforms(gl, program);
 gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
 gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
 
@@ -373,11 +375,13 @@ resize();
 const lightWorld = [12, 5, 3];      // sun: off to the side and outside the orbit, so the planet shows a terminator
 const light2World = [-12, -5, -3];  // fill: opposite the sun, lifts the night side
 
-// Interactive controls
-let dragRotX = 0.35, dragRotY = -0.5;      // mouse drag
-let camX = 0, camY = 0, camZ = -14;     // arrow keys, w, s
-let sliderAngle = 0;                    // degrees
-let spinning = false, spinAngle = 0;    // Start/Stop button
+// Interactive controls. While the chase camera has the view, the drag angles
+// steer it around the ship instead of turning the scene (camera.js).
+let dragRotX, dragRotY;      // mouse drag
+let camX, camY, camZ;        // arrow keys, w, s
+// The scene's own clock starts here, so a reset restarts the orbit and the
+// planet's spin along with everything else
+let sceneStart = 0;
 
 let mouseDown = false, lastX, lastY;
 canvas.addEventListener("mousedown", e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
@@ -403,44 +407,72 @@ document.addEventListener("keydown", e => {
   e.preventDefault();
 });
 
-const axisSelect = document.getElementById("axisSelect");
-document.getElementById("slider").addEventListener("input", e => {
-  sliderAngle = Number(e.target.value);
-  document.getElementById("sliderValue").textContent = sliderAngle;
-});
-document.getElementById("spinButton").addEventListener("click", () => spinning = !spinning);
+// Engage. The press is handled on the next frame, where the clock is known
+// (scene.js), and the button stays down until the scene resets.
+const engageButton = document.getElementById("engageButton");
+engageButton.addEventListener("click", requestEngage);
 
-// Break Orbit / Resume Orbit. The press is handled on the next frame, where the
-// clock is known (scene.js), and the button is held disabled mid-transition so a
-// blend is never restarted from a point that isn't on either path.
-const breakButton = document.getElementById("breakButton");
-breakButton.addEventListener("click", requestOrbitToggle);
-let breakLabel = "";
-function updateBreakButton() {
-  const label = orbitBroken() ? "Resume Orbit" : "Break Orbit";
-  if (label !== breakLabel) breakButton.textContent = breakLabel = label;
-  breakButton.disabled = orbitInTransition();
+// The two washes over the canvas (index.html), set once a frame:
+//   flash  white-blue, at the jump to warp: up in FLASH.rise, then dying away
+//          over FLASH.decay -- it covers the instant the lens starts to open
+//   fade   black, out over FADE.out before a reset and back in over FADE.in
+//          after one (and on page load)
+const FLASH = { peak: 0.9, rise: 0.05, decay: 0.16 };
+const FADE = { out: 0.45, in: 0.7 };
+const warpFlash = document.getElementById("warpFlash");
+const fade = document.getElementById("fade");
+function setWash(el, v) {
+  const s = v.toFixed(3);
+  if (el.style.opacity !== s) el.style.opacity = s;
 }
+function updateWashes(t, ship) {
+  const w = ship.warpTau;
+  setWash(warpFlash, w === null ? 0 : FLASH.peak *
+    (w < FLASH.rise ? w / FLASH.rise : Math.exp(-(w - FLASH.rise) / FLASH.decay)));
+  const e = engageElapsed(t);
+  const out = e === null ? 0 : smootherstep((e - (ENGAGE.reset - FADE.out)) / FADE.out);
+  setWash(fade, Math.max(out, 1 - smootherstep(t / FADE.in)));
+}
+
+// Everything back the way the page loaded: the ship on its circle, the free
+// camera and its controls, and a fresh scene clock starting at `time`
+function resetScene(time) {
+  dragRotX = 0.35; dragRotY = -0.5;
+  camX = 0; camY = 0; camZ = -14;
+  sceneStart = time;
+  resetFlight();
+  resetCamera();
+}
+resetScene(0);
 
 // Render loop
 let lastTime = 0;
 function render(time) {
-  const t = time / 1000;
-  if (spinning) spinAngle += t - lastTime;
-  lastTime = t;
+  const now = time / 1000;
+  const dt = Math.min(Math.max(now - lastTime, 0), 0.1);   // survives a hidden tab
+  lastTime = now;
+  if (engageExpired(now - sceneStart)) resetScene(now);
+  const t = now - sceneStart;   // scene clock
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  const view = translate(camX, camY, camZ);
+  const rotation = multiply(rotateY(dragRotY), rotateX(dragRotX));
+
+  // The flight path is advanced once, here, because the camera needs to know
+  // where the ship is before anything is drawn.
+  const ship = shipState(t);
+  const view = updateCamera(dt, ship, multiply(translate(camX, camY, camZ), rotation),
+    { x: dragRotX, y: dragRotY });
+
   gl.uniformMatrix4fv(uProjection, false, projection);
+  setLens();
+  // The lights are fixed in the scene, so they ride whatever the view is now
   gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
   gl.uniform3fv(uLight2Pos, transformPoint(view, light2World));
 
-  const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
-  const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
-
   plasma.update();
-  drawSystem(multiply(view, rotation), t);
-  updateBreakButton();
+  drawSystem(view, t, ship);
+  updateWashes(t, ship);
+  engageButton.disabled = offOrbit();
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);

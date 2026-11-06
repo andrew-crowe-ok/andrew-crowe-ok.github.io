@@ -3,62 +3,76 @@
 
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Texture Mapping</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600&display=swap" rel="stylesheet">
   <style>
-    html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color: #ccc; font-family: monospace; }
-    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
-    .overlay {
-      position: fixed; top: 10px; left: 10px; max-width: calc(100vw - 40px);
-      padding: 8px 12px; background: rgba(0, 0, 0, 0.6); border-radius: 4px;
+    :root {
+      --glow: 110, 200, 255;          /* warp-field blue, as rgb triplet */
+      --ink: #e4f6ff;
     }
-    .overlay h2 { margin: 0 0 6px; }
-    .overlay p { margin: 0; }
-    .controls { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
-    .control-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+
+    /* Full-screen washes driven from main.js: the white-blue flash at the jump
+       to warp, and the fade through black around a reset */
+    .wash { position: fixed; inset: 0; pointer-events: none; opacity: 0; }
+    #warpFlash {
+      background: radial-gradient(ellipse at 50% 45%, #fff 0%, rgba(200, 235, 255, 0.85) 22%,
+                  rgba(var(--glow), 0.35) 55%, rgba(var(--glow), 0) 80%);
+      mix-blend-mode: screen;
+    }
+    #fade { background: #000; opacity: 1; }
+
+    #engageButton {
+      position: fixed; left: 50%; bottom: max(7vh, 28px);
+      transform: translateX(-50%);
+      padding: 0.95em 2.6em 0.95em calc(2.6em + 0.42em);   /* last letter's tracking */
+      font: 600 clamp(15px, 1.6vw, 21px) / 1 "Orbitron", "Eurostile", "Segoe UI", system-ui, sans-serif;
+      letter-spacing: 0.42em; text-transform: uppercase;
+      color: var(--ink);
+      background: linear-gradient(180deg, rgba(14, 34, 58, 0.72), rgba(4, 12, 24, 0.78));
+      border: 1px solid rgba(var(--glow), 0.7);
+      border-radius: 999px;
+      box-shadow: 0 0 14px rgba(var(--glow), 0.35), inset 0 0 14px rgba(var(--glow), 0.18);
+      text-shadow: 0 0 8px rgba(var(--glow), 0.8);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      cursor: pointer; outline: none;
+      animation: idle 2.8s ease-in-out infinite;
+      transition: opacity 0.45s ease, transform 0.45s ease, border-color 0.2s, background 0.2s;
+    }
+    #engageButton:hover, #engageButton:focus-visible {
+      border-color: rgba(var(--glow), 1);
+      background: linear-gradient(180deg, rgba(24, 56, 92, 0.8), rgba(6, 18, 34, 0.85));
+    }
+    #engageButton:active { transform: translateX(-50%) scale(0.96); }
+    /* Engaged: the button bows out of the way until the scene resets */
+    #engageButton:disabled {
+      opacity: 0; transform: translateX(-50%) translateY(12px) scale(0.94);
+      pointer-events: none; animation: none;
+    }
+    @keyframes idle {
+      0%, 100% { box-shadow: 0 0 12px rgba(var(--glow), 0.30), inset 0 0 12px rgba(var(--glow), 0.15); }
+      50%      { box-shadow: 0 0 26px rgba(var(--glow), 0.60), inset 0 0 18px rgba(var(--glow), 0.28); }
+    }
+    @media (prefers-reduced-motion: reduce) { #engageButton { animation: none; } }
   </style>
 </head>
 
 <body>
   <canvas id="glcanvas"></canvas>
-
-  <div class="overlay">
-    <h2>HW 6 Texture Mapping</h2>
-
-    <p>A starship orbits a planet inside a procedural star field. Bussard collectors: animated video texture.<br>
-      The ship's skin is generated in code: the saucer's panel lines are bump mapped, and the
-      hull and nacelles carry a plating color map with a normal map baked from the same height field,
-      and the bridge dome has a ring of lit viewports.<br>
-      Bump mapping: saucer, rim, deflector, planet. Normal mapping: bridge dome, hull, nacelles.<br>
-      Drag with the mouse to rotate the scene; arrow keys and w, s move the camera.<br>
-      Break Orbit curves the ship smoothly off its circle and onto the straight line it was
-      flying the instant the button was pressed; press again to curve it back on.<br>
-      Use the slider and dropdown to rotate about an axis; the last button starts/stops spinning.</p>
-
-    <div class="controls">
-      <div class="control-row">
-        <label for="slider">Rotation Angle:</label>
-        <input type="range" id="slider" min="0" max="360" value="0">
-        <span id="sliderValue">0</span>
-      </div>
-      <div class="control-row">
-        <button id="breakButton">Break Orbit</button>
-      </div>
-      <div class="control-row">
-        <select id="axisSelect">
-          <option value="x">X Rotation</option>
-          <option value="y">Y Rotation</option>
-          <option value="z">Z Rotation</option>
-        </select>
-        <button id="spinButton">Start/Stop Rotation</button>
-      </div>
-    </div>
-  </div>
+  <div id="warpFlash" class="wash"></div>
+  <div id="fade" class="wash"></div>
+  <button id="engageButton">Engage</button>
 
   <script src="transforms.js"></script>
   <script src="models.js"></script>
   <script src="textures.js"></script>
   <script src="cradle.js"></script>
   <script src="ship.js"></script>
+  <script src="camera.js"></script>
   <script src="stars.js"></script>
   <script src="scene.js"></script>
   <script src="main.js"></script>

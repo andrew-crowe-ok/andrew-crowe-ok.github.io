@@ -351,17 +351,20 @@ window.addEventListener("resize", resize);
 resize();
 
 // Interactive controls. While the chase camera has the view, the drag angles
-// steer it around the ship instead of turning the scene, and clicks and the
-// wheel are ignored (camera.js).
+// steer it around the ship instead of turning the scene, and clicks, the
+// wheel and the keys are ignored (camera.js).
 let dragRotX, dragRotY;      // mouse drag
 let camX, camY;              // arrow keys; w, s and the wheel zoom (camera.js)
 // The scene's own clock starts here, so a reset restarts the orbit and the
 // planet's spin along with everything else
 let sceneStart = 0;
 
-let mouseDown = false, lastX, lastY, pressX, pressY;
+// A press that strays more than CLICK_SLOP pixels from where it started is a
+// drag, even if it comes back, and its release is not a click
+const CLICK_SLOP = 5;
+let mouseDown = false, dragged = false, lastX, lastY, pressX, pressY;
 canvas.addEventListener("mousedown", e => {
-  mouseDown = true;
+  mouseDown = true; dragged = false;
   lastX = pressX = e.clientX; lastY = pressY = e.clientY;
 });
 window.addEventListener("mouseup", () => mouseDown = false);
@@ -370,9 +373,14 @@ window.addEventListener("mousemove", e => {
   dragRotY += (e.clientX - lastX) * 0.01;
   dragRotX += (e.clientY - lastY) * 0.01;
   lastX = e.clientX; lastY = e.clientY;
+  if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > CLICK_SLOP) dragged = true;
 });
 
+const CONTROL_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "s"];
 document.addEventListener("keydown", e => {
+  if (!CONTROL_KEYS.includes(e.key)) return;
+  e.preventDefault();         // arrows would scroll the page even when ignored
+  if (offOrbit()) return;
   const step = 0.2;
   switch (e.key) {
     case "ArrowUp": camY -= step; break;
@@ -381,18 +389,14 @@ document.addEventListener("keydown", e => {
     case "ArrowRight": camX -= step; break;
     case "w": zoomKey(-1); break;
     case "s": zoomKey(1); break;
-    default: return;
   }
-  e.preventDefault();
 });
 
-// Clicking the ship or the planet centers the view on it. A press that moved
-// more than CLICK_SLOP pixels was a drag, not a click. Picking reads the view
-// and ship of the last frame drawn, which is what was clicked on.
-const CLICK_SLOP = 5;
+// Clicking the ship or the planet centers the view on it. Picking reads the
+// view and ship of the last frame drawn, which is what was clicked on.
 let lastView = null, lastShip = null;
 canvas.addEventListener("click", e => {
-  if (!lastView || offOrbit() || Math.hypot(e.clientX - pressX, e.clientY - pressY) > CLICK_SLOP) return;
+  if (!lastView || offOrbit() || dragged) return;
   const r = canvas.getBoundingClientRect();
   const hit = pickObject(2 * (e.clientX - r.left) / r.width - 1,
     1 - 2 * (e.clientY - r.top) / r.height, lastView, lastShip);
@@ -423,16 +427,22 @@ engageButton.addEventListener("click", requestEngage);
 // A reset hides it again and starts every count over.
 const REVEAL = { after: 10, clicks: 3, holdMs: 1500 };
 const reveal = { shown: false, clicks: 0, heldMs: 0, holdStart: null };
-window.addEventListener("pointerdown", e => {
-  reveal.clicks++;
-  if (e.button === 0 && reveal.holdStart === null) reveal.holdStart = performance.now();
-});
 function endHold() {
   if (reveal.holdStart === null) return;
   reveal.heldMs += performance.now() - reveal.holdStart;
   reveal.holdStart = null;
 }
-window.addEventListener("pointerup", e => { if (e.button === 0) endHold(); });
+// The hold follows the left button's own bit in e.buttons. With another button
+// already down, pressing or releasing the left one fires pointermove rather
+// than pointerdown or pointerup, and the last pointerup names whichever button
+// went up last, so e.button alone would lose track of it.
+function trackHold(e) {
+  if (!(e.buttons & 1)) endHold();
+  else if (reveal.holdStart === null) reveal.holdStart = performance.now();
+}
+window.addEventListener("pointerdown", e => { reveal.clicks++; trackHold(e); });
+window.addEventListener("pointermove", trackHold);
+window.addEventListener("pointerup", trackHold);
 window.addEventListener("pointercancel", endHold);
 window.addEventListener("blur", endHold);
 

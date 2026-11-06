@@ -120,15 +120,20 @@ function updateCamera(t, ship, free, drag) {
 // the ship it then rides along with it. The arrow-key pan eases back to zero
 // over the same slide, so the object ends up dead center.
 //
-// Each object has an invisible box for the click to hit: a cube around the
-// planet, and a box around the ship in its own frame. The ship wins whenever
-// its box is hit -- it is far smaller, and passing behind the planet's limb it
-// would otherwise sit inside the cube's corners while still in plain sight.
+// A click hits the planet's own sphere, or a box around the ship in its own
+// frame that holds every vertex, and the nearer hit along the ray wins: the
+// ship in front of the planet is picked, the ship hidden behind it is not.
 //
-// The scroll wheel scales the distance by exp(ZOOM.perPixel * deltaY), so a
-// notch is the same proportion near or far. The distance eases toward that
-// goal with time constant ZOOM.ease, in log space so near and far zooms feel
-// alike, and stays within per-object bounds.
+// The scroll wheel scales the distance by exp(ZOOM.perPixel * deltaY), and
+// w / s by exp(ZOOM.keyStep), so a step is the same proportion near or far.
+// The distance eases toward that goal with time constant ZOOM.ease, in log
+// space so near and far zooms feel alike, and stays within per-object bounds.
+//
+// Following the ship, the eye stands a fixed offset from it, so once an orbit
+// that offset can carry it into the planet. Whenever it would come within
+// ZOOM.clearPlanet of the surface it is pushed straight out to that height
+// instead, the view direction kept: the camera rides over the surface
+// for that stretch and lets go again as the ship comes round.
 // ---------------------------------------------------------------------------
 
 const FOCUS = { blend: 1.2 };     // s, the slide onto a newly clicked object
@@ -139,8 +144,9 @@ const ZOOM = {
   // through the lens; around the ship it stays outside the ship's box.
   min: { planet: 5.6, ship: 1.2 },
   max: 30,                        // inside the star sphere even from the ship
+  clearPlanet: 0.25,              // nearest the eye comes to the planet's surface
   perPixel: 0.0012,               // about 13% a wheel notch
-  keyStep: 0.2,                   // w / s
+  keyStep: 0.015,                 // log distance per w / s, about 1.5%
   ease: 0.12                      // s
 };
 
@@ -160,7 +166,7 @@ function setZoomGoal(d) {
   zoom.goal = Math.min(ZOOM.max, Math.max(ZOOM.min[camFocus.on], d));
 }
 const zoomWheel = px => setZoomGoal(zoom.goal * Math.exp(ZOOM.perPixel * px));
-const zoomKey = dir => setZoomGoal(zoom.goal + dir * ZOOM.keyStep);
+const zoomKey = dir => setZoomGoal(zoom.goal * Math.exp(dir * ZOOM.keyStep));
 
 // Start the slide onto `on`. `pan` is the arrow-key pan as it stands, which
 // the caller zeroes: it is folded into what eases away.
@@ -177,42 +183,60 @@ function freeView(now, dt, ship, rotation, [panX, panY]) {
   camFocus.panLeft = vmul(camFocus.fromPan, 1 - s);
   zoom.dist *= (zoom.goal / zoom.dist) ** (1 - Math.exp(-dt / ZOOM.ease));
   const eye = translate(panX + camFocus.panLeft[0], panY + camFocus.panLeft[1], -zoom.dist);
-  return multiply(multiply(eye, rotation), translate(...vmul(camFocus.pivot, -1)));
+  const view = multiply(multiply(eye, rotation), translate(...vmul(camFocus.pivot, -1)));
+
+  // Keep the eye out of the planet: move it to `clear` with the rotation as
+  // is, which is view * translate(eye - clear)
+  const at = viewParts(view).eye, r = Math.hypot(...at), rClear = PLANET.radius + ZOOM.clearPlanet;
+  if (r >= rClear) return view;
+  const clear = r > 1e-6 ? vmul(at, rClear / r) : untransformVector(view, [0, 0, rClear]);
+  return multiply(view, translate(...vsub(at, clear)));
 }
 
-// Whether the ray o + t d (t >= 0) passes through the box |p_i| <= half_i: the
-// slab test, narrowing the span of t the ray spends inside each pair of faces
+// Where the ray o + t d (t >= 0) enters the box |p_i| <= half_i, as t, or null
+// if it misses: the slab test, narrowing the span of t the ray spends inside
+// each pair of faces
 function rayHitsBox(o, d, half) {
   let near = 0, far = Infinity;
   for (let i = 0; i < 3; i++) {
     if (Math.abs(d[i]) < 1e-12) {
-      if (Math.abs(o[i]) > half[i]) return false;
+      if (Math.abs(o[i]) > half[i]) return null;
       continue;
     }
     const a = (-half[i] - o[i]) / d[i], b = (half[i] - o[i]) / d[i];
     near = Math.max(near, Math.min(a, b));
     far = Math.min(far, Math.max(a, b));
-    if (near > far) return false;
+    if (near > far) return null;
   }
-  return true;
+  return near;
+}
+
+// The same for the sphere |p| <= r about the origin: the smaller root of
+// |o + t d|^2 = r^2, or the larger if the ray starts inside
+function rayHitsSphere(o, d, r) {
+  const a = vdot(d, d), b = vdot(o, d), c = vdot(o, o) - r * r;
+  const disc = b * b - a * c;
+  if (disc < 0) return null;
+  const near = (-b - Math.sqrt(disc)) / a, far = (-b + Math.sqrt(disc)) / a;
+  return near >= 0 ? near : far >= 0 ? 0 : null;
 }
 
 // What a click at (x, y) in normalized device coordinates lands on, given the
 // view and ship of the frame it was clicked on: "ship", "planet" or null. The
 // plain lens sends eye-space direction (x / P00, y / P11, -1) to that pixel,
 // and the view's rotation is undone by its transpose. Only for the free view,
-// whose lens is the plain one.
+// whose lens is the plain one. The ship's frame is rigid, so t along the ray
+// means the same distance in it as in the world and the two hits compare.
 function pickObject(x, y, view, ship) {
-  const e = [x / projection[0], y / projection[5], -1];
-  const d = [0, 1, 2].map(i => view[i * 4] * e[0] + view[i * 4 + 1] * e[1] + view[i * 4 + 2] * e[2]);
+  const d = untransformVector(view, [x / projection[0], y / projection[5], -1]);
   const o = viewParts(view).eye;
 
   const toShip = inverseShipFrame(ship);
-  if (rayHitsBox(transformPoint(toShip, o), transformVector(toShip, d),
-    vmul(SHIP_HALF_EXTENT, ORBIT.shipScale))) return "ship";
-  const r = PLANET.radius;
-  if (rayHitsBox(o, d, [r, r, r])) return "planet";
-  return null;
+  const tShip = rayHitsBox(transformPoint(toShip, o), transformVector(toShip, d),
+    vmul(SHIP_HALF_EXTENT, ORBIT.shipScale));
+  const tPlanet = rayHitsSphere(o, d, PLANET.radius);
+  if (tShip !== null && (tPlanet === null || tShip <= tPlanet)) return "ship";
+  return tPlanet !== null ? "planet" : null;
 }
 
 // ---------------------------------------------------------------------------

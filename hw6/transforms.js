@@ -54,10 +54,17 @@ function transformVector(m, [x, y, z]) {
   ];
 }
 
+// A direction through the transpose of m's rotation, which for a rigid m is
+// its inverse: dots v with each of m's first three columns
+function untransformVector(m, [x, y, z]) {
+  return [0, 1, 2].map(i => m[i * 4] * x + m[i * 4 + 1] * y + m[i * 4 + 2] * z);
+}
+
 // Vectors as plain arrays
 const vadd = (a, b) => a.map((v, i) => v + b[i]);
 const vsub = (a, b) => a.map((v, i) => v - b[i]);
 const vmul = (a, k) => a.map(v => v * k);
+const vdot = (a, b) => a.reduce((sum, v, i) => sum + v * b[i], 0);
 
 // ---------------------------------------------------------------------------
 // Blending two camera positions
@@ -71,9 +78,7 @@ const vmul = (a, k) => a.map(v => v * k);
 // The rotation, as a quaternion, and the point the camera sits at: view maps
 // the eye to the origin, so A * eye + t = 0 and eye = -A^T t.
 function viewParts(m) {
-  const t = [m[12], m[13], m[14]];
-  const dotColumn = i => m[i * 4] * t[0] + m[i * 4 + 1] * t[1] + m[i * 4 + 2] * t[2];
-  return { q: quatFromMatrix(m), eye: [-dotColumn(0), -dotColumn(1), -dotColumn(2)] };
+  return { q: quatFromMatrix(m), eye: vmul(untransformVector(m, [m[12], m[13], m[14]]), -1) };
 }
 
 // The view matrix those parts describe: rotate, then bring the eye to the origin

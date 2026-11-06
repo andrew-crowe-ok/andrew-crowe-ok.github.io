@@ -6,7 +6,7 @@ in vec2 aTexCoord;
 
 uniform mat4 uModelView;
 uniform mat4 uProjection;
-
+${LENS_GLSL}
 out vec3 vPosition;
 out vec3 vNormal;
 out vec3 vTangent;
@@ -23,7 +23,8 @@ void main() {
 
   vTangent = mv * aTangent;
   vTexCoord = aTexCoord;
-  gl_Position = uProjection * p;
+  // The lens is rectilinear until the chase camera opens it out (camera.js)
+  gl_Position = project(uProjection, p);
 }
 `;
 
@@ -47,7 +48,12 @@ uniform float uBumpScale;
 uniform vec3 uAtmosphere;   // rim glow color; black = off
 
 uniform sampler2D uTexture;
-uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = emissive (unlit)
+uniform sampler2D uNormalMap;
+// 0 = bump mapping (relief from uTexture's luminance)
+// 1 = normal mapping (uTexture holds the normals, flat base color)
+// 2 = emissive (unlit)
+// 3 = color texture from uTexture + normals from uNormalMap
+uniform int uMapping;
 
 out vec4 fragColor;
 
@@ -91,10 +97,15 @@ void main() {
     float dhdv = (height(vTexCoord + dv) - height(vTexCoord - dv)) * 0.5;
     n = normalize(vec3(-uBumpScale * dhdu, -uBumpScale * dhdv, 1.0));
     baseColor = texture(uTexture, vTexCoord).rgb;
-  } else {
+  } else if (uMapping == 1) {
     // Normal mapping: the texture stores the tangent-space normal in [0, 1]
     n = normalize(texture(uTexture, vTexCoord).rgb * 2.0 - 1.0);
     baseColor = vec3(0.85, 0.65, 0.3);
+  } else {
+    // Color texture plus its own normal map: the two describe one surface, so
+    // the paint comes from uTexture and the relief from uNormalMap
+    n = normalize(texture(uNormalMap, vTexCoord).rgb * 2.0 - 1.0);
+    baseColor = texture(uTexture, vTexCoord).rgb;
   }
 
   vec3 Ngeom = N;              // smooth surface normal, before bump/normal mapping
@@ -169,7 +180,9 @@ uProjection = gl.getUniformLocation(program, "uProjection");
 uLightPos = gl.getUniformLocation(program, "uLightPos");
 uMapping = gl.getUniformLocation(program, "uMapping");
 uLight2Pos = gl.getUniformLocation(program, "uLight2Pos");
+const setLens = lensUniforms(gl, program);
 gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
+gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
 
 // Light colors never change, so set them once
 // Sun intensity is folded into its color (1.25x warm white)
@@ -242,6 +255,46 @@ function loadTexture(url) {
 const brickTexture = loadTexture("textures/brick.png");
 const normalTexture = loadTexture("textures/texture2.jpg");
 
+// Upload a procedurally generated image (RGBA bytes from textures.js). No flip:
+// the generators already work in texture coordinates, with v = 0 at the bottom.
+function createDataTexture({ color, size }) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, color);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  return texture;
+}
+
+// Procedural ship skin. The saucer is bump mapped straight from its panel-line
+// image; the hull and nacelles get a color map with a normal map baked from the
+// same height field (mapping mode 3).
+const hullPlating = createPlating({ cols: 8, rows: 12, seed: 11,
+  stripe: { at: 0.5, width: 0.07, color: [0.34, 0.37, 0.44], relief: 0.08 } });
+const nacellePlating = createPlating({ cols: 6, rows: 16, seed: 23,
+  base: [0.62, 0.65, 0.71],
+  grille: { at: 0.5, width: 0.22, slats: 18, color: [0.30, 0.42, 0.72] } });
+
+const domePlating = createDomeTexture();
+
+const saucerTexture = createDataTexture(createSaucerTexture());
+const domeTexture = createDataTexture(domePlating);
+const domeNormalMap = createDataTexture(normalMap(domePlating, 6));
+const hullTexture = createDataTexture(hullPlating);
+const hullNormalMap = createDataTexture(normalMap(hullPlating, 7));
+const nacelleTexture = createDataTexture(nacellePlating);
+const nacelleNormalMap = createDataTexture(normalMap(nacellePlating, 8));
+
+// Sky: 3000 point sprites in a single draw call (stars.js)
+const starPoints = createStarPoints(gl, createProgram, { radius: SKY_RADIUS, restoreProgram: program });
+
+// Keep a complete texture on unit 1 even while drawing the modes that ignore it:
+// a sampler with nothing bound counts as incomplete when the draw call is checked
+gl.activeTexture(gl.TEXTURE1);
+gl.bindTexture(gl.TEXTURE_2D, hullNormalMap);
+gl.activeTexture(gl.TEXTURE0);
+
 // HW 5 textures. antelope.jpg is 3.4 MB, so these are fetched on first use
 // rather than on page load; either way the texture starts as a 1x1 placeholder
 // and fills in once the image decodes.
@@ -268,6 +321,7 @@ function loadVideoTexture(sources) {
 
   function update() {
     if (video.readyState < video.HAVE_CURRENT_DATA) return;
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
@@ -296,7 +350,7 @@ function getCradle() {
   });
 }
 
-const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
+const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2, TEXTURED_NORMAL_MAPPING = 3;
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
@@ -314,18 +368,20 @@ function resize() {
   const aspect = canvas.width / canvas.height;
   const fovy = aspect >= MIN_ASPECT ? BASE_FOVY
     : 2 * Math.atan(Math.tan(BASE_FOVY / 2) * MIN_ASPECT / aspect);
-  projection = perspective(fovy, aspect, 0.1, 100);
+  projection = perspective(fovy, aspect, 0.1, 150);  // 150 keeps the sky sphere inside the far plane
 }
 window.addEventListener("resize", resize);
 resize();
 const lightWorld = [12, 5, 3];      // sun: off to the side and outside the orbit, so the planet shows a terminator
 const light2World = [-12, -5, -3];  // fill: opposite the sun, lifts the night side
 
-// Interactive controls
-let dragRotX = 0.35, dragRotY = -0.5;      // mouse drag
-let camX = 0, camY = 0, camZ = -14;     // arrow keys, w, s
-let sliderAngle = 0;                    // degrees
-let spinning = false, spinAngle = 0;    // Start/Stop button
+// Interactive controls. While the chase camera has the view, the drag angles
+// steer it around the ship instead of turning the scene (camera.js).
+let dragRotX, dragRotY;      // mouse drag
+let camX, camY, camZ;        // arrow keys, w, s
+// The scene's own clock starts here, so a reset restarts the orbit and the
+// planet's spin along with everything else
+let sceneStart = 0;
 
 let mouseDown = false, lastX, lastY;
 canvas.addEventListener("mousedown", e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
@@ -351,32 +407,72 @@ document.addEventListener("keydown", e => {
   e.preventDefault();
 });
 
-const axisSelect = document.getElementById("axisSelect");
-document.getElementById("slider").addEventListener("input", e => {
-  sliderAngle = Number(e.target.value);
-  document.getElementById("sliderValue").textContent = sliderAngle;
-});
-document.getElementById("spinButton").addEventListener("click", () => spinning = !spinning);
+// Engage. The press is handled on the next frame, where the clock is known
+// (scene.js), and the button stays down until the scene resets.
+const engageButton = document.getElementById("engageButton");
+engageButton.addEventListener("click", requestEngage);
+
+// The two washes over the canvas (index.html), set once a frame:
+//   flash  white-blue, at the jump to warp: up in FLASH.rise, then dying away
+//          over FLASH.decay -- it covers the instant the lens starts to open
+//   fade   black, out over FADE.out before a reset and back in over FADE.in
+//          after one (and on page load)
+const FLASH = { peak: 0.9, rise: 0.05, decay: 0.16 };
+const FADE = { out: 0.45, in: 0.7 };
+const warpFlash = document.getElementById("warpFlash");
+const fade = document.getElementById("fade");
+function setWash(el, v) {
+  const s = v.toFixed(3);
+  if (el.style.opacity !== s) el.style.opacity = s;
+}
+function updateWashes(t, ship) {
+  const w = ship.warpTau;
+  setWash(warpFlash, w === null ? 0 : FLASH.peak *
+    (w < FLASH.rise ? w / FLASH.rise : Math.exp(-(w - FLASH.rise) / FLASH.decay)));
+  const e = engageElapsed(t);
+  const out = e === null ? 0 : smootherstep((e - (ENGAGE.reset - FADE.out)) / FADE.out);
+  setWash(fade, Math.max(out, 1 - smootherstep(t / FADE.in)));
+}
+
+// Everything back the way the page loaded: the ship on its circle, the free
+// camera and its controls, and a fresh scene clock starting at `time`
+function resetScene(time) {
+  dragRotX = 0.35; dragRotY = -0.5;
+  camX = 0; camY = 0; camZ = -14;
+  sceneStart = time;
+  resetFlight();
+  resetCamera();
+}
+resetScene(0);
 
 // Render loop
 let lastTime = 0;
 function render(time) {
-  const t = time / 1000;
-  if (spinning) spinAngle += t - lastTime;
-  lastTime = t;
+  const now = time / 1000;
+  const dt = Math.min(Math.max(now - lastTime, 0), 0.1);   // survives a hidden tab
+  lastTime = now;
+  if (engageExpired(now - sceneStart)) resetScene(now);
+  const t = now - sceneStart;   // scene clock
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  const view = translate(camX, camY, camZ);
+  const rotation = multiply(rotateY(dragRotY), rotateX(dragRotX));
+
+  // The flight path is advanced once, here, because the camera needs to know
+  // where the ship is before anything is drawn.
+  const ship = shipState(t);
+  const view = updateCamera(dt, ship, multiply(translate(camX, camY, camZ), rotation),
+    { x: dragRotX, y: dragRotY });
+
   gl.uniformMatrix4fv(uProjection, false, projection);
+  setLens();
+  // The lights are fixed in the scene, so they ride whatever the view is now
   gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
   gl.uniform3fv(uLight2Pos, transformPoint(view, light2World));
 
-  const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
-  const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
-
-  gl.activeTexture(gl.TEXTURE0);
   plasma.update();
-  drawSystem(multiply(view, rotation), t);
+  drawSystem(view, t, ship);
+  updateWashes(t, ship);
+  engageButton.disabled = offOrbit();
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);

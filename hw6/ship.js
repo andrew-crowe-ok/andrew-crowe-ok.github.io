@@ -16,6 +16,18 @@ const PYLON = [[0.18, 0.0, -1.6], [1.0, 0.63, -1.6]];
 // Ship spans z -3.25..2.71 and y -0.57..0.91; shift so the root frame is its middle
 const SHIP_CENTER = [0, 0.17, -0.27];
 
+// Painted plating: a touch more ambient than the planet so the panel lines stay
+// readable on the night side, and a tight specular for the clearcoat.
+// The saucer's bumpScale is negative because the shader takes relief from
+// 1 - luminance: its panel lines are dark, so flipping the sign makes them
+// grooves between raised plates instead of ridges.
+const SAUCER_MATERIAL = { ka: 0.22, kd: 0.85, ks: 0.45, shininess: 48, bumpScale: -5.0, atmosphere: [0, 0, 0] };
+// bumpScale is unused in mode 3: the relief comes from the normal map
+const HULL_MATERIAL = { ka: 0.2, kd: 0.85, ks: 0.6, shininess: 64, bumpScale: 1.0, atmosphere: [0, 0, 0] };
+// The dome's windows are painted bright in its texture, so a high ambient term
+// keeps them glowing on the night side instead of going black with the hull
+const DOME_MATERIAL = { ka: 0.5, kd: 0.7, ks: 0.7, shininess: 96, bumpScale: 1.0, atmosphere: [0, 0, 0] };
+
 const sub = (a, b) => a.map((v, i) => v - b[i]);
 const mirrorX = ([x, y, z], side) => [side * x, y, z];
 // Midpoint, length and direction of a strut
@@ -25,10 +37,16 @@ function strut([a, b]) {
 }
 
 // material: Phong coefficients etc. (see DEFAULT_MATERIAL in main.js)
-function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL) {
+// normalMap: only for TEXTURED_NORMAL_MAPPING, where it is sampled on unit 1
+function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL, normalMap = null) {
   setMaterial(material);
   gl.uniformMatrix4fv(uModelView, false, modelView);
   gl.uniform1i(uMapping, mapping);
+  if (normalMap) {
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, normalMap);
+  }
+  gl.activeTexture(gl.TEXTURE0);  // left active, so the video texture lands here
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.bindVertexArray(mesh.vao);
   gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
@@ -44,7 +62,7 @@ function drawShip(parent) {
 // Level 2: saucer section, a squashed sphere
 function drawSaucer(parent) {
   const { radius: r, halfThick: h } = SAUCER;
-  drawPrimitive(sphereMesh, brickTexture, BUMP_MAPPING, multiply(parent, scale(r, h, r)));
+  drawPrimitive(sphereMesh, saucerTexture, BUMP_MAPPING, multiply(parent, scale(r, h, r)), SAUCER_MATERIAL);
 
   // Children get the unscaled saucer frame, so they aren't squashed too
   drawBridge(multiply(parent, translate(0, 0.75 * h, 0)));
@@ -53,26 +71,27 @@ function drawSaucer(parent) {
 
 // Level 3: bridge dome, half buried in the saucer's top
 function drawBridge(parent) {
-  drawPrimitive(sphereMesh, normalTexture, NORMAL_MAPPING, multiply(parent, scale(0.42, 0.13, 0.42)));
+  drawPrimitive(sphereMesh, domeTexture, TEXTURED_NORMAL_MAPPING,
+    multiply(parent, scale(0.42, 0.13, 0.42)), DOME_MATERIAL, domeNormalMap);
 }
 
 // Level 3: rim, a thin torus hugging the saucer's edge. Uniform scale keeps the
 // tube round; tube radius = 0.04 * scale ≈ 0.057.
 function drawRim(parent) {
   const s = SAUCER.radius - 0.02;
-  drawPrimitive(torusMesh, brickTexture, BUMP_MAPPING, multiply(parent, scale(s, s, s)));
+  drawPrimitive(torusMesh, saucerTexture, BUMP_MAPPING, multiply(parent, scale(s, s, s)), SAUCER_MATERIAL);
 }
 
 // Level 2: engineering hull. The cylinder mesh runs along y, so rotateX(90°)
 // lays it along +z.
 function drawEngineering(parent) {
   const { radius: r, halfLength: l } = HULL;
-  drawPrimitive(cylinderMesh, normalTexture, NORMAL_MAPPING,
-    multiply(parent, multiply(rotateX(Math.PI / 2), scale(r, l, r))));
+  drawPrimitive(cylinderMesh, hullTexture, TEXTURED_NORMAL_MAPPING,
+    multiply(parent, multiply(rotateX(Math.PI / 2), scale(r, l, r))), HULL_MATERIAL, hullNormalMap);
 
   // Rounded nose: a sphere the hull's radius, centered on the front cap
-  drawPrimitive(sphereMesh, normalTexture, NORMAL_MAPPING,
-    multiply(parent, multiply(translate(0, 0, l), scale(r, r, r))));
+  drawPrimitive(sphereMesh, hullTexture, TEXTURED_NORMAL_MAPPING,
+    multiply(parent, multiply(translate(0, 0, l), scale(r, r, r))), HULL_MATERIAL, hullNormalMap);
 
   const neck = strut(NECK);
   drawNeck(multiply(parent, translate(...sub(neck.mid, HULL.pos))), neck);
@@ -92,7 +111,8 @@ function drawEngineering(parent) {
 // the box's long y axis toward +z to follow the strut's (dy, dz) direction.
 function drawNeck(parent, { length, d }) {
   const tilted = multiply(parent, rotateX(Math.atan2(d[2], d[1])));
-  drawPrimitive(cubeMesh, brickTexture, BUMP_MAPPING, multiply(tilted, scale(0.035, length / 2, 0.075)));
+  drawPrimitive(cubeMesh, hullTexture, TEXTURED_NORMAL_MAPPING,
+    multiply(tilted, scale(0.035, length / 2, 0.075)), HULL_MATERIAL, hullNormalMap);
 }
 
 // Level 3: deflector dish, a wide shallow cone with a thin antenna spike, both
@@ -113,7 +133,8 @@ function drawDeflector(parent) {
 // lines it up with the strut; the mirrored strut gives the left pylon its tilt.
 function drawPylon(parent, { mid, length, d }, side) {
   const tilted = multiply(parent, rotateZ(Math.atan2(-d[0], d[1])));
-  drawPrimitive(cubeMesh, brickTexture, BUMP_MAPPING, multiply(tilted, scale(0.03, length / 2, 0.12)));
+  drawPrimitive(cubeMesh, hullTexture, TEXTURED_NORMAL_MAPPING,
+    multiply(tilted, scale(0.03, length / 2, 0.12)), HULL_MATERIAL, hullNormalMap);
 
   drawNacelle(multiply(parent, translate(...sub(mirrorX(NACELLE.pos, side), mid))));
 }
@@ -122,15 +143,15 @@ function drawPylon(parent, { mid, length, d }, side) {
 // and a tail cone behind
 function drawNacelle(parent) {
   const { radius: r, halfLength: l } = NACELLE;
-  drawPrimitive(cylinderMesh, normalTexture, NORMAL_MAPPING,
-    multiply(parent, multiply(rotateX(Math.PI / 2), scale(r, l, r))));
+  drawPrimitive(cylinderMesh, nacelleTexture, TEXTURED_NORMAL_MAPPING,
+    multiply(parent, multiply(rotateX(Math.PI / 2), scale(r, l, r))), HULL_MATERIAL, nacelleNormalMap);
 
   drawBussard(multiply(parent, translate(0, 0, l)));
 
   // Tail cone: rotateX(-90°) points the apex backward (-z); shift by the half-height
-  drawPrimitive(coneMesh, normalTexture, NORMAL_MAPPING,
+  drawPrimitive(coneMesh, nacelleTexture, TEXTURED_NORMAL_MAPPING,
     multiply(parent, multiply(translate(0, 0, -l - 0.15),
-      multiply(rotateX(-Math.PI / 2), scale(r, 0.15, r)))));
+      multiply(rotateX(-Math.PI / 2), scale(r, 0.15, r)))), HULL_MATERIAL, nacelleNormalMap);
 }
 
 // Level 5: Bussard collector, a sphere stretched forward and lit by the animated

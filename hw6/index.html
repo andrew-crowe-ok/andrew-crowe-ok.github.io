@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Texture Mapping</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color: #ccc; font-family: monospace; }
+    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+    .overlay {
+      position: fixed; top: 10px; left: 10px; max-width: calc(100vw - 40px);
+      padding: 8px 12px; background: rgba(0, 0, 0, 0.6); border-radius: 4px;
+    }
+    .overlay h2 { margin: 0 0 6px; }
+    .overlay p { margin: 0; }
+    .controls { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
+    .control-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  </style>
+</head>
+
+<body>
+  <canvas id="glcanvas"></canvas>
+
+  <div class="overlay">
+    <h2>HW 6 Texture Mapping</h2>
+
+    <p>A starship orbits a planet. Bussard collectors: animated video texture.<br>
+      Bump mapping: saucer, rim, deflector, planet. Normal mapping: bridge, hulls, nacelles.<br>
+      Drag with the mouse to rotate the scene; arrow keys and w, s move the camera.<br>
+      Use the slider and dropdown to rotate about an axis; the button starts/stops spinning.</p>
+
+    <div class="controls">
+      <div class="control-row">
+        <label for="slider">Rotation Angle:</label>
+        <input type="range" id="slider" min="0" max="360" value="0">
+        <span id="sliderValue">0</span>
+      </div>
+      <div class="control-row">
+        <select id="axisSelect">
+          <option value="x">X Rotation</option>
+          <option value="y">Y Rotation</option>
+          <option value="z">Z Rotation</option>
+        </select>
+        <button id="spinButton">Start/Stop Rotation</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="transforms.js"></script>
+  <script src="models.js"></script>
+  <script src="cradle.js"></script>
+  <script src="ship.js"></script>
+  <script src="scene.js"></script>
+  <script src="main.js"></script>
+</body>
+
+</html>

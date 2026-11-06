@@ -1,11 +1,15 @@
 // Scene above the ship, in the same functional style as ship.js:
 //
 //   drawSystem
+//   ├── drawStarfield     (point-sprite stars all around)
 //   ├── drawPlanet        (spins on its own axis)
 //   └── drawOrbit         (tilted orbital plane, carries the ship around)
 //       └── drawShip      (ship.js)
 //
 // The planet and the orbit are siblings, so the planet's spin never reaches the ship.
+
+// The stars sit on this sphere: outside the orbit, well inside the far plane
+const SKY_RADIUS = 45;
 
 const PLANET = { radius: 2.4, spin: 0.08 };                     // spin in rad/s
 
@@ -19,8 +23,17 @@ const ORBIT = { radius: 4.4, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 
 // Level 0: planetary system at the origin; t is seconds since the page loaded
 function drawSystem(parent, t) {
+  drawStarfield(parent, t);
   drawPlanet(parent, t);
   drawOrbit(multiply(parent, rotateX(ORBIT.tilt)), t);
+}
+
+// Sky: the point sprites from stars.js, one draw call. Depth writes are off, so
+// the stars never occlude anything -- everything else simply paints over them.
+function drawStarfield(parent, t) {
+  gl.depthMask(false);
+  starPoints.draw(multiply(projection, parent), t);
+  gl.depthMask(true);
 }
 
 // Planet: a fine sphere wearing the antelope photo, bump-mapped from its luminance

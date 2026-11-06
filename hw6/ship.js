@@ -24,6 +24,9 @@ const SHIP_CENTER = [0, 0.17, -0.27];
 const SAUCER_MATERIAL = { ka: 0.22, kd: 0.85, ks: 0.45, shininess: 48, bumpScale: -5.0, atmosphere: [0, 0, 0] };
 // bumpScale is unused in mode 3: the relief comes from the normal map
 const HULL_MATERIAL = { ka: 0.2, kd: 0.85, ks: 0.6, shininess: 64, bumpScale: 1.0, atmosphere: [0, 0, 0] };
+// The dome's windows are painted bright in its texture, so a high ambient term
+// keeps them glowing on the night side instead of going black with the hull
+const DOME_MATERIAL = { ka: 0.5, kd: 0.7, ks: 0.7, shininess: 96, bumpScale: 1.0, atmosphere: [0, 0, 0] };
 
 const sub = (a, b) => a.map((v, i) => v - b[i]);
 const mirrorX = ([x, y, z], side) => [side * x, y, z];
@@ -68,7 +71,8 @@ function drawSaucer(parent) {
 
 // Level 3: bridge dome, half buried in the saucer's top
 function drawBridge(parent) {
-  drawPrimitive(sphereMesh, normalTexture, NORMAL_MAPPING, multiply(parent, scale(0.42, 0.13, 0.42)));
+  drawPrimitive(sphereMesh, domeTexture, TEXTURED_NORMAL_MAPPING,
+    multiply(parent, scale(0.42, 0.13, 0.42)), DOME_MATERIAL, domeNormalMap);
 }
 
 // Level 3: rim, a thin torus hugging the saucer's edge. Uniform scale keeps the

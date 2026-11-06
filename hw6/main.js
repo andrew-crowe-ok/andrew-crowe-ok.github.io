@@ -274,11 +274,18 @@ const nacellePlating = createPlating({ cols: 6, rows: 16, seed: 23,
   base: [0.62, 0.65, 0.71],
   grille: { at: 0.5, width: 0.22, slats: 18, color: [0.30, 0.42, 0.72] } });
 
+const domePlating = createDomeTexture();
+
 const saucerTexture = createDataTexture(createSaucerTexture());
+const domeTexture = createDataTexture(domePlating);
+const domeNormalMap = createDataTexture(normalMap(domePlating, 6));
 const hullTexture = createDataTexture(hullPlating);
 const hullNormalMap = createDataTexture(normalMap(hullPlating, 7));
 const nacelleTexture = createDataTexture(nacellePlating);
 const nacelleNormalMap = createDataTexture(normalMap(nacellePlating, 8));
+
+// Sky: 3000 point sprites in a single draw call (stars.js)
+const starPoints = createStarPoints(gl, createProgram, { radius: SKY_RADIUS, restoreProgram: program });
 
 // Keep a complete texture on unit 1 even while drawing the modes that ignore it:
 // a sampler with nothing bound counts as incomplete when the draw call is checked
@@ -359,7 +366,7 @@ function resize() {
   const aspect = canvas.width / canvas.height;
   const fovy = aspect >= MIN_ASPECT ? BASE_FOVY
     : 2 * Math.atan(Math.tan(BASE_FOVY / 2) * MIN_ASPECT / aspect);
-  projection = perspective(fovy, aspect, 0.1, 100);
+  projection = perspective(fovy, aspect, 0.1, 150);  // 150 keeps the sky sphere inside the far plane
 }
 window.addEventListener("resize", resize);
 resize();

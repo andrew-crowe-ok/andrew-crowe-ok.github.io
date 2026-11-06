@@ -16,8 +16,6 @@ Live: https://andrew-crowe-ok.github.io/hw6/
 
 The Engage button appears after 10 s, 3 clicks, or 1.5 s of holding the mouse down. Clicking, zooming and panning work only in orbit; after Engage, dragging swings the chase camera around the ship.
 
-To run it locally, serve the folder (`python3 -m http.server`, then open http://localhost:8000). Browsers block WebGL texture loads over `file://`.
-
 ## AI assistance
 
 This was an iterative project built with Claude Code. The design evolved over many rounds of prompting and revision. Claude wrote and revised much of the code, including the geometry, shaders, camera and warp sequence.
@@ -40,7 +38,7 @@ All five primitives are built in `models.js` with per-vertex normals, tangents a
 
 ## Texture mapping
 
-- **Bump mapping**: the shader tilts the normal using the gradient of the texture's luminance. The planet (antelope photo), the saucer and its rim (procedural panel lines), and the deflector dish and antenna (`mars2.jpg`) use it.
+- **Bump mapping**: the shader tilts the normal using the gradient of the texture's luminance. The planet (a close up image, taken by me when I visited in 2016, of Navajo sandstone from Antelope Canyon), the saucer and its rim (procedural panel lines), and the deflector dish and antenna (`mars2.jpg`) use it.
 - **Normal mapping**: the dome, hull and nacelles (with the neck, pylons and nacelle caps) have a color map plus a tangent-space normal map baked from the same height field (`normalMap()` in `textures.js`), so paint and relief always match.
 - **Animated texture**: the Bussard collectors are lit by a looping plasma video (`textures/plasma.webm` / `.mp4`). The current frame is re-uploaded to the GPU each render (`loadVideoTexture` in `main.js`). The swirl is periodic in u, so it wraps around the sphere without a seam, and loops cleanly in time.
 

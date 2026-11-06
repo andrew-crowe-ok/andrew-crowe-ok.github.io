@@ -34,7 +34,7 @@ This was an iterative project built with Claude Code. The design evolved over ma
 | Cylinder | Engineering hull and nacelles | normal |
 | Cube | Neck and pylons | normal |
 
-All five primitives are built in `models.js` with per-vertex normals, tangents and UVs. The sphere, torus and cone are the curved ones.
+All five primitives are built in `models.js` with per-vertex normals, tangents and UVs.
 
 ## Texture mapping
 

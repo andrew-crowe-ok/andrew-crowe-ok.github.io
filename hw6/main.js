@@ -282,13 +282,8 @@ const plasma = loadVideoTexture(["textures/plasma.webm", "textures/plasma.mp4"])
 // To show it, add this to render():
 //   const cradle = getCradle();
 //   cradle.update(t, true, rotation);
-//   drawSceneTree(cradle.root, view, (node, frame) => {
-//     gl.uniformMatrix4fv(uModelView, false, multiply(frame, node.shape));
-//     gl.uniform1i(uMapping, BUMP_MAPPING);
-//     gl.bindTexture(gl.TEXTURE_2D, node.texture ?? brickTexture);
-//     gl.bindVertexArray(node.mesh.vao);
-//     gl.drawElements(gl.TRIANGLES, node.mesh.count, gl.UNSIGNED_SHORT, 0);
-//   });
+//   drawSceneTree(cradle.root, view, (node, frame) =>
+//     drawPrimitive(node.mesh, node.texture ?? brickTexture, BUMP_MAPPING, multiply(frame, node.shape)));
 let cradleInstance = null;
 function getCradle() {
   return cradleInstance ??= createNewtonsCradle({
@@ -302,10 +297,6 @@ function getCradle() {
 }
 
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
-const objects = [
-  { mesh: cubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-1.8, 0, 0] },
-  { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [1.8, 0, 0] }
-];
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);

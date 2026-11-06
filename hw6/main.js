@@ -47,7 +47,12 @@ uniform float uBumpScale;
 uniform vec3 uAtmosphere;   // rim glow color; black = off
 
 uniform sampler2D uTexture;
-uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = emissive (unlit)
+uniform sampler2D uNormalMap;
+// 0 = bump mapping (relief from uTexture's luminance)
+// 1 = normal mapping (uTexture holds the normals, flat base color)
+// 2 = emissive (unlit)
+// 3 = color texture from uTexture + normals from uNormalMap
+uniform int uMapping;
 
 out vec4 fragColor;
 
@@ -91,10 +96,15 @@ void main() {
     float dhdv = (height(vTexCoord + dv) - height(vTexCoord - dv)) * 0.5;
     n = normalize(vec3(-uBumpScale * dhdu, -uBumpScale * dhdv, 1.0));
     baseColor = texture(uTexture, vTexCoord).rgb;
-  } else {
+  } else if (uMapping == 1) {
     // Normal mapping: the texture stores the tangent-space normal in [0, 1]
     n = normalize(texture(uTexture, vTexCoord).rgb * 2.0 - 1.0);
     baseColor = vec3(0.85, 0.65, 0.3);
+  } else {
+    // Color texture plus its own normal map: the two describe one surface, so
+    // the paint comes from uTexture and the relief from uNormalMap
+    n = normalize(texture(uNormalMap, vTexCoord).rgb * 2.0 - 1.0);
+    baseColor = texture(uTexture, vTexCoord).rgb;
   }
 
   vec3 Ngeom = N;              // smooth surface normal, before bump/normal mapping
@@ -170,6 +180,7 @@ uLightPos = gl.getUniformLocation(program, "uLightPos");
 uMapping = gl.getUniformLocation(program, "uMapping");
 uLight2Pos = gl.getUniformLocation(program, "uLight2Pos");
 gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
+gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
 
 // Light colors never change, so set them once
 // Sun intensity is folded into its color (1.25x warm white)
@@ -242,6 +253,39 @@ function loadTexture(url) {
 const brickTexture = loadTexture("textures/brick.png");
 const normalTexture = loadTexture("textures/texture2.jpg");
 
+// Upload a procedurally generated image (RGBA bytes from textures.js). No flip:
+// the generators already work in texture coordinates, with v = 0 at the bottom.
+function createDataTexture({ color, size }) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, color);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  return texture;
+}
+
+// Procedural ship skin. The saucer is bump mapped straight from its panel-line
+// image; the hull and nacelles get a color map with a normal map baked from the
+// same height field (mapping mode 3).
+const hullPlating = createPlating({ cols: 8, rows: 12, seed: 11,
+  stripe: { at: 0.5, width: 0.07, color: [0.34, 0.37, 0.44], relief: 0.08 } });
+const nacellePlating = createPlating({ cols: 6, rows: 16, seed: 23,
+  base: [0.62, 0.65, 0.71],
+  grille: { at: 0.5, width: 0.22, slats: 18, color: [0.30, 0.42, 0.72] } });
+
+const saucerTexture = createDataTexture(createSaucerTexture());
+const hullTexture = createDataTexture(hullPlating);
+const hullNormalMap = createDataTexture(normalMap(hullPlating, 7));
+const nacelleTexture = createDataTexture(nacellePlating);
+const nacelleNormalMap = createDataTexture(normalMap(nacellePlating, 8));
+
+// Keep a complete texture on unit 1 even while drawing the modes that ignore it:
+// a sampler with nothing bound counts as incomplete when the draw call is checked
+gl.activeTexture(gl.TEXTURE1);
+gl.bindTexture(gl.TEXTURE_2D, hullNormalMap);
+gl.activeTexture(gl.TEXTURE0);
+
 // HW 5 textures. antelope.jpg is 3.4 MB, so these are fetched on first use
 // rather than on page load; either way the texture starts as a 1x1 placeholder
 // and fills in once the image decodes.
@@ -268,6 +312,7 @@ function loadVideoTexture(sources) {
 
   function update() {
     if (video.readyState < video.HAVE_CURRENT_DATA) return;
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
@@ -296,7 +341,7 @@ function getCradle() {
   });
 }
 
-const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
+const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2, TEXTURED_NORMAL_MAPPING = 3;
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
@@ -374,7 +419,6 @@ function render(time) {
   const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
 
-  gl.activeTexture(gl.TEXTURE0);
   plasma.update();
   drawSystem(multiply(view, rotation), t);
   requestAnimationFrame(render);

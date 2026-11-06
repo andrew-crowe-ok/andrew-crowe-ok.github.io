@@ -31,6 +31,23 @@ function drawEngineering(parent) {
 
   // Neck midpoint sits above and ahead of the hull center
   drawNeck(multiply(parent, translate(0, 0.5, 0.5)));
+
+  // Dish base sits just behind the nose tip (0.35 ahead of the cap); any further
+  // back and the sphere pokes through the shallow cone's face
+  drawDeflector(multiply(parent, translate(0, 0, HULL_HALF_LENGTH + 0.32)));
+}
+
+// Level 3: deflector dish, a wide shallow cone with a thin antenna spike, both
+// pointing forward. parent's origin is the dish's base; rotateX(90°) turns the
+// cone's +y apex toward +z, and each cone is shifted up by its half-height so
+// its base (local y = -1) lands on that origin.
+function drawDeflector(parent) {
+  const forward = multiply(parent, rotateX(Math.PI / 2));
+  const copper = getTexture("textures/mars2.jpg");
+  drawPrimitive(coneMesh, copper, BUMP_MAPPING,
+    multiply(forward, multiply(translate(0, 0.06, 0), scale(0.3, 0.06, 0.3))));
+  drawPrimitive(coneMesh, copper, BUMP_MAPPING,
+    multiply(forward, multiply(translate(0, 0.2, 0), scale(0.035, 0.2, 0.035))));
 }
 
 // Level 3: neck, a thin fin from the hull's top up to the saucer's underside.

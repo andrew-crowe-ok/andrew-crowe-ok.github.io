@@ -234,3 +234,53 @@ function createTorus(tubeRatio = 0.25, ringSegments = 64, tubeSegments = 24, uRe
     indices: new Uint16Array(indices)
   };
 }
+
+
+// Cone along y: base radius 1 at y = -1, apex at y = +1, with a base cap.
+// The side is a strip of quads like the cylinder, but the top row collapses to the
+// apex. Each column keeps its own apex vertex, so u (and the normal) stay per-column
+// instead of all meeting at one smeared point; one triangle per quad is degenerate.
+function createCone(segments = 48, uRepeat = 1) {
+  const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
+  const ny = 1 / Math.sqrt(5), nr = 2 / Math.sqrt(5);  // slant normal for radius 1, height 2
+
+  for (let i = 0; i <= segments; i++) {
+    const u = i / segments, theta = 2 * Math.PI * u;
+    const s = Math.sin(theta), c = Math.cos(theta);
+    for (const y of [-1, 1]) {
+      const r = (1 - y) / 2;  // 1 at the base, 0 at the apex
+      positions.push(r * s, y, r * c);
+      normals.push(nr * s, ny, nr * c);
+      tangents.push(c, 0, -s);
+      texCoords.push(u * uRepeat, (y + 1) / 2);
+    }
+  }
+  for (let i = 0; i < segments; i++) {
+    const k = 2 * i;
+    indices.push(k, k + 2, k + 3, k, k + 3, k + 1);
+  }
+
+  // Base cap: planar mapping of x, z, facing -y
+  const center = positions.length / 3;
+  positions.push(0, -1, 0);
+  normals.push(0, -1, 0);
+  tangents.push(1, 0, 0);
+  texCoords.push(0.5, 0.5);
+  for (let i = 0; i <= segments; i++) {
+    const theta = 2 * Math.PI * i / segments;
+    const s = Math.sin(theta), c = Math.cos(theta);
+    positions.push(s, -1, c);
+    normals.push(0, -1, 0);
+    tangents.push(1, 0, 0);
+    texCoords.push(0.5 + 0.5 * s, 0.5 + 0.5 * c);
+  }
+  for (let i = 0; i < segments; i++) indices.push(center, center + 2 + i, center + 1 + i);
+
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    tangents: new Float32Array(tangents),
+    texCoords: new Float32Array(texCoords),
+    indices: new Uint16Array(indices)
+  };
+}

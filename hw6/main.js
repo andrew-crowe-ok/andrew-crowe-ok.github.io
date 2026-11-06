@@ -166,6 +166,7 @@ function createMesh({ positions, normals, tangents, texCoords, indices }) {
 
 const cubeMesh = createMesh(createCube());
 const cylinderMesh = createMesh(createCylinder());
+const coneMesh = createMesh(createCone(48));
 const torusMesh = createMesh(createTorus(0.04, 96, 16, 24));  // saucer rim: thin tube, 24 texture repeats
 
 // Carried over from HW 5: built but not drawn, ready for the cradle below

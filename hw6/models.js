@@ -195,3 +195,42 @@ function createPyramid() {
   const tangents = computeTangents(positions, normals, texCoords, indices);
   return { positions, normals, tangents, texCoords, indices };
 }
+
+
+// Torus in the xz plane: ring radius 1, tube radius tubeRatio (scale it uniformly).
+// theta goes around the ring (u), phi around the tube (v), same orientation as the
+// cylinder: T = d(pos)/d(theta) along the ring, B = cross(N, T) along the tube.
+function createTorus(tubeRatio = 0.25, ringSegments = 64, tubeSegments = 24, uRepeat = 8) {
+  const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
+
+  for (let i = 0; i <= ringSegments; i++) {
+    const u = i / ringSegments, theta = 2 * Math.PI * u;
+    const st = Math.sin(theta), ct = Math.cos(theta);
+    for (let j = 0; j <= tubeSegments; j++) {
+      const v = j / tubeSegments, phi = 2 * Math.PI * v;
+      const sp = Math.sin(phi), cp = Math.cos(phi);
+      const r = 1 + tubeRatio * cp;  // distance from the y axis
+      positions.push(r * st, tubeRatio * sp, r * ct);
+      normals.push(cp * st, sp, cp * ct);
+      tangents.push(ct, 0, -st);
+      texCoords.push(u * uRepeat, v);
+    }
+  }
+
+  // Seam vertices are duplicated (i = ringSegments, j = tubeSegments) so u and v wrap cleanly
+  const row = tubeSegments + 1;
+  for (let i = 0; i < ringSegments; i++) {
+    for (let j = 0; j < tubeSegments; j++) {
+      const a = i * row + j, b = a + row;
+      indices.push(a, b, b + 1, a, b + 1, a + 1);
+    }
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    tangents: new Float32Array(tangents),
+    texCoords: new Float32Array(texCoords),
+    indices: new Uint16Array(indices)
+  };
+}

@@ -166,6 +166,7 @@ function createMesh({ positions, normals, tangents, texCoords, indices }) {
 
 const cubeMesh = createMesh(createCube());
 const cylinderMesh = createMesh(createCylinder());
+const torusMesh = createMesh(createTorus(0.04, 96, 16, 24));  // saucer rim: thin tube, 24 texture repeats
 
 // Carried over from HW 5: built but not drawn, ready for the cradle below
 const sphereMesh = createMesh(createSphere(28, 28));
@@ -190,8 +191,8 @@ function loadTexture(url) {
   return texture;
 }
 
-const brickTexture = loadTexture("brick.png");
-const normalTexture = loadTexture("texture2.jpg");
+const brickTexture = loadTexture("textures/brick.png");
+const normalTexture = loadTexture("textures/texture2.jpg");
 
 // HW 5 textures. antelope.jpg is 3.4 MB, so these are fetched on first use
 // rather than on page load; either way the texture starts as a 1x1 placeholder
@@ -221,8 +222,8 @@ function getCradle() {
     cylinderMesh,
     sphereMesh,
     pyramidMesh,
-    pyramidTexture: getTexture("antelope.jpg"),
-    ballTexture: getTexture("mars2.jpg")
+    pyramidTexture: getTexture("textures/antelope.jpg"),
+    ballTexture: getTexture("textures/mars2.jpg")
   });
 }
 

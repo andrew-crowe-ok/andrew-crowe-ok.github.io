@@ -50,14 +50,17 @@ function chaseEyeFrame(dist, height) {
     translate(0, -height, dist));
 }
 
-// The view matrix that rides the ship. The ship is drawn in
-// rotateX(tilt) * translate(pos) * rotateY(heading), and that product inverts
-// term by term -- no general inverse needed. `look` turns the ship's frame
-// before the camera is placed in it, which swings the camera around the ship.
-function chaseView({ pos, heading }, look, dist, height) {
-  const inverseShip = multiply(multiply(rotateY(-heading), translate(-pos[0], -pos[1], -pos[2])),
+// The ship is drawn in rotateX(tilt) * translate(pos) * rotateY(heading), and
+// that product inverts term by term -- no general inverse needed
+function inverseShipFrame({ pos, heading }) {
+  return multiply(multiply(rotateY(-heading), translate(-pos[0], -pos[1], -pos[2])),
     rotateX(-ORBIT.tilt));
-  return multiply(multiply(chaseEyeFrame(dist, height), look), inverseShip);
+}
+
+// The view matrix that rides the ship. `look` turns the ship's frame before the
+// camera is placed in it, which swings the camera around the ship.
+function chaseView(ship, look, dist, height) {
+  return multiply(multiply(chaseEyeFrame(dist, height), look), inverseShipFrame(ship));
 }
 
 const easeOutCubic = u => u <= 0 ? 0 : u >= 1 ? 1 : 1 - (1 - u) ** 3;
@@ -103,6 +106,113 @@ function updateCamera(t, ship, free, drag) {
   const chase = chaseView(ship, look, CHASE.dist + (CHASE.warpDist - CHASE.dist) * w,
     CHASE.height + (CHASE.warpHeight - CHASE.height) * w);
   return k >= 1 ? chase : blendViews(free, chase, k);
+}
+
+// ---------------------------------------------------------------------------
+// The free camera: focus and zoom
+//
+// The free view turns the scene about a focus point and stands back from it:
+//
+//   view = translate(pan, -dist) * rotation * translate(-focus)
+//
+// The focus starts on the planet. Clicking the ship or the planet slides it
+// onto that object over FOCUS.blend (smootherstep), from wherever it was; on
+// the ship it then rides along with it. The arrow-key pan eases back to zero
+// over the same slide, so the object ends up dead center.
+//
+// Each object has an invisible box for the click to hit: a cube around the
+// planet, and a box around the ship in its own frame. The ship wins whenever
+// its box is hit -- it is far smaller, and passing behind the planet's limb it
+// would otherwise sit inside the cube's corners while still in plain sight.
+//
+// The scroll wheel scales the distance by exp(ZOOM.perPixel * deltaY), so a
+// notch is the same proportion near or far. The distance eases toward that
+// goal with time constant ZOOM.ease, in log space so near and far zooms feel
+// alike, and stays within per-object bounds.
+// ---------------------------------------------------------------------------
+
+const FOCUS = { blend: 1.2 };     // s, the slide onto a newly clicked object
+const ZOOM = {
+  start: 14,                      // distance on load and after a reset
+  // Nearest the camera may come. Around the planet it stays outside the ship's
+  // whole sweep (orbit radius + half its length), so the ship never flies
+  // through the lens; around the ship it stays outside the ship's box.
+  min: { planet: 5.6, ship: 1.2 },
+  max: 30,                        // inside the star sphere even from the ship
+  perPixel: 0.0012,               // about 13% a wheel notch
+  keyStep: 0.2,                   // w / s
+  ease: 0.12                      // s
+};
+
+// `pivot` and `panLeft` are this frame's focus point and the pan still easing
+// away; `from` and `fromPan` are what they were when the slide began
+let camFocus, zoom;
+function resetFreeCamera() {
+  camFocus = { on: "planet", from: [0, 0, 0], fromPan: [0, 0], t0: -Infinity,
+               pivot: [0, 0, 0], panLeft: [0, 0] };
+  zoom = { dist: ZOOM.start, goal: ZOOM.start };
+}
+
+const focusPoint = (on, ship) =>
+  on === "ship" ? transformPoint(rotateX(ORBIT.tilt), ship.pos) : [0, 0, 0];
+
+function setZoomGoal(d) {
+  zoom.goal = Math.min(ZOOM.max, Math.max(ZOOM.min[camFocus.on], d));
+}
+const zoomWheel = px => setZoomGoal(zoom.goal * Math.exp(ZOOM.perPixel * px));
+const zoomKey = dir => setZoomGoal(zoom.goal + dir * ZOOM.keyStep);
+
+// Start the slide onto `on`. `pan` is the arrow-key pan as it stands, which
+// the caller zeroes: it is folded into what eases away.
+function focusOn(on, now, pan) {
+  Object.assign(camFocus, { on, from: camFocus.pivot, fromPan: vadd(camFocus.panLeft, pan), t0: now });
+  setZoomGoal(zoom.goal);
+}
+
+// Once a frame, before updateCamera: the free view. `now` is real time (the
+// slide doesn't care about resets), dt the frame's length.
+function freeView(now, dt, ship, rotation, [panX, panY]) {
+  const s = smootherstep((now - camFocus.t0) / FOCUS.blend);
+  camFocus.pivot = vadd(camFocus.from, vmul(vsub(focusPoint(camFocus.on, ship), camFocus.from), s));
+  camFocus.panLeft = vmul(camFocus.fromPan, 1 - s);
+  zoom.dist *= (zoom.goal / zoom.dist) ** (1 - Math.exp(-dt / ZOOM.ease));
+  const eye = translate(panX + camFocus.panLeft[0], panY + camFocus.panLeft[1], -zoom.dist);
+  return multiply(multiply(eye, rotation), translate(...vmul(camFocus.pivot, -1)));
+}
+
+// Whether the ray o + t d (t >= 0) passes through the box |p_i| <= half_i: the
+// slab test, narrowing the span of t the ray spends inside each pair of faces
+function rayHitsBox(o, d, half) {
+  let near = 0, far = Infinity;
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]) < 1e-12) {
+      if (Math.abs(o[i]) > half[i]) return false;
+      continue;
+    }
+    const a = (-half[i] - o[i]) / d[i], b = (half[i] - o[i]) / d[i];
+    near = Math.max(near, Math.min(a, b));
+    far = Math.min(far, Math.max(a, b));
+    if (near > far) return false;
+  }
+  return true;
+}
+
+// What a click at (x, y) in normalized device coordinates lands on, given the
+// view and ship of the frame it was clicked on: "ship", "planet" or null. The
+// plain lens sends eye-space direction (x / P00, y / P11, -1) to that pixel,
+// and the view's rotation is undone by its transpose. Only for the free view,
+// whose lens is the plain one.
+function pickObject(x, y, view, ship) {
+  const e = [x / projection[0], y / projection[5], -1];
+  const d = [0, 1, 2].map(i => view[i * 4] * e[0] + view[i * 4 + 1] * e[1] + view[i * 4 + 2] * e[2]);
+  const o = viewParts(view).eye;
+
+  const toShip = inverseShipFrame(ship);
+  if (rayHitsBox(transformPoint(toShip, o), transformVector(toShip, d),
+    vmul(SHIP_HALF_EXTENT, ORBIT.shipScale))) return "ship";
+  const r = PLANET.radius;
+  if (rayHitsBox(o, d, [r, r, r])) return "planet";
+  return null;
 }
 
 // ---------------------------------------------------------------------------

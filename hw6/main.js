@@ -351,15 +351,19 @@ window.addEventListener("resize", resize);
 resize();
 
 // Interactive controls. While the chase camera has the view, the drag angles
-// steer it around the ship instead of turning the scene (camera.js).
+// steer it around the ship instead of turning the scene, and clicks and the
+// wheel are ignored (camera.js).
 let dragRotX, dragRotY;      // mouse drag
-let camX, camY, camZ;        // arrow keys, w, s
+let camX, camY;              // arrow keys; w, s and the wheel zoom (camera.js)
 // The scene's own clock starts here, so a reset restarts the orbit and the
 // planet's spin along with everything else
 let sceneStart = 0;
 
-let mouseDown = false, lastX, lastY;
-canvas.addEventListener("mousedown", e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
+let mouseDown = false, lastX, lastY, pressX, pressY;
+canvas.addEventListener("mousedown", e => {
+  mouseDown = true;
+  lastX = pressX = e.clientX; lastY = pressY = e.clientY;
+});
 window.addEventListener("mouseup", () => mouseDown = false);
 window.addEventListener("mousemove", e => {
   if (!mouseDown) return;
@@ -375,12 +379,35 @@ document.addEventListener("keydown", e => {
     case "ArrowDown": camY += step; break;
     case "ArrowLeft": camX += step; break;
     case "ArrowRight": camX -= step; break;
-    case "w": camZ += step; break;
-    case "s": camZ -= step; break;
+    case "w": zoomKey(-1); break;
+    case "s": zoomKey(1); break;
     default: return;
   }
   e.preventDefault();
 });
+
+// Clicking the ship or the planet centers the view on it. A press that moved
+// more than CLICK_SLOP pixels was a drag, not a click. Picking reads the view
+// and ship of the last frame drawn, which is what was clicked on.
+const CLICK_SLOP = 5;
+let lastView = null, lastShip = null;
+canvas.addEventListener("click", e => {
+  if (!lastView || offOrbit() || Math.hypot(e.clientX - pressX, e.clientY - pressY) > CLICK_SLOP) return;
+  const r = canvas.getBoundingClientRect();
+  const hit = pickObject(2 * (e.clientX - r.left) / r.width - 1,
+    1 - 2 * (e.clientY - r.top) / r.height, lastView, lastShip);
+  if (!hit) return;
+  focusOn(hit, performance.now() / 1000, [camX, camY]);
+  camX = 0; camY = 0;
+});
+
+// The wheel zooms. Line and page deltas are turned into pixels first, a line
+// at Chrome's 100 px per 3-line notch, so a notch zooms alike in every browser.
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();         // also keeps a trackpad pinch from zooming the page
+  if (offOrbit()) return;
+  zoomWheel(e.deltaY * (e.deltaMode === 1 ? 100 / 3 : e.deltaMode === 2 ? canvas.clientHeight : 1));
+}, { passive: false });
 
 // Engage. The press is handled on the next frame, where the clock is known
 // (scene.js), and the button stays down until the scene resets.
@@ -454,7 +481,8 @@ function updateWashes(t, ship) {
 // camera lets go by itself once the ship is back in orbit (camera.js).
 function resetScene(time) {
   dragRotX = 0.35; dragRotY = -0.5;
-  camX = 0; camY = 0; camZ = -14;
+  camX = 0; camY = 0;
+  resetFreeCamera();
   sceneStart = time;
   resetFlight();
   resetReveal();
@@ -462,8 +490,11 @@ function resetScene(time) {
 resetScene(0);
 
 // Render loop
+let lastNow = 0;
 function render(time) {
   const now = time / 1000;
+  const dt = Math.min(now - lastNow, 0.1);   // capped, so a stalled tab doesn't lurch
+  lastNow = now;
   if (engageExpired(now - sceneStart)) resetScene(now);
   const t = now - sceneStart;   // scene clock
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -473,8 +504,9 @@ function render(time) {
   // The flight path is advanced once, here, because the camera needs to know
   // where the ship is before anything is drawn.
   const ship = shipState(t);
-  const view = updateCamera(t, ship, multiply(translate(camX, camY, camZ), rotation),
+  const view = updateCamera(t, ship, freeView(now, dt, ship, rotation, [camX, camY]),
     { x: dragRotX, y: dragRotY });
+  lastView = view; lastShip = ship;
 
   gl.uniformMatrix4fv(uProjection, false, projection);
   setLens();

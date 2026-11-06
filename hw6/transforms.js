@@ -45,6 +45,15 @@ function transformPoint(m, [x, y, z]) {
   ];
 }
 
+// The same for a direction, which the translation doesn't move
+function transformVector(m, [x, y, z]) {
+  return [
+    m[0] * x + m[4] * y + m[8] * z,
+    m[1] * x + m[5] * y + m[9] * z,
+    m[2] * x + m[6] * y + m[10] * z
+  ];
+}
+
 // Vectors as plain arrays
 const vadd = (a, b) => a.map((v, i) => v + b[i]);
 const vsub = (a, b) => a.map((v, i) => v - b[i]);

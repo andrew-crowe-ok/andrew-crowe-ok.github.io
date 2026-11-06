@@ -15,6 +15,10 @@ const NECK = [[0, -0.1, -0.3], [0, 0.6, 0.15]];
 const PYLON = [[0.18, 0.0, -1.6], [1.0, 0.63, -1.6]];
 // Ship spans z -3.25..2.71 and y -0.57..0.91; shift so the root frame is its middle
 const SHIP_CENTER = [0, 0.17, -0.27];
+// Half the size of a box about that middle that holds the whole ship -- the rim
+// reaches x 1.49, the nacelle tops and hull bottom y 0.74, the saucer's edge
+// and nacelle tails z 2.98 -- for clicking on it (camera.js)
+const SHIP_HALF_EXTENT = [1.5, 0.75, 3.0];
 
 // Painted plating: a touch more ambient than the planet so the panel lines stay
 // readable on the night side, and a tight specular for the clearcoat.

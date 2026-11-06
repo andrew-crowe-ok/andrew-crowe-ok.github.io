@@ -30,13 +30,18 @@
       and the bridge dome has a ring of lit viewports.<br>
       Bump mapping: saucer, rim, deflector, planet. Normal mapping: bridge dome, hull, nacelles.<br>
       Drag with the mouse to rotate the scene; arrow keys and w, s move the camera.<br>
-      Use the slider and dropdown to rotate about an axis; the button starts/stops spinning.</p>
+      Break Orbit curves the ship smoothly off its circle and onto the straight line it was
+      flying the instant the button was pressed; press again to curve it back on.<br>
+      Use the slider and dropdown to rotate about an axis; the last button starts/stops spinning.</p>
 
     <div class="controls">
       <div class="control-row">
         <label for="slider">Rotation Angle:</label>
         <input type="range" id="slider" min="0" max="360" value="0">
         <span id="sliderValue">0</span>
+      </div>
+      <div class="control-row">
+        <button id="breakButton">Break Orbit</button>
       </div>
       <div class="control-row">
         <select id="axisSelect">

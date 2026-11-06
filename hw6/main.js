@@ -410,6 +410,18 @@ document.getElementById("slider").addEventListener("input", e => {
 });
 document.getElementById("spinButton").addEventListener("click", () => spinning = !spinning);
 
+// Break Orbit / Resume Orbit. The press is handled on the next frame, where the
+// clock is known (scene.js), and the button is held disabled mid-transition so a
+// blend is never restarted from a point that isn't on either path.
+const breakButton = document.getElementById("breakButton");
+breakButton.addEventListener("click", requestOrbitToggle);
+let breakLabel = "";
+function updateBreakButton() {
+  const label = orbitBroken() ? "Resume Orbit" : "Break Orbit";
+  if (label !== breakLabel) breakButton.textContent = breakLabel = label;
+  breakButton.disabled = orbitInTransition();
+}
+
 // Render loop
 let lastTime = 0;
 function render(time) {
@@ -428,6 +440,7 @@ function render(time) {
 
   plasma.update();
   drawSystem(multiply(view, rotation), t);
+  updateBreakButton();
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);

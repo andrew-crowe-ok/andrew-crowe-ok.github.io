@@ -178,6 +178,7 @@ const torusMesh = createMesh(createTorus(0.04, 96, 16, 24));  // saucer rim: thi
 // Carried over from HW 5: built but not drawn, ready for the cradle below
 const sphereMesh = createMesh(createSphere(28, 28));
 const pyramidMesh = createMesh(createPyramid());
+const planetMesh = createMesh(createSphere(64, 64));  // finer than sphereMesh: it fills the view
 
 function loadTexture(url) {
   const texture = gl.createTexture();
@@ -286,11 +287,11 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
-const lightWorld = [3, 4, 5];
+const lightWorld = [10, 6, 10];  // outside the orbit, so the ship isn't lit from inside it
 
 // Interactive controls
 let dragRotX = 0.35, dragRotY = -0.5;      // mouse drag
-let camX = 0, camY = 0, camZ = -7;      // arrow keys, w, s
+let camX = 0, camY = 0, camZ = -14;     // arrow keys, w, s
 let sliderAngle = 0;                    // degrees
 let spinning = false, spinAngle = 0;    // Start/Stop button
 
@@ -342,7 +343,7 @@ function render(time) {
 
   gl.activeTexture(gl.TEXTURE0);
   plasma.update();
-  drawShip(multiply(view, rotation));
+  drawSystem(multiply(view, rotation), t);
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);

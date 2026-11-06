@@ -387,6 +387,46 @@ document.addEventListener("keydown", e => {
 const engageButton = document.getElementById("engageButton");
 engageButton.addEventListener("click", requestEngage);
 
+// The button is held back until the viewer has had a moment with the scene.
+// It fades in (index.html) once any of these is met since the scene started:
+//   after   seconds of scene time
+//   clicks  presses anywhere on the page
+//   holdMs  ms of the left button held down in total, across presses -- so
+//           dragging to look around brings it up too
+// A reset hides it again and starts every count over.
+const REVEAL = { after: 10, clicks: 3, holdMs: 1500 };
+const reveal = { shown: false, clicks: 0, heldMs: 0, holdStart: null };
+window.addEventListener("pointerdown", e => {
+  reveal.clicks++;
+  if (e.button === 0 && reveal.holdStart === null) reveal.holdStart = performance.now();
+});
+function endHold() {
+  if (reveal.holdStart === null) return;
+  reveal.heldMs += performance.now() - reveal.holdStart;
+  reveal.holdStart = null;
+}
+window.addEventListener("pointerup", e => { if (e.button === 0) endHold(); });
+window.addEventListener("pointercancel", endHold);
+window.addEventListener("blur", endHold);
+
+function resetReveal() {
+  reveal.shown = false;
+  reveal.clicks = 0;
+  reveal.heldMs = 0;
+  // A hold that spans the reset counts only from here on
+  if (reveal.holdStart !== null) reveal.holdStart = performance.now();
+  engageButton.classList.remove("revealed");
+}
+function updateReveal(t) {
+  if (reveal.shown) return;
+  const held = reveal.heldMs +
+    (reveal.holdStart === null ? 0 : performance.now() - reveal.holdStart);
+  if (t >= REVEAL.after || reveal.clicks >= REVEAL.clicks || held > REVEAL.holdMs) {
+    reveal.shown = true;
+    engageButton.classList.add("revealed");
+  }
+}
+
 // The two washes over the canvas (index.html), set once a frame:
 //   flash  white-blue, at the jump to warp: up in FLASH.rise, then dying away
 //          over FLASH.decay -- it covers the instant the lens starts to open
@@ -417,6 +457,7 @@ function resetScene(time) {
   camX = 0; camY = 0; camZ = -14;
   sceneStart = time;
   resetFlight();
+  resetReveal();
 }
 resetScene(0);
 
@@ -444,6 +485,7 @@ function render(time) {
   plasma.update();
   drawSystem(view, t, ship);
   updateWashes(t, ship);
+  updateReveal(t);
   engageButton.disabled = offOrbit();
   requestAnimationFrame(render);
 }

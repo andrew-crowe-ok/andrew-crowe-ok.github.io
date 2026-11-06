@@ -1,7 +1,28 @@
 // Starship built with the HW 4 functional hierarchy: each drawX(parent) derives
 // its frame from the parent's, draws its own shape with a scaled copy (so the
 // scale never reaches the children), then hands the unscaled frame down.
-// Axes: +z = forward, +y = up. Uses gl, uniforms and meshes from main.js.
+// Axes: +z = forward, +y = up. Uses gl, uniforms, meshes and textures from main.js.
+
+// Layout in ship space. Parts are placed from these, so proportions live in one
+// place; children get offsets relative to their parent's position.
+const SAUCER = { pos: [0, 0.6, 1.2], radius: 1.45, halfThick: 0.16 };
+const HULL = { pos: [0, -0.25, -0.9], radius: 0.32, halfLength: 1.3 };
+// Right nacelle (+x); the left mirrors x. Raised to the saucer's top and kept
+// behind its rim, so neither the Bussard cap nor the pylon cuts into the saucer.
+const NACELLE = { pos: [1.0, 0.75, -1.65], radius: 0.16, halfLength: 1.3 };
+// Struts as [bottom, top] endpoints, each end buried inside the part it joins
+const NECK = [[0, -0.1, -0.3], [0, 0.6, 0.15]];
+const PYLON = [[0.18, 0.0, -1.6], [1.0, 0.63, -1.6]];
+// Ship spans z -3.25..2.71 and y -0.57..0.91; shift so the root frame is its middle
+const SHIP_CENTER = [0, 0.17, -0.27];
+
+const sub = (a, b) => a.map((v, i) => v - b[i]);
+const mirrorX = ([x, y, z], side) => [side * x, y, z];
+// Midpoint, length and direction of a strut
+function strut([a, b]) {
+  const d = sub(b, a);
+  return { mid: a.map((v, i) => v + d[i] / 2), length: Math.hypot(...d), d };
+}
 
 function drawPrimitive(mesh, texture, mapping, modelView) {
   gl.uniformMatrix4fv(uModelView, false, modelView);
@@ -13,64 +34,63 @@ function drawPrimitive(mesh, texture, mapping, modelView) {
 
 // Level 1: whole ship. Rotating the parent frame moves every part.
 function drawShip(parent) {
-  drawSaucer(multiply(parent, translate(0, 0.6, 0.9)));
-  drawEngineering(multiply(parent, translate(0, -0.2, -0.8)));
+  const ship = multiply(parent, translate(...sub([0, 0, 0], SHIP_CENTER)));
+  drawSaucer(multiply(ship, translate(...SAUCER.pos)));
+  drawEngineering(multiply(ship, translate(...HULL.pos)));
+}
+
+// Level 2: saucer section, a squashed sphere
+function drawSaucer(parent) {
+  const { radius: r, halfThick: h } = SAUCER;
+  drawPrimitive(sphereMesh, brickTexture, BUMP_MAPPING, multiply(parent, scale(r, h, r)));
+
+  // Children get the unscaled saucer frame, so they aren't squashed too
+  drawBridge(multiply(parent, translate(0, 0.75 * h, 0)));
+  drawRim(parent);  // same center as the saucer, so no offset
+}
+
+// Level 3: bridge dome, half buried in the saucer's top
+function drawBridge(parent) {
+  drawPrimitive(sphereMesh, normalTexture, NORMAL_MAPPING, multiply(parent, scale(0.42, 0.13, 0.42)));
+}
+
+// Level 3: rim, a thin torus hugging the saucer's edge. Uniform scale keeps the
+// tube round; tube radius = 0.04 * scale ≈ 0.057.
+function drawRim(parent) {
+  const s = SAUCER.radius - 0.02;
+  drawPrimitive(torusMesh, brickTexture, BUMP_MAPPING, multiply(parent, scale(s, s, s)));
 }
 
 // Level 2: engineering hull. The cylinder mesh runs along y, so rotateX(90°)
-// lays it along +z: radius 0.35, half-length 1.4 (spans z = -1.4..1.4 locally).
-const HULL_RADIUS = 0.35, HULL_HALF_LENGTH = 1.4;
+// lays it along +z.
 function drawEngineering(parent) {
-  const alongZ = multiply(parent, rotateX(Math.PI / 2));
+  const { radius: r, halfLength: l } = HULL;
   drawPrimitive(cylinderMesh, normalTexture, NORMAL_MAPPING,
-    multiply(alongZ, scale(HULL_RADIUS, HULL_HALF_LENGTH, HULL_RADIUS)));
+    multiply(parent, multiply(rotateX(Math.PI / 2), scale(r, l, r))));
 
   // Rounded nose: a sphere the hull's radius, centered on the front cap
   drawPrimitive(sphereMesh, normalTexture, NORMAL_MAPPING,
-    multiply(parent, multiply(translate(0, 0, HULL_HALF_LENGTH), scale(HULL_RADIUS, HULL_RADIUS, HULL_RADIUS))));
+    multiply(parent, multiply(translate(0, 0, l), scale(r, r, r))));
 
-  // Neck midpoint sits above and ahead of the hull center
-  drawNeck(multiply(parent, translate(0, 0.5, 0.5)));
+  const neck = strut(NECK);
+  drawNeck(multiply(parent, translate(...sub(neck.mid, HULL.pos))), neck);
 
-  // Dish base sits just behind the nose tip (0.35 ahead of the cap); any further
-  // back and the sphere pokes through the shallow cone's face
-  drawDeflector(multiply(parent, translate(0, 0, HULL_HALF_LENGTH + 0.32)));
+  // Dish base just behind the nose tip; any further back and the sphere pokes
+  // through the shallow cone's face
+  drawDeflector(multiply(parent, translate(0, 0, l + 0.92 * r)));
 
-  // Pylons rise from the hull's rear top; side = +1 (right, +x) or -1 (left)
-  for (const side of [1, -1]) drawPylon(multiply(parent, translate(side * 0.6, 0.41, -1.0)), side);
+  // side = +1 (right, +x) or -1 (left)
+  for (const side of [1, -1]) {
+    const pylon = strut(PYLON.map(p => mirrorX(p, side)));
+    drawPylon(multiply(parent, translate(...sub(pylon.mid, HULL.pos))), pylon, side);
+  }
 }
 
-// Level 3: pylon, a thin blade from the hull's top (0.2, 0.2) out to the nacelle's
-// underside (1.0, 0.62), mirrored by side. parent is its midpoint; rotateZ tilts
-// the box's long x axis along that (0.8, 0.42) run, and side mirrors the tilt.
-function drawPylon(parent, side) {
-  const tilted = multiply(parent, rotateZ(side * Math.atan2(0.42, 0.8)));
-  drawPrimitive(cubeMesh, brickTexture, BUMP_MAPPING, multiply(tilted, scale(0.452, 0.03, 0.12)));
-
-  // Nacelle center relative to the pylon's (untilted) midpoint
-  drawNacelle(multiply(parent, translate(side * 0.4, 0.34, -0.1)));
-}
-
-// Level 4: nacelle, a long cylinder along z with a Bussard collector cap in front
-// and a tail cone behind
-const NACELLE_RADIUS = 0.17, NACELLE_HALF_LENGTH = 1.4;
-function drawNacelle(parent) {
-  drawPrimitive(cylinderMesh, normalTexture, NORMAL_MAPPING,
-    multiply(parent, multiply(rotateX(Math.PI / 2), scale(NACELLE_RADIUS, NACELLE_HALF_LENGTH, NACELLE_RADIUS))));
-
-  drawBussard(multiply(parent, translate(0, 0, NACELLE_HALF_LENGTH)));
-
-  // Tail cone: rotateX(-90°) points the apex backward (-z); shift by the half-height
-  drawPrimitive(coneMesh, normalTexture, NORMAL_MAPPING,
-    multiply(parent, multiply(translate(0, 0, -NACELLE_HALF_LENGTH - 0.15),
-      multiply(rotateX(-Math.PI / 2), scale(NACELLE_RADIUS, 0.15, NACELLE_RADIUS)))));
-}
-
-// Level 5: Bussard collector, a slightly elongated sphere on the nacelle's front cap.
-// Placeholder texture; the animated video texture goes here next.
-function drawBussard(parent) {
-  drawPrimitive(sphereMesh, getTexture("textures/mars2.jpg"), BUMP_MAPPING,
-    multiply(parent, scale(NACELLE_RADIUS, NACELLE_RADIUS, 0.24)));
+// Level 3: neck, a thin fin from inside the hull up into the saucer. rotateX tips
+// the box's long y axis toward +z to follow the strut's (dy, dz) direction.
+function drawNeck(parent, { length, d }) {
+  const tilted = multiply(parent, rotateX(Math.atan2(d[2], d[1])));
+  drawPrimitive(cubeMesh, brickTexture, BUMP_MAPPING, multiply(tilted, scale(0.035, length / 2, 0.075)));
 }
 
 // Level 3: deflector dish, a wide shallow cone with a thin antenna spike, both
@@ -81,35 +101,41 @@ function drawDeflector(parent) {
   const forward = multiply(parent, rotateX(Math.PI / 2));
   const copper = getTexture("textures/mars2.jpg");
   drawPrimitive(coneMesh, copper, BUMP_MAPPING,
-    multiply(forward, multiply(translate(0, 0.06, 0), scale(0.3, 0.06, 0.3))));
+    multiply(forward, multiply(translate(0, 0.06, 0), scale(0.28, 0.06, 0.28))));
   drawPrimitive(coneMesh, copper, BUMP_MAPPING,
     multiply(forward, multiply(translate(0, 0.2, 0), scale(0.035, 0.2, 0.035))));
 }
 
-// Level 3: neck, a thin fin from the hull's top up to the saucer's underside.
-// Its ends are (0, -0.25, -0.3) and (0, 0.25, 0.3) here, so tilt the box's
-// y axis toward +z by atan2(0.6, 0.5).
-function drawNeck(parent) {
-  const tilted = multiply(parent, rotateX(Math.atan2(0.6, 0.5)));
-  drawPrimitive(cubeMesh, brickTexture, BUMP_MAPPING, multiply(tilted, scale(0.08, 0.45, 0.25)));
+// Level 3: pylon, a thin blade from the hull's top out to the nacelle's underside.
+// rotateZ(a) sends the box's y axis to (-sin a, cos a), so a = atan2(-dx, dy)
+// lines it up with the strut; the mirrored strut gives the left pylon its tilt.
+function drawPylon(parent, { mid, length, d }, side) {
+  const tilted = multiply(parent, rotateZ(Math.atan2(-d[0], d[1])));
+  drawPrimitive(cubeMesh, brickTexture, BUMP_MAPPING, multiply(tilted, scale(0.03, length / 2, 0.12)));
+
+  drawNacelle(multiply(parent, translate(...sub(mirrorX(NACELLE.pos, side), mid))));
 }
 
-// Level 2: saucer section, a squashed sphere
-function drawSaucer(parent) {
-  drawPrimitive(sphereMesh, brickTexture, BUMP_MAPPING, multiply(parent, scale(1.6, 0.18, 1.6)));
+// Level 4: nacelle, a long cylinder along z with a Bussard collector cap in front
+// and a tail cone behind
+function drawNacelle(parent) {
+  const { radius: r, halfLength: l } = NACELLE;
+  drawPrimitive(cylinderMesh, normalTexture, NORMAL_MAPPING,
+    multiply(parent, multiply(rotateX(Math.PI / 2), scale(r, l, r))));
 
-  // The child gets the unscaled saucer frame, so it isn't squashed too
-  drawBridge(multiply(parent, translate(0, 0.14, 0)));
-  drawRim(parent);  // same center as the saucer, so no offset
+  drawBussard(multiply(parent, translate(0, 0, l)));
+
+  // Tail cone: rotateX(-90°) points the apex backward (-z); shift by the half-height
+  drawPrimitive(coneMesh, normalTexture, NORMAL_MAPPING,
+    multiply(parent, multiply(translate(0, 0, -l - 0.15),
+      multiply(rotateX(-Math.PI / 2), scale(r, 0.15, r)))));
 }
 
-// Level 3: rim, a thin torus hugging the saucer's edge (saucer radius 1.6).
-// Uniform scale keeps the tube round; tube radius = 0.04 * 1.58 ≈ 0.06.
-function drawRim(parent) {
-  drawPrimitive(torusMesh, brickTexture, BUMP_MAPPING, multiply(parent, scale(1.58, 1.58, 1.58)));
-}
-
-// Level 3: bridge dome, half buried in the saucer's top (saucer top is y = 0.18)
-function drawBridge(parent) {
-  drawPrimitive(sphereMesh, normalTexture, NORMAL_MAPPING, multiply(parent, scale(0.45, 0.14, 0.45)));
+// Level 5: Bussard collector, a sphere stretched forward and lit by the animated
+// plasma video. rotateX(90°) turns the sphere's +y pole forward, so the video's
+// top row (v = 1) glows at the tip and u wraps around the nacelle's axis.
+function drawBussard(parent) {
+  const r = NACELLE.radius;
+  drawPrimitive(sphereMesh, plasma.texture, EMISSIVE,
+    multiply(parent, multiply(rotateX(Math.PI / 2), scale(r, 0.24, r))));
 }

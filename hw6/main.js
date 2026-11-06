@@ -37,7 +37,7 @@ in vec2 vTexCoord;
 
 uniform vec3 uLightPos;
 uniform sampler2D uTexture;
-uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping
+uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = emissive (unlit)
 
 out vec4 fragColor;
 
@@ -51,6 +51,12 @@ float height(vec2 uv) {
 }
 
 void main() {
+  // Emissive: the surface gives off its own light, so skip lighting entirely
+  if (uMapping == 2) {
+    fragColor = vec4(texture(uTexture, vTexCoord).rgb, 1.0);
+    return;
+  }
+
   // Tangent frame (T, B, N)
   vec3 N = normalize(vNormal);
   vec3 T = normalize(vTangent - dot(vTangent, N) * N);
@@ -204,6 +210,32 @@ function getTexture(url) {
   return textureCache.get(url);
 }
 
+// Animated texture: a muted, looping <video> whose current frame is re-uploaded
+// every render. Video frames are rarely power-of-two and change every frame, so
+// no mipmaps (LINEAR min filter). REPEAT on s lets u wrap around the sphere.
+function loadVideoTexture(sources) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 60, 20, 255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const video = document.createElement("video");
+  Object.assign(video, { muted: true, loop: true, playsInline: true, autoplay: true, crossOrigin: "anonymous" });
+  video.src = sources.find(src => video.canPlayType(src.endsWith(".webm") ? "video/webm" : "video/mp4")) ?? sources[0];
+  video.play().catch(() => {});  // autoplay of muted video is allowed; ignore if blocked
+
+  function update() {
+    if (video.readyState < video.HAVE_CURRENT_DATA) return;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+  }
+  return { texture, update };
+}
+
+const plasma = loadVideoTexture(["textures/plasma.webm", "textures/plasma.mp4"]);
+
 // HW 5 Newton's cradle: the whole hierarchy is available, but neither it nor
 // its textures exist until getCradle() is called, and nothing draws it yet.
 // To show it, add this to render():
@@ -228,7 +260,7 @@ function getCradle() {
   });
 }
 
-const BUMP_MAPPING = 0, NORMAL_MAPPING = 1;
+const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
 const objects = [
   { mesh: cubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-1.8, 0, 0] },
   { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [1.8, 0, 0] }
@@ -309,6 +341,7 @@ function render(time) {
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
 
   gl.activeTexture(gl.TEXTURE0);
+  plasma.update();
   drawShip(multiply(view, rotation));
   requestAnimationFrame(render);
 }

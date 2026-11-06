@@ -5,8 +5,8 @@
 // The moment "Engage" is pressed the camera swings in behind the ship, to a
 // chase position far enough back for the plain lens to frame it:
 //
-//   chasePhase   ramps 0 -> 1 over CHASE.blend seconds
-//   k            = smootherstep(chasePhase), so the swing eases in and out
+//   k            = smootherstep(time since the press / CHASE.blend), so the
+//                  swing eases in and out
 //
 // The instant the ship jumps to warp (scene.js) a second weight starts:
 //
@@ -26,20 +26,19 @@ const CHASE = {
   dist: 2.2,                      // units behind the ship's middle before warp,
   height: 0.7,                    //   and above it: the plain lens frames it whole
   warpDist: 0.95,                 // at warp: the hull's tail reaches 0.62 back,
-                                  //   the nacelles 0.86 back but off to either side
+                                  //   the nacelle tail cones 0.95 back but 0.32
+                                  //   off to either side
   warpHeight: 0.30,               // and above it, clear of the hull and saucer
   warpBlend: 0.55,                // s, the dolly zoom into warp
   fishHalfX: 125 * Math.PI / 180, // half the fisheye's horizontal field of view
   fishStretch: 1.8,               // the fisheye's vertical stretch (see the lens),
-  fishPivot: -0.47,               //   about this height on screen (-1 bottom, 1 top)
-  look: 1.0                      // mouse sensitivity while chasing, vs. the free view
+  fishPivot: -0.47                //   about this height on screen (-1 bottom, 1 top)
 };
 
 // The lens, read by both programs every frame: 0 = the projection matrix as
 // built, 1 = full fisheye
 let lensFisheye = 0;
 
-let chasePhase = 0;
 let chaseGrab = null;   // the drag angles when this chase began
 
 // The camera's own frame inside the ship's: dist behind the ship's middle and
@@ -81,30 +80,29 @@ function blendViews(from, to, k) {
   return viewFromParts(slerp(a.q, b.q, k), eye);
 }
 
-// Once a frame: advance the blend, set the lens, return the view matrix.
+// Once a frame: set the lens and return the view matrix. Everything follows from
+// the scene clock and the flight, so a reset (back in orbit) needs no extra step.
+//   t:    the scene clock
 //   free: the matrix the free camera would use on its own
 //   drag: the mouse drag angles, so dragging still looks around while chasing
-function updateCamera(dt, ship, free, drag) {
-  if (!offOrbit()) return free;
-  chasePhase = Math.min(chasePhase + dt / CHASE.blend, 1);
-  const k = smootherstep(chasePhase);
+function updateCamera(t, ship, free, drag) {
+  const sincePress = engageElapsed(t);
+  if (sincePress === null) {
+    lensFisheye = 0;
+    chaseGrab = null;
+    return free;
+  }
+  const k = smootherstep(sincePress / CHASE.blend);
   const w = lensFisheye = ship.warpTau === null ? 0 : easeOutCubic(ship.warpTau / CHASE.warpBlend);
 
   // Only the dragging done since the chase took over counts, so taking the
   // mouse never snaps the view
   chaseGrab ??= { ...drag };
 
-  const look = multiply(rotateY(CHASE.look * (drag.y - chaseGrab.y)),
-    rotateX(CHASE.look * (drag.x - chaseGrab.x)));
+  const look = multiply(rotateY(drag.y - chaseGrab.y), rotateX(drag.x - chaseGrab.x));
   const chase = chaseView(ship, look, CHASE.dist + (CHASE.warpDist - CHASE.dist) * w,
     CHASE.height + (CHASE.warpHeight - CHASE.height) * w);
   return k >= 1 ? chase : blendViews(free, chase, k);
-}
-
-// Back to the free view and the plain lens, at once
-function resetCamera() {
-  chasePhase = lensFisheye = 0;
-  chaseGrab = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,8 +129,8 @@ function resetCamera() {
 // The fisheye has to carry distance in w rather than -z, since -z is zero or
 // negative exactly where the lens is still supposed to see. Depth survives
 // that: along any one pixel's ray, distance and -z are in fixed proportion, so
-// the depth test still orders the same way. The near plane is gone, but
-// nothing in this scene gets close enough to the eye to need it.
+// the depth test still orders the same way. The near and far planes become
+// spheres at those same distances from the eye.
 // ---------------------------------------------------------------------------
 const LENS_GLSL = `
 uniform float uFisheye;      // 0 = the projection matrix as given, 1 = fisheye
@@ -166,8 +164,8 @@ vec4 project(mat4 proj, vec4 p) {
 }
 `;
 
-// The two uniforms above, for a program that was linked with LENS_GLSL
-function lensUniforms(gl, program) {
+// A setter for the lens uniforms above, for a program linked with LENS_GLSL
+function lensUniforms(program) {
   const uFisheye = gl.getUniformLocation(program, "uFisheye");
   const uFishHalfX = gl.getUniformLocation(program, "uFishHalfX");
   const uFishStretch = gl.getUniformLocation(program, "uFishStretch");

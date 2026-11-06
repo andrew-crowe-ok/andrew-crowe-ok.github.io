@@ -1,7 +1,5 @@
-// Star field as point sprites: the whole sky in one draw call, as an
-// alternative to the star texture on the sky sphere (scene.js picks between
-// them). Stars are real positions on a sphere of `radius`, so there is no
-// equirectangular squeeze at the poles, every star stays crisp whatever the
+// Star field as point sprites: the whole sky in one draw call. Stars are real
+// positions on a sphere of `radius`, so every star stays crisp whatever the
 // resolution, and each one can twinkle on its own phase.
 //
 // This needs its own program: the scene's shader has no point path, and point
@@ -92,13 +90,12 @@ void main() {
 }
 `;
 
-// createProgram and the main program come from main.js; draw() restores
-// `restoreProgram` so the caller's state is untouched.
-function createStarPoints(gl, createProgram, { count = 3000, radius = 45, seed = 53, restoreProgram = null } = {}) {
+// Uses gl and createProgram from main.js. draw() leaves the star program in use.
+function createStarPoints({ radius, count = 3000, seed = 53 }) {
   const program = createProgram(STAR_VERTEX_SHADER, STAR_FRAGMENT_SHADER);
   const uProjection = gl.getUniformLocation(program, "uProjection");
   const uModelView = gl.getUniformLocation(program, "uModelView");
-  const setLens = lensUniforms(gl, program);
+  const setLens = lensUniforms(program);
   const uTime = gl.getUniformLocation(program, "uTime");
   const uPixelScale = gl.getUniformLocation(program, "uPixelScale");
   const uStreak = gl.getUniformLocation(program, "uStreak");
@@ -120,7 +117,7 @@ function createStarPoints(gl, createProgram, { count = 3000, radius = 45, seed =
   for (let i = 0; i < count; i++) {
     // Uniform on the sphere: the polar angle comes from acos so the stars do
     // not bunch up at the poles. A third of them crowd into a galactic band
-    // around the equator, matching the texture version.
+    // around the equator.
     const phi = 2 * Math.PI * rand();
     let cosTheta = 1 - 2 * rand();
     if (rand() < 0.33) cosTheta = (rand() + rand() + rand() - 1.5) * 0.35;
@@ -149,7 +146,6 @@ function createStarPoints(gl, createProgram, { count = 3000, radius = 45, seed =
   gl.bindVertexArray(null);
 
   return {
-    count,
     // modelView: the frame the sky is drawn in; time: seconds; streak: the
     // stars' velocity past the eye, in eye space
     draw(projection, modelView, time, streak = [0, 0, 0]) {
@@ -167,7 +163,6 @@ function createStarPoints(gl, createProgram, { count = 3000, radius = 45, seed =
       gl.uniform2f(uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.POINTS, 0, count);
-      if (restoreProgram) gl.useProgram(restoreProgram);
     }
   };
 }

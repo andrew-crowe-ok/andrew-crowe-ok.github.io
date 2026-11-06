@@ -45,7 +45,10 @@ function transformPoint(m, [x, y, z]) {
   ];
 }
 
-const ROTATE = { x: rotateX, y: rotateY, z: rotateZ };
+// Vectors as plain arrays
+const vadd = (a, b) => a.map((v, i) => v + b[i]);
+const vsub = (a, b) => a.map((v, i) => v - b[i]);
+const vmul = (a, k) => a.map(v => v * k);
 
 // ---------------------------------------------------------------------------
 // Blending two camera positions

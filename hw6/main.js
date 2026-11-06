@@ -16,11 +16,10 @@ void main() {
   vec4 p = uModelView * vec4(aPosition, 1.0);
   vPosition = p.xyz;
 
-  // Inverse transpose for potential non-uniform scalings
+  // Normals take the inverse transpose, since parts are scaled non-uniformly;
+  // tangents lie in the surface and take the matrix itself
   mat3 mv = mat3(uModelView);
   vNormal = transpose(inverse(mv)) * aNormal;
-
-
   vTangent = mv * aTangent;
   vTexCoord = aTexCoord;
   // The lens is rectilinear until the chase camera opens it out (camera.js)
@@ -49,16 +48,14 @@ uniform vec3 uAtmosphere;   // rim glow color; black = off
 
 uniform sampler2D uTexture;
 uniform sampler2D uNormalMap;
-// 0 = bump mapping (relief from uTexture's luminance)
-// 1 = normal mapping (uTexture holds the normals, flat base color)
-// 2 = emissive (unlit)
-// 3 = color texture from uTexture + normals from uNormalMap
+// 0 = bump mapping: color from uTexture, relief from its luminance
+// 1 = normal mapping: color from uTexture, tangent-space normals from uNormalMap
+// 2 = emissive: uTexture's color, unlit
 uniform int uMapping;
 
 out vec4 fragColor;
 
-// convert RGB to luminance (Rec._601 standard, https://en.wikipedia.org/wiki/Rec._601)
-// or you can use a height map texture
+// Bump height: dark is high (1 - Rec. 601 luminance); a negative uBumpScale flips it
 float height(vec2 uv) {
   vec3 c = texture(uTexture, uv).rgb;
   return 1.0 - dot(c, vec3(0.299, 0.587, 0.114));
@@ -97,13 +94,9 @@ void main() {
     float dhdv = (height(vTexCoord + dv) - height(vTexCoord - dv)) * 0.5;
     n = normalize(vec3(-uBumpScale * dhdu, -uBumpScale * dhdv, 1.0));
     baseColor = texture(uTexture, vTexCoord).rgb;
-  } else if (uMapping == 1) {
-    // Normal mapping: the texture stores the tangent-space normal in [0, 1]
-    n = normalize(texture(uTexture, vTexCoord).rgb * 2.0 - 1.0);
-    baseColor = vec3(0.85, 0.65, 0.3);
   } else {
-    // Color texture plus its own normal map: the two describe one surface, so
-    // the paint comes from uTexture and the relief from uNormalMap
+    // Normal mapping: uNormalMap stores the tangent-space normal in [0, 1],
+    // baked from the same height field as uTexture's paint (textures.js)
     n = normalize(texture(uNormalMap, vTexCoord).rgb * 2.0 - 1.0);
     baseColor = texture(uTexture, vTexCoord).rgb;
   }
@@ -167,33 +160,30 @@ function createProgram(vsSource, fsSource) {
   }
 }
 
-let program, uModelView, uProjection, uLightPos, uLight2Pos, uMapping, uMaterial;
-
-try {
-  program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
-} catch (e) {
-  console.error(e.message.replace(/\0/g, ""));
-}
+const program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
 gl.useProgram(program);
-uModelView = gl.getUniformLocation(program, "uModelView");
-uProjection = gl.getUniformLocation(program, "uProjection");
-uLightPos = gl.getUniformLocation(program, "uLightPos");
-uMapping = gl.getUniformLocation(program, "uMapping");
-uLight2Pos = gl.getUniformLocation(program, "uLight2Pos");
-const setLens = lensUniforms(gl, program);
+const uModelView = gl.getUniformLocation(program, "uModelView");
+const uProjection = gl.getUniformLocation(program, "uProjection");
+const uLightPos = gl.getUniformLocation(program, "uLightPos");
+const uLight2Pos = gl.getUniformLocation(program, "uLight2Pos");
+const uMapping = gl.getUniformLocation(program, "uMapping");
+const setLens = lensUniforms(program);
 gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
 gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
 
-// Light colors never change, so set them once
-// Sun intensity is folded into its color (1.25x warm white)
-const SUN_COLOR = [1.25, 1.19, 1.06], FILL_COLOR = [0.12, 0.17, 0.3];
-gl.uniform3fv(gl.getUniformLocation(program, "uLightColor"), SUN_COLOR);
-gl.uniform3fv(gl.getUniformLocation(program, "uLight2Color"), FILL_COLOR);
+// Lights, fixed in the scene: a warm sun off to the side and outside the orbit,
+// so the planet shows a terminator, and a dim cool fill opposite it to lift the
+// night side. The sun's intensity is folded into its color (1.25x warm white).
+// The colors are set once; the positions are carried into view space each frame.
+const SUN = { pos: [12, 5, 3], color: [1.25, 1.19, 1.06] };
+const FILL = { pos: [-12, -5, -3], color: [0.12, 0.17, 0.3] };
+gl.uniform3fv(gl.getUniformLocation(program, "uLightColor"), SUN.color);
+gl.uniform3fv(gl.getUniformLocation(program, "uLight2Color"), FILL.color);
 
-uMaterial = Object.fromEntries(["uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere"]
+const uMaterial = Object.fromEntries(["uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere"]
   .map(name => [name, gl.getUniformLocation(program, name)]));
 
-// Shiny painted metal: the values the shader used to hardcode
+// Shiny painted metal, for parts that don't name a material of their own
 const DEFAULT_MATERIAL = { ka: 0.2, kd: 0.8, ks: 0.5, shininess: 32, bumpScale: 3.0, atmosphere: [0, 0, 0] };
 function setMaterial({ ka, kd, ks, shininess, bumpScale, atmosphere }) {
   gl.uniform1f(uMaterial.uKa, ka);
@@ -202,6 +192,25 @@ function setMaterial({ ka, kd, ks, shininess, bumpScale, atmosphere }) {
   gl.uniform1f(uMaterial.uShininess, shininess);
   gl.uniform1f(uMaterial.uBumpScale, bumpScale);
   gl.uniform3fv(uMaterial.uAtmosphere, atmosphere);
+}
+
+// The shader's uMapping modes
+const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
+
+// The one draw call every part goes through. normalMap is only for
+// NORMAL_MAPPING, where it is sampled on unit 1.
+function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL, normalMap = null) {
+  setMaterial(material);
+  gl.uniformMatrix4fv(uModelView, false, modelView);
+  gl.uniform1i(uMapping, mapping);
+  if (normalMap) {
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, normalMap);
+  }
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.bindVertexArray(mesh.vao);
+  gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
 }
 
 function bindAttribute(name, data, size) {
@@ -227,16 +236,14 @@ const cubeMesh = createMesh(createCube());
 const cylinderMesh = createMesh(createCylinder());
 const coneMesh = createMesh(createCone(48));
 const torusMesh = createMesh(createTorus(0.04, 96, 16, 24));  // saucer rim: thin tube, 24 texture repeats
-
-// Carried over from HW 5: built but not drawn, ready for the cradle below
 const sphereMesh = createMesh(createSphere(28, 28));
-const pyramidMesh = createMesh(createPyramid());
 const planetMesh = createMesh(createSphere(64, 64));  // finer than sphereMesh: it fills the view
 
+// An image file: a 1x1 gray placeholder until it decodes, then the image with mipmaps
 function loadTexture(url) {
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 255, 255]));
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]));
   // A mipmap filter on a texture with no mipmaps is incomplete and samples as black
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 
@@ -252,8 +259,8 @@ function loadTexture(url) {
   return texture;
 }
 
-const brickTexture = loadTexture("textures/brick.png");
-const normalTexture = loadTexture("textures/texture2.jpg");
+const planetTexture = loadTexture("textures/antelope.jpg");
+const copperTexture = loadTexture("textures/mars2.jpg");   // deflector dish
 
 // Upload a procedurally generated image (RGBA bytes from textures.js). No flip:
 // the generators already work in texture coordinates, with v = 0 at the bottom.
@@ -268,8 +275,8 @@ function createDataTexture({ color, size }) {
 }
 
 // Procedural ship skin. The saucer is bump mapped straight from its panel-line
-// image; the hull and nacelles get a color map with a normal map baked from the
-// same height field (mapping mode 3).
+// image; the dome, hull and nacelles get a color map with a normal map baked
+// from the same height field (NORMAL_MAPPING).
 const hullPlating = createPlating({ cols: 8, rows: 12, seed: 11,
   stripe: { at: 0.5, width: 0.07, color: [0.34, 0.37, 0.44], relief: 0.08 } });
 const nacellePlating = createPlating({ cols: 6, rows: 16, seed: 23,
@@ -287,7 +294,7 @@ const nacelleTexture = createDataTexture(nacellePlating);
 const nacelleNormalMap = createDataTexture(normalMap(nacellePlating, 8));
 
 // Sky: 3000 point sprites in a single draw call (stars.js)
-const starPoints = createStarPoints(gl, createProgram, { radius: SKY_RADIUS, restoreProgram: program });
+const starPoints = createStarPoints({ radius: SKY_RADIUS });
 
 // Keep a complete texture on unit 1 even while drawing the modes that ignore it:
 // a sampler with nothing bound counts as incomplete when the draw call is checked
@@ -295,18 +302,9 @@ gl.activeTexture(gl.TEXTURE1);
 gl.bindTexture(gl.TEXTURE_2D, hullNormalMap);
 gl.activeTexture(gl.TEXTURE0);
 
-// HW 5 textures. antelope.jpg is 3.4 MB, so these are fetched on first use
-// rather than on page load; either way the texture starts as a 1x1 placeholder
-// and fills in once the image decodes.
-const textureCache = new Map();
-function getTexture(url) {
-  if (!textureCache.has(url)) textureCache.set(url, loadTexture(url));
-  return textureCache.get(url);
-}
-
 // Animated texture: a muted, looping <video> whose current frame is re-uploaded
-// every render. Video frames are rarely power-of-two and change every frame, so
-// no mipmaps (LINEAR min filter). REPEAT on s lets u wrap around the sphere.
+// every render, so it gets no mipmaps (LINEAR min filter). REPEAT on s lets u
+// wrap around the sphere.
 function loadVideoTexture(sources) {
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -331,33 +329,12 @@ function loadVideoTexture(sources) {
 
 const plasma = loadVideoTexture(["textures/plasma.webm", "textures/plasma.mp4"]);
 
-// HW 5 Newton's cradle: the whole hierarchy is available, but neither it nor
-// its textures exist until getCradle() is called, and nothing draws it yet.
-// To show it, add this to render():
-//   const cradle = getCradle();
-//   cradle.update(t, true, rotation);
-//   drawSceneTree(cradle.root, view, (node, frame) =>
-//     drawPrimitive(node.mesh, node.texture ?? brickTexture, BUMP_MAPPING, multiply(frame, node.shape)));
-let cradleInstance = null;
-function getCradle() {
-  return cradleInstance ??= createNewtonsCradle({
-    cubeMesh,
-    cylinderMesh,
-    sphereMesh,
-    pyramidMesh,
-    pyramidTexture: getTexture("textures/antelope.jpg"),
-    ballTexture: getTexture("textures/mars2.jpg")
-  });
-}
-
-const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2, TEXTURED_NORMAL_MAPPING = 3;
-
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
 
 // Full-window canvas: match the drawing buffer to the displayed size and keep the
 // scene framed. Vertical FOV is 45 deg; on windows narrower than 16:10 it widens so
-// the horizontal FOV never drops below the 16:10 value and both models stay visible.
+// the horizontal FOV never drops below the 16:10 value and the whole orbit stays in frame.
 const BASE_FOVY = Math.PI / 4, MIN_ASPECT = 1.6;
 let projection;
 function resize() {
@@ -372,8 +349,6 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
-const lightWorld = [12, 5, 3];      // sun: off to the side and outside the orbit, so the planet shows a terminator
-const light2World = [-12, -5, -3];  // fill: opposite the sun, lifts the night side
 
 // Interactive controls. While the chase camera has the view, the drag angles
 // steer it around the ship instead of turning the scene (camera.js).
@@ -435,22 +410,19 @@ function updateWashes(t, ship) {
 }
 
 // Everything back the way the page loaded: the ship on its circle, the free
-// camera and its controls, and a fresh scene clock starting at `time`
+// camera's controls, and a fresh scene clock starting at `time`. The chase
+// camera lets go by itself once the ship is back in orbit (camera.js).
 function resetScene(time) {
   dragRotX = 0.35; dragRotY = -0.5;
   camX = 0; camY = 0; camZ = -14;
   sceneStart = time;
   resetFlight();
-  resetCamera();
 }
 resetScene(0);
 
 // Render loop
-let lastTime = 0;
 function render(time) {
   const now = time / 1000;
-  const dt = Math.min(Math.max(now - lastTime, 0), 0.1);   // survives a hidden tab
-  lastTime = now;
   if (engageExpired(now - sceneStart)) resetScene(now);
   const t = now - sceneStart;   // scene clock
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -460,14 +432,14 @@ function render(time) {
   // The flight path is advanced once, here, because the camera needs to know
   // where the ship is before anything is drawn.
   const ship = shipState(t);
-  const view = updateCamera(dt, ship, multiply(translate(camX, camY, camZ), rotation),
+  const view = updateCamera(t, ship, multiply(translate(camX, camY, camZ), rotation),
     { x: dragRotX, y: dragRotY });
 
   gl.uniformMatrix4fv(uProjection, false, projection);
   setLens();
   // The lights are fixed in the scene, so they ride whatever the view is now
-  gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
-  gl.uniform3fv(uLight2Pos, transformPoint(view, light2World));
+  gl.uniform3fv(uLightPos, transformPoint(view, SUN.pos));
+  gl.uniform3fv(uLight2Pos, transformPoint(view, FILL.pos));
 
   plasma.update();
   drawSystem(view, t, ship);

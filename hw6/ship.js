@@ -24,7 +24,9 @@ function strut([a, b]) {
   return { mid: a.map((v, i) => v + d[i] / 2), length: Math.hypot(...d), d };
 }
 
-function drawPrimitive(mesh, texture, mapping, modelView) {
+// material: Phong coefficients etc. (see DEFAULT_MATERIAL in main.js)
+function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL) {
+  setMaterial(material);
   gl.uniformMatrix4fv(uModelView, false, modelView);
   gl.uniform1i(uMapping, mapping);
   gl.bindTexture(gl.TEXTURE_2D, texture);

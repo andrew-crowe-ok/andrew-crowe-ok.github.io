@@ -35,19 +35,36 @@ in vec3 vNormal;
 in vec3 vTangent;
 in vec2 vTexCoord;
 
-uniform vec3 uLightPos;
+// Two lights, as in HW 5: a warm sun and a dim cool fill from the opposite side
+uniform vec3 uLightPos;     // view space
+uniform vec3 uLight2Pos;
+uniform vec3 uLightColor;
+uniform vec3 uLight2Color;
+
+// Per-object material, set by drawPrimitive
+uniform float uKa, uKd, uKs, uShininess;
+uniform float uBumpScale;
+uniform vec3 uAtmosphere;   // rim glow color; black = off
+
 uniform sampler2D uTexture;
 uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = emissive (unlit)
 
 out vec4 fragColor;
-
-const float bumpScale = 3.0;
 
 // convert RGB to luminance (Rec._601 standard, https://en.wikipedia.org/wiki/Rec._601)
 // or you can use a height map texture
 float height(vec2 uv) {
   vec3 c = texture(uTexture, uv).rgb;
   return 1.0 - dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+// Phong diffuse + specular from one light; ambient is added once in main()
+vec3 phong(vec3 N, vec3 V, vec3 lightPos, vec3 lightColor, vec3 baseColor) {
+  vec3 L = normalize(lightPos - vPosition);
+  vec3 R = reflect(-L, N);
+  float diff = max(dot(N, L), 0.0);
+  float spec = diff > 0.0 ? pow(max(dot(V, R), 0.0), uShininess) : 0.0;
+  return lightColor * (uKd * baseColor * diff + uKs * spec);
 }
 
 void main() {
@@ -72,7 +89,7 @@ void main() {
     vec2 dv = vec2(0.0, 1.0 / float(textureSize(uTexture, 0).y));
     float dhdu = (height(vTexCoord + du) - height(vTexCoord - du)) * 0.5;
     float dhdv = (height(vTexCoord + dv) - height(vTexCoord - dv)) * 0.5;
-    n = normalize(vec3(-bumpScale * dhdu, -bumpScale * dhdv, 1.0));
+    n = normalize(vec3(-uBumpScale * dhdu, -uBumpScale * dhdv, 1.0));
     baseColor = texture(uTexture, vTexCoord).rgb;
   } else {
     // Normal mapping: the texture stores the tangent-space normal in [0, 1]
@@ -80,20 +97,22 @@ void main() {
     baseColor = vec3(0.85, 0.65, 0.3);
   }
 
-  vec3 Ka = 0.2 * baseColor;
-  vec3 Kd = 0.8 * baseColor;
-  vec3 Ks = vec3(0.5);
-  float shininess = 32.0;
-
+  vec3 Ngeom = N;              // smooth surface normal, before bump/normal mapping
   N = normalize(TBN * n);
-  vec3 L = normalize(uLightPos - vPosition);
   vec3 V = normalize(-vPosition);
-  vec3 R = reflect(-L, N);
 
-  float diff = max(dot(N, L), 0.0);
-  float spec = diff > 0.0 ? pow(max(dot(V, R), 0.0), shininess) : 0.0;
+  vec3 color = uKa * baseColor
+             + phong(N, V, uLightPos, uLightColor, baseColor)
+             + phong(N, V, uLight2Pos, uLight2Color, baseColor);
 
-  fragColor = vec4(Ka + Kd * diff + Ks * spec, 1.0);
+  // Atmosphere: brightens where the surface turns away from the viewer (the
+  // limb), using the smooth normal so the halo isn't speckled by the bumps,
+  // and only on the sun-facing side
+  float rim = pow(1.0 - max(dot(Ngeom, V), 0.0), 3.0);
+  float day = smoothstep(-0.25, 0.5, dot(Ngeom, normalize(uLightPos - vPosition)));
+  color += uAtmosphere * rim * day;
+
+  fragColor = vec4(color, 1.0);
 }
 `;
 
@@ -137,7 +156,7 @@ function createProgram(vsSource, fsSource) {
   }
 }
 
-let program, uModelView, uProjection, uLightPos, uMapping;
+let program, uModelView, uProjection, uLightPos, uLight2Pos, uMapping, uMaterial;
 
 try {
   program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
@@ -149,7 +168,28 @@ uModelView = gl.getUniformLocation(program, "uModelView");
 uProjection = gl.getUniformLocation(program, "uProjection");
 uLightPos = gl.getUniformLocation(program, "uLightPos");
 uMapping = gl.getUniformLocation(program, "uMapping");
+uLight2Pos = gl.getUniformLocation(program, "uLight2Pos");
 gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
+
+// Light colors never change, so set them once
+// Sun intensity is folded into its color (1.25x warm white)
+const SUN_COLOR = [1.25, 1.19, 1.06], FILL_COLOR = [0.12, 0.17, 0.3];
+gl.uniform3fv(gl.getUniformLocation(program, "uLightColor"), SUN_COLOR);
+gl.uniform3fv(gl.getUniformLocation(program, "uLight2Color"), FILL_COLOR);
+
+uMaterial = Object.fromEntries(["uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere"]
+  .map(name => [name, gl.getUniformLocation(program, name)]));
+
+// Shiny painted metal: the values the shader used to hardcode
+const DEFAULT_MATERIAL = { ka: 0.2, kd: 0.8, ks: 0.5, shininess: 32, bumpScale: 3.0, atmosphere: [0, 0, 0] };
+function setMaterial({ ka, kd, ks, shininess, bumpScale, atmosphere }) {
+  gl.uniform1f(uMaterial.uKa, ka);
+  gl.uniform1f(uMaterial.uKd, kd);
+  gl.uniform1f(uMaterial.uKs, ks);
+  gl.uniform1f(uMaterial.uShininess, shininess);
+  gl.uniform1f(uMaterial.uBumpScale, bumpScale);
+  gl.uniform3fv(uMaterial.uAtmosphere, atmosphere);
+}
 
 function bindAttribute(name, data, size) {
   gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
@@ -287,7 +327,8 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
-const lightWorld = [10, 6, 10];  // outside the orbit, so the ship isn't lit from inside it
+const lightWorld = [12, 5, 3];      // sun: off to the side and outside the orbit, so the planet shows a terminator
+const light2World = [-12, -5, -3];  // fill: opposite the sun, lifts the night side
 
 // Interactive controls
 let dragRotX = 0.35, dragRotY = -0.5;      // mouse drag
@@ -337,6 +378,7 @@ function render(time) {
   const view = translate(camX, camY, camZ);
   gl.uniformMatrix4fv(uProjection, false, projection);
   gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
+  gl.uniform3fv(uLight2Pos, transformPoint(view, light2World));
 
   const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);

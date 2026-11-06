@@ -8,6 +8,13 @@
 // The planet and the orbit are siblings, so the planet's spin never reaches the ship.
 
 const PLANET = { radius: 2.4, spin: 0.08 };                     // spin in rad/s
+
+// Matte rock: almost no ambient (dark night side, sharp terminator), full
+// diffuse, a faint broad specular, gentler bumps than the ship, and a blue
+// atmosphere glow on the sunlit limb
+const PLANET_MATERIAL = {
+  ka: 0.03, kd: 1.0, ks: 0.05, shininess: 8, bumpScale: 1.2, atmosphere: [0.35, 0.6, 1.0]
+};
 const ORBIT = { radius: 4.4, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 
 // Level 0: planetary system at the origin; t is seconds since the page loaded
@@ -20,7 +27,7 @@ function drawSystem(parent, t) {
 function drawPlanet(parent, t) {
   const r = PLANET.radius;
   drawPrimitive(planetMesh, getTexture("textures/antelope.jpg"), BUMP_MAPPING,
-    multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r))));
+    multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r))), PLANET_MATERIAL);
 }
 
 // Orbit: rotateY(a) carries the point (R, 0, 0) around the y axis. With a = -speed*t

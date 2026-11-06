@@ -278,10 +278,10 @@ function createDataTexture({ color, size }) {
 // image; the dome, hull and nacelles get a color map with a normal map baked
 // from the same height field (NORMAL_MAPPING).
 const hullPlating = createPlating({ cols: 8, rows: 12, seed: 11,
-  stripe: { at: 0.5, width: 0.07, color: [0.34, 0.37, 0.44], relief: 0.08 } });
+  stripe: { at: 0.5, width: 0.07, color: [0.20, 0.23, 0.30], relief: 0.08 } });
 const nacellePlating = createPlating({ cols: 6, rows: 16, seed: 23,
-  base: [0.62, 0.65, 0.71],
-  grille: { at: 0.5, width: 0.22, slats: 18, color: [0.30, 0.42, 0.72] } });
+  base: [0.34, 0.37, 0.43],
+  grille: { at: 0.5, width: 0.22, slats: 18, color: [0.13, 0.21, 0.42] } });
 
 const domePlating = createDomeTexture();
 

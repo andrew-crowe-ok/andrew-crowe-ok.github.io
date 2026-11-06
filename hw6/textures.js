@@ -78,7 +78,7 @@ function createSaucerTexture(size = 512, seed = 7) {
 
       // One plate per (spoke, ring) cell, each with its own shade
       const plate = hash(Math.floor(spoke), ringIndex, seed);
-      let g = 0.70 + (plate - 0.5) * 0.16;
+      let g = 0.42 + (plate - 0.5) * 0.10;
 
       // Weathering, and the plates dulling toward the rim
       g *= 0.94 + 0.10 * fbm(u, v, 8, 3, seed + 3);
@@ -106,7 +106,7 @@ function createSaucerTexture(size = 512, seed = 7) {
 //   grille  { at, width, slats, color }   inset strip of slats (the warp grille)
 function createPlating({
   size = 512, cols = 8, rows = 12, seed = 11,
-  base = [0.72, 0.73, 0.75], seamColor = [0.30, 0.32, 0.36],
+  base = [0.40, 0.42, 0.46], seamColor = [0.14, 0.15, 0.18],
   stripe = null, grille = null
 } = {}) {
   const colPx = size / cols, rowPx = size / rows;
@@ -216,7 +216,7 @@ function createDomeTexture(size = 512, seed = 31) {
       const u = (x + 0.5) / size, spoke = u * SPOKES, i = y * size + x;
 
       const grain = fbm(u, v, 12, 3, seed + 2);
-      let g = 0.72 * (0.95 + 0.09 * grain);
+      let g = 0.44 * (0.95 + 0.09 * grain);
       const lines = Math.max(line(ring, ringPx, 1.5), line(spoke, spokePx, 1.5));
       g = mix(g, g * 0.6, lines);
       let r = g * 1.02, b = g * 1.02;
@@ -236,9 +236,9 @@ function createDomeTexture(size = 512, seed = 31) {
         const on = lit > 0.25;
         const k = on ? 0.85 + 0.25 * lit : 0.0;
         const wr = on ? 1.0 * k : 0.08, wg = on ? 0.94 * k : 0.09, wb = on ? 0.80 * k : 0.11;
-        r = mix(mix(r, 0.42, frame), wr, glass);
-        g = mix(mix(g, 0.44, frame), wg, glass);
-        b = mix(mix(b, 0.48, frame), wb, glass);
+        r = mix(mix(r, 0.24, frame), wr, glass);
+        g = mix(mix(g, 0.25, frame), wg, glass);
+        b = mix(mix(b, 0.28, frame), wb, glass);
       }
 
       height[i] = clamp01(h);

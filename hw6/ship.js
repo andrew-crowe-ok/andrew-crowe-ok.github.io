@@ -25,9 +25,9 @@ const SHIP_HALF_EXTENT = [1.5, 0.75, 3.0];
 // The saucer's bumpScale is negative because the shader takes relief from
 // 1 - luminance: its panel lines are dark, so flipping the sign makes them
 // grooves between raised plates instead of ridges.
-const SAUCER_MATERIAL = { ka: 0.22, kd: 0.85, ks: 0.45, shininess: 48, bumpScale: -5.0, atmosphere: [0, 0, 0] };
+const SAUCER_MATERIAL = { ka: 0.22, kd: 0.85, ks: 0.35, shininess: 48, bumpScale: -8.0, atmosphere: [0, 0, 0] };
 // bumpScale is unused with a normal map: the relief comes from the map itself
-const HULL_MATERIAL = { ka: 0.2, kd: 0.85, ks: 0.6, shininess: 64, bumpScale: 1.0, atmosphere: [0, 0, 0] };
+const HULL_MATERIAL = { ka: 0.2, kd: 0.85, ks: 0.35, shininess: 64, bumpScale: 1.0, atmosphere: [0, 0, 0] };
 // The dome's windows are painted bright in its texture, so a high ambient term
 // keeps them glowing on the night side instead of going black with the hull
 const DOME_MATERIAL = { ka: 0.5, kd: 0.7, ks: 0.7, shininess: 96, bumpScale: 1.0, atmosphere: [0, 0, 0] };

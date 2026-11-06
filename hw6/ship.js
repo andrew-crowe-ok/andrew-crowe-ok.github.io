@@ -35,6 +35,42 @@ function drawEngineering(parent) {
   // Dish base sits just behind the nose tip (0.35 ahead of the cap); any further
   // back and the sphere pokes through the shallow cone's face
   drawDeflector(multiply(parent, translate(0, 0, HULL_HALF_LENGTH + 0.32)));
+
+  // Pylons rise from the hull's rear top; side = +1 (right, +x) or -1 (left)
+  for (const side of [1, -1]) drawPylon(multiply(parent, translate(side * 0.6, 0.41, -1.0)), side);
+}
+
+// Level 3: pylon, a thin blade from the hull's top (0.2, 0.2) out to the nacelle's
+// underside (1.0, 0.62), mirrored by side. parent is its midpoint; rotateZ tilts
+// the box's long x axis along that (0.8, 0.42) run, and side mirrors the tilt.
+function drawPylon(parent, side) {
+  const tilted = multiply(parent, rotateZ(side * Math.atan2(0.42, 0.8)));
+  drawPrimitive(cubeMesh, brickTexture, BUMP_MAPPING, multiply(tilted, scale(0.452, 0.03, 0.12)));
+
+  // Nacelle center relative to the pylon's (untilted) midpoint
+  drawNacelle(multiply(parent, translate(side * 0.4, 0.34, -0.1)));
+}
+
+// Level 4: nacelle, a long cylinder along z with a Bussard collector cap in front
+// and a tail cone behind
+const NACELLE_RADIUS = 0.17, NACELLE_HALF_LENGTH = 1.4;
+function drawNacelle(parent) {
+  drawPrimitive(cylinderMesh, normalTexture, NORMAL_MAPPING,
+    multiply(parent, multiply(rotateX(Math.PI / 2), scale(NACELLE_RADIUS, NACELLE_HALF_LENGTH, NACELLE_RADIUS))));
+
+  drawBussard(multiply(parent, translate(0, 0, NACELLE_HALF_LENGTH)));
+
+  // Tail cone: rotateX(-90°) points the apex backward (-z); shift by the half-height
+  drawPrimitive(coneMesh, normalTexture, NORMAL_MAPPING,
+    multiply(parent, multiply(translate(0, 0, -NACELLE_HALF_LENGTH - 0.15),
+      multiply(rotateX(-Math.PI / 2), scale(NACELLE_RADIUS, 0.15, NACELLE_RADIUS)))));
+}
+
+// Level 5: Bussard collector, a slightly elongated sphere on the nacelle's front cap.
+// Placeholder texture; the animated video texture goes here next.
+function drawBussard(parent) {
+  drawPrimitive(sphereMesh, getTexture("textures/mars2.jpg"), BUMP_MAPPING,
+    multiply(parent, scale(NACELLE_RADIUS, NACELLE_RADIUS, 0.24)));
 }
 
 // Level 3: deflector dish, a wide shallow cone with a thin antenna spike, both

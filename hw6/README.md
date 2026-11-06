@@ -1,6 +1,7 @@
 # HW6: Texture Mapping
 
 A WebGL2 scene of a starship orbiting a planet, with an **Engage** button that sends the ship to warp.
+
 Live: https://andrew-crowe-ok.github.io/hw6/
 
 ## Controls
@@ -12,6 +13,10 @@ Live: https://andrew-crowe-ok.github.io/hw6/
 | Scroll wheel, `w` / `s` | Zoom |
 | Arrow keys | Pan |
 | **Engage** | Warp; the scene resets 10 s later |
+
+The Engage button appears after 10 s, 3 clicks, or 1.5 s of holding the mouse down. Clicking, zooming and panning work only in orbit; after Engage, dragging swings the chase camera around the ship.
+
+To run it locally, serve the folder (`python3 -m http.server`, then open http://localhost:8000). Browsers block WebGL texture loads over `file://`.
 
 ## AI assistance
 
@@ -25,18 +30,18 @@ This was an iterative project built with Claude Code. The design evolved over ma
 
 | Primitive | Used for | Mapping |
 |---|---|---|
-| Sphere | Planet; saucer disc; dome; Bussard collector | bump (planet, saucer), normal (dome), animated (collector) |
+| Sphere | Planet; saucer disc; dome; hull nose; Bussard collector | bump (planet, saucer), normal (dome, hull nose), animated (collector) |
 | Torus | Saucer rim | bump |
 | Cone | Deflector dish and antenna (`mars2.jpg`); nacelle caps | bump (deflector), normal (nacelle) |
 | Cylinder | Engineering hull and nacelles | normal |
 | Cube | Neck and pylons | normal |
 
-Curved primitives (sphere, torus, cone) are in `models.js` with per-vertex normals, tangents and UVs.
+All five primitives are built in `models.js` with per-vertex normals, tangents and UVs. The sphere, torus and cone are the curved ones.
 
 ## Texture mapping
 
-- **Bump mapping**: the shader tilts the normal using the gradient of the texture's luminance. The planet (antelope photo) and the saucer (procedural panel lines) use it.
-- **Normal mapping**: the dome, hull and nacelles have a color map plus a tangent-space normal map baked from the same height field (`normalMap()` in `textures.js`), so paint and relief always match.
+- **Bump mapping**: the shader tilts the normal using the gradient of the texture's luminance. The planet (antelope photo), the saucer and its rim (procedural panel lines), and the deflector dish and antenna (`mars2.jpg`) use it.
+- **Normal mapping**: the dome, hull and nacelles (with the neck, pylons and nacelle caps) have a color map plus a tangent-space normal map baked from the same height field (`normalMap()` in `textures.js`), so paint and relief always match.
 - **Animated texture**: the Bussard collectors are lit by a looping plasma video (`textures/plasma.webm` / `.mp4`). The current frame is re-uploaded to the GPU each render (`loadVideoTexture` in `main.js`). The swirl is periodic in u, so it wraps around the sphere without a seam, and loops cleanly in time.
 
 ## Functional approach
@@ -48,8 +53,7 @@ The code uses plain functions and data, with no classes.
 - **Textures as data**: each generator in `textures.js` returns `{ color, height, size }`, which is uploaded to the GPU in one place (`main.js`).
 - **One draw call**: every object goes through `drawPrimitive(mesh, texture, mapping, modelView, material, normalMap)`, so the mapping mode (bump, normal, emissive) is an argument rather than a different code path.
 
-
-### How it was built
+## How it was built
 
 The scene was built in small steps, roughly one commit per feature.
 
@@ -60,7 +64,7 @@ The scene was built in small steps, roughly one commit per feature.
 5. **Planet and lighting:** the ship orbits a spinning sandstone-textured planet, with per-object materials, two colored lights and an atmosphere rim. The leftover boilerplate objects were then removed.
 6. **Texture rework:** the ship's skin was replaced with procedural color maps and normal maps baked from one height field each. The saucer stayed on luminance bump mapping.
 7. **Interaction:** a star field, a Break Orbit button that departs along the tangent at the moment of the press, and finally the Engage warp sequence with a chase camera, fisheye lens and flash.
-8. **Polish:** the delayed Engage reveal, a slightly later jump to warp, click-to-center and wheel zoom.
+8. **Polish:** the delayed Engage reveal, a slightly later jump to warp, click-to-center and wheel zoom, then a review pass on picking, zoom and input handling.
 
 The commit history has the full sequence.
 

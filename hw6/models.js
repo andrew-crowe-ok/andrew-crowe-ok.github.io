@@ -27,7 +27,6 @@ function createCube() {
   return { positions, normals, tangents, texCoords, indices };
 }
 
-
 function createCylinder(segments = 64, uRepeat = 3) {
   const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
 
@@ -78,56 +77,6 @@ function createCylinder(segments = 64, uRepeat = 3) {
   };
 }
 
-
-// Per-triangle tangents from the UV gradient, accumulated and orthogonalized
-// against the normal. Used by meshes whose tangents aren't trivially analytic.
-function computeTangents(positions, normals, texCoords, indices) {
-  const acc = new Float32Array(positions.length);
-
-  for (let i = 0; i < indices.length; i += 3) {
-    const [a, b, c] = [indices[i], indices[i + 1], indices[i + 2]];
-    const e1 = [0, 0, 0], e2 = [0, 0, 0];
-    for (let k = 0; k < 3; k++) {
-      e1[k] = positions[b * 3 + k] - positions[a * 3 + k];
-      e2[k] = positions[c * 3 + k] - positions[a * 3 + k];
-    }
-    const du1 = texCoords[b * 2] - texCoords[a * 2];
-    const dv1 = texCoords[b * 2 + 1] - texCoords[a * 2 + 1];
-    const du2 = texCoords[c * 2] - texCoords[a * 2];
-    const dv2 = texCoords[c * 2 + 1] - texCoords[a * 2 + 1];
-
-    const det = du1 * dv2 - du2 * dv1;
-    if (Math.abs(det) < 1e-12) continue;  // degenerate UVs contribute nothing
-    const r = 1 / det;
-
-    for (const v of [a, b, c])
-      for (let k = 0; k < 3; k++)
-        acc[v * 3 + k] += (e1[k] * dv2 - e2[k] * dv1) * r;
-  }
-
-  const tangents = new Float32Array(positions.length);
-  for (let v = 0; v < positions.length / 3; v++) {
-    const n = [normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]];
-    let t = [acc[v * 3], acc[v * 3 + 1], acc[v * 3 + 2]];
-
-    // Gram-Schmidt: T must be perpendicular to N for the TBN frame
-    const d = t[0] * n[0] + t[1] * n[1] + t[2] * n[2];
-    t = [t[0] - d * n[0], t[1] - d * n[1], t[2] - d * n[2]];
-
-    let len = Math.hypot(...t);
-    if (len < 1e-8) {
-      // No usable UV gradient: pick any axis not parallel to N
-      const fallback = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-      const f = fallback[0] * n[0] + fallback[1] * n[1] + fallback[2] * n[2];
-      t = [fallback[0] - f * n[0], fallback[1] - f * n[1], fallback[2] - f * n[2]];
-      len = Math.hypot(...t);
-    }
-    for (let k = 0; k < 3; k++) tangents[v * 3 + k] = t[k] / len;
-  }
-  return tangents;
-}
-
-
 function createSphere(latBands = 24, longBands = 24) {
   const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
 
@@ -163,39 +112,6 @@ function createSphere(latBands = 24, longBands = 24) {
     indices: new Uint16Array(indices)
   };
 }
-
-
-function createPyramid() {
-  const positions = new Float32Array([
-     0, -1,  0,   1,  1,  1,  -1,  1,  1,   // front
-     0, -1,  0,   1,  1, -1,   1,  1,  1,   // right
-     0, -1,  0,  -1,  1, -1,   1,  1, -1,   // back
-     0, -1,  0,  -1,  1,  1,  -1,  1, -1,   // left
-    -1,  1,  1,   1,  1,  1,   1,  1, -1,  -1,  1, -1  // top base
-  ]);
-  const ny = -1 / Math.hypot(1, 2);
-  const nxz = 2 / Math.hypot(1, 2);
-  const sideNormals = [[0, ny, nxz], [nxz, ny, 0], [0, ny, -nxz], [-nxz, ny, 0]];
-  const topNormal = [0, 1, 0];
-  const normals = new Float32Array([
-    ...sideNormals.flatMap(n => [...n, ...n, ...n]),
-    ...topNormal, ...topNormal, ...topNormal, ...topNormal
-  ]);
-  const texCoords = new Float32Array([
-    0.5, 0.0,  1.0, 1.0,  0.0, 1.0,
-    0.5, 0.0,  1.0, 1.0,  0.0, 1.0,
-    0.5, 0.0,  1.0, 1.0,  0.0, 1.0,
-    0.5, 0.0,  1.0, 1.0,  0.0, 1.0,
-    0.0, 0.0,  1.0, 0.0,  1.0, 1.0,  0.0, 1.0
-  ]);
-  const indices = new Uint16Array([
-     0,  1,  2,   3,  4,  5,   6,  7,  8,   9, 10, 11,
-    12, 13, 14,  12, 14, 15
-  ]);
-  const tangents = computeTangents(positions, normals, texCoords, indices);
-  return { positions, normals, tangents, texCoords, indices };
-}
-
 
 // Torus in the xz plane: ring radius 1, tube radius tubeRatio (scale it uniformly).
 // theta goes around the ring (u), phi around the tube (v), same orientation as the
@@ -234,7 +150,6 @@ function createTorus(tubeRatio = 0.25, ringSegments = 64, tubeSegments = 24, uRe
     indices: new Uint16Array(indices)
   };
 }
-
 
 // Cone along y: base radius 1 at y = -1, apex at y = +1, with a base cap.
 // The side is a strip of quads like the cylinder, but the top row collapses to the

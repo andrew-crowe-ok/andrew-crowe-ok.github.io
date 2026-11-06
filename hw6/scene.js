@@ -25,7 +25,7 @@ const PLANET_MATERIAL = {
 };
 const ORBIT = { radius: 4.4, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 
-// Level 0: planetary system at the origin; t is seconds since the page loaded.
+// Level 0: planetary system at the origin; t is the scene clock (main.js).
 // `ship` is this frame's shipState(): the camera needs it before anything is
 // drawn, so main.js advances the flight path and passes the result down.
 function drawSystem(parent, t, ship) {
@@ -38,7 +38,7 @@ function drawSystem(parent, t, ship) {
   // space; they move past the eye the opposite way to the ship. The streaks
   // draw out with the lens as it opens (camera.js).
   const o = transformPoint(plane, [0, 0, 0]);
-  const streak = vmul(sub(o, transformPoint(plane, ship.streak)), lensFisheye);
+  const streak = vmul(vsub(o, transformPoint(plane, ship.streak)), lensFisheye);
   drawStarfield(multiply(multiply(plane, translate(...ship.sky)), rotateX(-ORBIT.tilt)), t, streak);
   drawPlanet(parent, t);
   drawOrbit(plane, ship);
@@ -46,16 +46,18 @@ function drawSystem(parent, t, ship) {
 
 // Sky: the point sprites from stars.js, one draw call. Depth writes are off, so
 // the stars never occlude anything -- everything else simply paints over them.
+// The stars have their own program, so the scene's is put back afterwards.
 function drawStarfield(parent, t, streak) {
   gl.depthMask(false);
   starPoints.draw(projection, parent, t, streak);
   gl.depthMask(true);
+  gl.useProgram(program);
 }
 
 // Planet: a fine sphere wearing the antelope photo, bump-mapped from its luminance
 function drawPlanet(parent, t) {
   const r = PLANET.radius;
-  drawPrimitive(planetMesh, getTexture("textures/antelope.jpg"), BUMP_MAPPING,
+  drawPrimitive(planetMesh, planetTexture, BUMP_MAPPING,
     multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r))), PLANET_MATERIAL);
 }
 
@@ -80,7 +82,7 @@ function drawPlanet(parent, t) {
 // at u = 0 and u = 1. So p matches the circle's position, velocity AND
 // acceleration where it leaves, and the line's where it arrives: no kink and no
 // jolt at either end. Measured over the whole departure the ship's speed stays
-// within 1%-3% of its orbital speed, and it ends on exactly the tangent the
+// within 3% of its orbital speed, and it ends on exactly the tangent the
 // press defined -- not a spiral that would keep turning past the heading the
 // ship had when the button went down.
 //
@@ -96,7 +98,7 @@ function drawPlanet(parent, t) {
 // scene resets, and the planet falls away at the ship's true speed.
 //
 // ENGAGE.reset seconds after the press, main.js puts the whole scene back the
-// way it loaded (resetFlight below, resetCamera in camera.js).
+// way it loaded (resetScene, which calls resetFlight below).
 // ---------------------------------------------------------------------------
 
 const ENGAGE = {
@@ -113,9 +115,6 @@ const ORBIT_SPEED = ORBIT.radius * ORBIT.speed;   // units/s along the circle
 const orbitAngle = t => -ORBIT.speed * t;
 const orbitPoint = a => [ORBIT.radius * Math.cos(a), 0, -ORBIT.radius * Math.sin(a)];
 const orbitForward = a => [Math.sin(a), 0, Math.cos(a)];
-
-const vadd = (a, b) => a.map((v, i) => v + b[i]);
-const vmul = (a, k) => a.map(v => v * k);
 
 // Quintic smootherstep and its slope: w(0)=0, w(1)=1, w'=w''=0 at both ends
 const smootherstep = u => u <= 0 ? 0 : u >= 1 ? 1 : u * u * u * (u * (6 * u - 15) + 10);
@@ -141,16 +140,15 @@ function resetFlight() { flight = { mode: "orbit" }; engagePending = false; }
 
 // Where a straight leg has reached, and how fast, tau seconds after the press:
 // orbital speed, then warp speed from ENGAGE.warpAt on. `warpTau` is the time
-// since that jump (null before it), `sky` how far the
-// star sphere has drifted along with it, and `streak` the velocity the stars
-// are drawn stretched by: the ship's speed through the drifting sky, at warp
-// only.
+// since that jump (null before it), `sky` how far the star sphere has drifted
+// along with it, and `streak` the velocity the stars are drawn stretched by:
+// the ship's speed through the drifting sky, at warp only.
 const NO_DRIFT = [0, 0, 0];
 function straightLeg(f, tau) {
   const warp = tau >= ENGAGE.warpAt;
   const warpTau = warp ? tau - ENGAGE.warpAt : null;
   const extraSpeed = warp ? ORBIT_SPEED * (ENGAGE.warp - 1) : 0;
-  const extraDist = warp ? extraSpeed * (tau - ENGAGE.warpAt) : 0;   // beyond orbital speed
+  const extraDist = warp ? extraSpeed * warpTau : 0;   // beyond orbital speed
   const speed = ORBIT_SPEED + extraSpeed;
   return {
     warpTau,
@@ -190,12 +188,12 @@ function shipState(t) {
 
   const u = tau / ENGAGE.blend;
   const w = smootherstep(u), dw = smootherslope(u) / ENGAGE.blend;
-  const gap = sub(line.pos, orb.pos);
+  const gap = vsub(line.pos, orb.pos);
 
   const pos = vadd(orb.pos, vmul(gap, w));
   // d/dt of the blend: the two paths' own velocities, plus the weight's drift.
   // Both extra terms die at u = 1, which is what makes the arrival smooth.
-  const vel = vadd(vadd(orb.vel, vmul(sub(line.vel, orb.vel), w)), vmul(gap, dw));
+  const vel = vadd(vadd(orb.vel, vmul(vsub(line.vel, orb.vel), w)), vmul(gap, dw));
 
   // At u = 1 the blend already equals the line exactly, so the handover is a no-op
   if (u >= 1) flight = { ...flight, mode: "free" };
@@ -203,12 +201,11 @@ function shipState(t) {
   return { pos, heading: headingOf(vel, a), warpTau: line.warpTau, sky: line.sky, streak: line.streak };
 }
 
-// Level 1: place the ship on the path shipState() worked out.
-// translate(p) * rotateY(a) is the same frame as the old
-// rotateY(a) * translate(R, 0, 0) when p is a point on the circle, and it
-// keeps working for a ship that has left it.
+// Level 1: place the ship on the path shipState() worked out. On the circle,
+// translate(p) * rotateY(a) equals rotateY(a) * translate(R, 0, 0), and unlike
+// that form it still holds once the ship has left the circle.
 function drawOrbit(parent, { pos, heading }) {
   const frame = multiply(parent, multiply(translate(...pos), rotateY(heading)));
-  const s = ORBIT.shipScale;  // uniform, so the ship's normals stay correct
+  const s = ORBIT.shipScale;
   drawShip(multiply(frame, scale(s, s, s)));
 }

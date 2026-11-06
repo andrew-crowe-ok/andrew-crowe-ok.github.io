@@ -3,7 +3,8 @@
 //
 // A generator returns { color, height, size }:
 //   color  = RGBA bytes, ready for texImage2D
-//   height = Float32 relief in [0, 1] over the same pixels
+//   height = Float32 relief in [0, 1] over the same pixels, for the parts that
+//            are normal mapped (the bump-mapped saucer's has none)
 // normalMap() bakes a height field into a tangent-space normal map, so a part's
 // color map and normal map always describe one and the same surface.
 //
@@ -195,20 +196,22 @@ function normalMap({ height, size }, strength = 7) {
 }
 
 // Bridge dome: fine ring-and-spoke plating with a band of viewport windows
-// around the dome's widest circle (v = 0.5 on the sphere). Some windows are
-// dark; the lit ones are nearly white, and the dome's high ambient makes them
+// running around it. Some windows are dark; the lit ones are nearly white, and the dome's high ambient makes them
 // read as lit from inside rather than reflecting the sun.
 function createDomeTexture(size = 512, seed = 31) {
   const WINDOWS = 28, RINGS = 14, SPOKES = 24;
   const ringPx = size / RINGS, spokePx = size / SPOKES;
   const color = new Uint8Array(size * size * 4);
   const height = new Float32Array(size * size);
-  const BAND = 0.03;  // half-height of the window band, in v
+  // The window band's center and half-height, in v. The dome is half buried in
+  // the saucer and only clears its surface above v = 0.58, so the band sits
+  // above the dome's widest circle (v = 0.5), which is out of sight.
+  const BAND_V = 0.64, BAND = 0.03;
 
   for (let y = 0; y < size; y++) {
     const v = (y + 0.5) / size, ring = v * RINGS;
-    // Distance from the band's edge, in units of the band's own half-height
-    const dv = Math.abs(v - 0.5) / BAND;
+    // Distance from the band's center line, in half-heights (1 = its edge)
+    const dv = Math.abs(v - BAND_V) / BAND;
     for (let x = 0; x < size; x++) {
       const u = (x + 0.5) / size, spoke = u * SPOKES, i = y * size + x;
 

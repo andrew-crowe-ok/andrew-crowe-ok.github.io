@@ -86,7 +86,7 @@ function drawPlanet(parent, t) {
 // press defined -- not a spiral that would keep turning past the heading the
 // ship had when the button went down.
 //
-// ENGAGE.warpAt seconds after the press -- just after the departure blend
+// ENGAGE.warpAt seconds after the press -- a beat after the departure blend
 // lands on the line -- the ship jumps straight from orbital speed to
 // ENGAGE.warp times it, with no ramp. The camera's dolly zoom into the
 // fisheye, the star streaks and the warp flash (camera.js, stars.js, main.js)
@@ -103,9 +103,9 @@ function drawPlanet(parent, t) {
 
 const ENGAGE = {
   blend: 2.5,       // s, length of the departure blend
-  warpAt: 2.65,     // s after the press that the ship jumps to warp
+  warpAt: 3.2,      // s after the press that the ship jumps to warp
   warp: 10,         // warp speed, in multiples of orbital speed
-  skyFollow: 0.56,  // share of warp's extra distance the sky drifts along:
+  skyFollow: 0.525, // share of warp's extra distance the sky drifts along:
                     //   enough that the reset catches the ship 43 units out,
                     //   just short of the star sphere's 45
   reset: 10         // s from the press until the scene resets

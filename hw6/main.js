@@ -351,41 +351,118 @@ window.addEventListener("resize", resize);
 resize();
 
 // Interactive controls. While the chase camera has the view, the drag angles
-// steer it around the ship instead of turning the scene (camera.js).
+// steer it around the ship instead of turning the scene, and clicks, the
+// wheel and the keys are ignored (camera.js).
 let dragRotX, dragRotY;      // mouse drag
-let camX, camY, camZ;        // arrow keys, w, s
+let camX, camY;              // arrow keys; w, s and the wheel zoom (camera.js)
 // The scene's own clock starts here, so a reset restarts the orbit and the
 // planet's spin along with everything else
 let sceneStart = 0;
 
-let mouseDown = false, lastX, lastY;
-canvas.addEventListener("mousedown", e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
+// A press that strays more than CLICK_SLOP pixels from where it started is a
+// drag, even if it comes back, and its release is not a click
+const CLICK_SLOP = 5;
+let mouseDown = false, dragged = false, lastX, lastY, pressX, pressY;
+canvas.addEventListener("mousedown", e => {
+  mouseDown = true; dragged = false;
+  lastX = pressX = e.clientX; lastY = pressY = e.clientY;
+});
 window.addEventListener("mouseup", () => mouseDown = false);
 window.addEventListener("mousemove", e => {
   if (!mouseDown) return;
   dragRotY += (e.clientX - lastX) * 0.01;
   dragRotX += (e.clientY - lastY) * 0.01;
   lastX = e.clientX; lastY = e.clientY;
+  if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > CLICK_SLOP) dragged = true;
 });
 
+const CONTROL_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "s"];
 document.addEventListener("keydown", e => {
+  if (!CONTROL_KEYS.includes(e.key)) return;
+  e.preventDefault();         // arrows would scroll the page even when ignored
+  if (offOrbit()) return;
   const step = 0.2;
   switch (e.key) {
     case "ArrowUp": camY -= step; break;
     case "ArrowDown": camY += step; break;
     case "ArrowLeft": camX += step; break;
     case "ArrowRight": camX -= step; break;
-    case "w": camZ += step; break;
-    case "s": camZ -= step; break;
-    default: return;
+    case "w": zoomKey(-1); break;
+    case "s": zoomKey(1); break;
   }
-  e.preventDefault();
 });
+
+// Clicking the ship or the planet centers the view on it. Picking reads the
+// view and ship of the last frame drawn, which is what was clicked on.
+let lastView = null, lastShip = null;
+canvas.addEventListener("click", e => {
+  if (!lastView || offOrbit() || dragged) return;
+  const r = canvas.getBoundingClientRect();
+  const hit = pickObject(2 * (e.clientX - r.left) / r.width - 1,
+    1 - 2 * (e.clientY - r.top) / r.height, lastView, lastShip);
+  if (!hit) return;
+  focusOn(hit, performance.now() / 1000, [camX, camY]);
+  camX = 0; camY = 0;
+});
+
+// The wheel zooms. Line and page deltas are turned into pixels first, a line
+// at Chrome's 100 px per 3-line notch, so a notch zooms alike in every browser.
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();         // also keeps a trackpad pinch from zooming the page
+  if (offOrbit()) return;
+  zoomWheel(e.deltaY * (e.deltaMode === 1 ? 100 / 3 : e.deltaMode === 2 ? canvas.clientHeight : 1));
+}, { passive: false });
 
 // Engage. The press is handled on the next frame, where the clock is known
 // (scene.js), and the button stays down until the scene resets.
 const engageButton = document.getElementById("engageButton");
 engageButton.addEventListener("click", requestEngage);
+
+// The button is held back until the viewer has had a moment with the scene.
+// It fades in (index.html) once any of these is met since the scene started:
+//   after   seconds of scene time
+//   clicks  presses anywhere on the page
+//   holdMs  ms of the left button held down in total, across presses -- so
+//           dragging to look around brings it up too
+// A reset hides it again and starts every count over.
+const REVEAL = { after: 10, clicks: 3, holdMs: 1500 };
+const reveal = { shown: false, clicks: 0, heldMs: 0, holdStart: null };
+function endHold() {
+  if (reveal.holdStart === null) return;
+  reveal.heldMs += performance.now() - reveal.holdStart;
+  reveal.holdStart = null;
+}
+// The hold follows the left button's own bit in e.buttons. With another button
+// already down, pressing or releasing the left one fires pointermove rather
+// than pointerdown or pointerup, and the last pointerup names whichever button
+// went up last, so e.button alone would lose track of it.
+function trackHold(e) {
+  if (!(e.buttons & 1)) endHold();
+  else if (reveal.holdStart === null) reveal.holdStart = performance.now();
+}
+window.addEventListener("pointerdown", e => { reveal.clicks++; trackHold(e); });
+window.addEventListener("pointermove", trackHold);
+window.addEventListener("pointerup", trackHold);
+window.addEventListener("pointercancel", endHold);
+window.addEventListener("blur", endHold);
+
+function resetReveal() {
+  reveal.shown = false;
+  reveal.clicks = 0;
+  reveal.heldMs = 0;
+  // A hold that spans the reset counts only from here on
+  if (reveal.holdStart !== null) reveal.holdStart = performance.now();
+  engageButton.classList.remove("revealed");
+}
+function updateReveal(t) {
+  if (reveal.shown) return;
+  const held = reveal.heldMs +
+    (reveal.holdStart === null ? 0 : performance.now() - reveal.holdStart);
+  if (t >= REVEAL.after || reveal.clicks >= REVEAL.clicks || held > REVEAL.holdMs) {
+    reveal.shown = true;
+    engageButton.classList.add("revealed");
+  }
+}
 
 // The two washes over the canvas (index.html), set once a frame:
 //   flash  white-blue, at the jump to warp: up in FLASH.rise, then dying away
@@ -414,15 +491,20 @@ function updateWashes(t, ship) {
 // camera lets go by itself once the ship is back in orbit (camera.js).
 function resetScene(time) {
   dragRotX = 0.35; dragRotY = -0.5;
-  camX = 0; camY = 0; camZ = -14;
+  camX = 0; camY = 0;
+  resetFreeCamera();
   sceneStart = time;
   resetFlight();
+  resetReveal();
 }
 resetScene(0);
 
 // Render loop
+let lastNow = 0;
 function render(time) {
   const now = time / 1000;
+  const dt = Math.min(now - lastNow, 0.1);   // capped, so a stalled tab doesn't lurch
+  lastNow = now;
   if (engageExpired(now - sceneStart)) resetScene(now);
   const t = now - sceneStart;   // scene clock
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -432,8 +514,9 @@ function render(time) {
   // The flight path is advanced once, here, because the camera needs to know
   // where the ship is before anything is drawn.
   const ship = shipState(t);
-  const view = updateCamera(t, ship, multiply(translate(camX, camY, camZ), rotation),
+  const view = updateCamera(t, ship, freeView(now, dt, ship, rotation, [camX, camY]),
     { x: dragRotX, y: dragRotY });
+  lastView = view; lastShip = ship;
 
   gl.uniformMatrix4fv(uProjection, false, projection);
   setLens();
@@ -444,6 +527,7 @@ function render(time) {
   plasma.update();
   drawSystem(view, t, ship);
   updateWashes(t, ship);
+  updateReveal(t);
   engageButton.disabled = offOrbit();
   requestAnimationFrame(render);
 }

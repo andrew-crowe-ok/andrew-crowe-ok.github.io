@@ -14,6 +14,31 @@ function drawPrimitive(mesh, texture, mapping, modelView) {
 // Level 1: whole ship. Rotating the parent frame moves every part.
 function drawShip(parent) {
   drawSaucer(multiply(parent, translate(0, 0.6, 0.9)));
+  drawEngineering(multiply(parent, translate(0, -0.2, -0.8)));
+}
+
+// Level 2: engineering hull. The cylinder mesh runs along y, so rotateX(90°)
+// lays it along +z: radius 0.35, half-length 1.4 (spans z = -1.4..1.4 locally).
+const HULL_RADIUS = 0.35, HULL_HALF_LENGTH = 1.4;
+function drawEngineering(parent) {
+  const alongZ = multiply(parent, rotateX(Math.PI / 2));
+  drawPrimitive(cylinderMesh, normalTexture, NORMAL_MAPPING,
+    multiply(alongZ, scale(HULL_RADIUS, HULL_HALF_LENGTH, HULL_RADIUS)));
+
+  // Rounded nose: a sphere the hull's radius, centered on the front cap
+  drawPrimitive(sphereMesh, normalTexture, NORMAL_MAPPING,
+    multiply(parent, multiply(translate(0, 0, HULL_HALF_LENGTH), scale(HULL_RADIUS, HULL_RADIUS, HULL_RADIUS))));
+
+  // Neck midpoint sits above and ahead of the hull center
+  drawNeck(multiply(parent, translate(0, 0.5, 0.5)));
+}
+
+// Level 3: neck, a thin fin from the hull's top up to the saucer's underside.
+// Its ends are (0, -0.25, -0.3) and (0, 0.25, 0.3) here, so tilt the box's
+// y axis toward +z by atan2(0.6, 0.5).
+function drawNeck(parent) {
+  const tilted = multiply(parent, rotateX(Math.atan2(0.6, 0.5)));
+  drawPrimitive(cubeMesh, brickTexture, BUMP_MAPPING, multiply(tilted, scale(0.08, 0.45, 0.25)));
 }
 
 // Level 2: saucer section, a squashed sphere

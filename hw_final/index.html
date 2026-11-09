@@ -51,17 +51,19 @@
     .pad, #touchLaunch {
       position: absolute; bottom: calc(16px + env(safe-area-inset-bottom));
       display: flex; align-items: center; justify-content: center;
-      font: 700 16px system-ui, sans-serif; letter-spacing: 0.08em; color: #fff;
+      font: 700 20px system-ui, sans-serif; letter-spacing: 0.08em; color: #fff;
       background: rgba(20, 24, 36, 0.55); border: 2px solid rgba(255, 255, 255, 0.35);
       backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
       transition: background 0.05s, transform 0.05s;
     }
-    .pad { width: min(34vw, 180px); height: 72px; border-radius: 18px; pointer-events: none; }
-    #touchLeft .pad { left: calc(16px + env(safe-area-inset-left)); }
-    #touchRight .pad { right: calc(16px + env(safe-area-inset-right)); }
+    /* pads fill each half up to the launch button (104px wide, centered) */
+    .pad { width: min(calc(50vw - 12px - 60px), 280px); height: clamp(96px, 14vh, 120px);
+           border-radius: 20px; pointer-events: none; }
+    #touchLeft .pad { left: calc(12px + env(safe-area-inset-left)); }
+    #touchRight .pad { right: calc(12px + env(safe-area-inset-right)); }
     #touchLaunch {
       left: 50%; transform: translateX(-50%); z-index: 1;
-      width: 84px; height: 84px; border-radius: 50%; padding: 0; font-size: 13px;
+      width: 104px; height: 104px; border-radius: 50%; padding: 0; font-size: 16px;
       touch-action: none; cursor: pointer;
     }
     .zone.down .pad, #touchLaunch.down { background: rgba(242, 193, 78, 0.85); color: #1a1a1a; }

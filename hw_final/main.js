@@ -1,12 +1,15 @@
-// Input + frame loop.
+// Input (keyboard and touch), the HUD, and the frame loop that ties
+// physics.js and render.js together.
 
-const KEYS = {      // key -> flipper index
+// ---------- keyboard ----------
+
+const FLIPPER_KEYS = {      // key code -> flipper index (0 left, 1 right)
   ArrowLeft: 0, KeyZ: 0, ShiftLeft: 0,
   ArrowRight: 1, Slash: 1, ShiftRight: 1,
 };
 const PLUNGER_KEYS = new Set(["Space", "ArrowDown"]);
 
-// Light up the on-screen key caps while held (Shift and ArrowDown share a cap)
+// Keys without their own on-screen cap light up the cap for the same action
 const CAP_FOR = { ShiftLeft: "KeyZ", ShiftRight: "Slash", ArrowDown: "Space" };
 function showKey(code, down) {
   const cap = document.querySelector(`kbd[data-code="${CAP_FOR[code] ?? code}"]`);
@@ -14,44 +17,21 @@ function showKey(code, down) {
 }
 
 function onKey(e, down) {
+  if (down) setTouchMode(false);
   if (e.repeat) return;
   showKey(e.code, down);
-  if (e.code in KEYS) setFlipper(KEYS[e.code], down);
+  if (e.code in FLIPPER_KEYS) setFlipper(FLIPPER_KEYS[e.code], down);
   else if (PLUNGER_KEYS.has(e.code)) setPlunger(down);
   else return;
-  e.preventDefault();
+  e.preventDefault();   // stop Space and the arrows from scrolling the page
 }
 window.addEventListener("keydown", e => onKey(e, true));
 window.addEventListener("keyup", e => onKey(e, false));
 
 // ---------- touch ----------
 
-// Tell the renderer how much of the screen the HUD and control overlays cover
-function measureInsets() {
-  const visible = [...document.querySelectorAll("#hud, #controls, .pad, #touchLaunch")]
-    .map(el => el.getBoundingClientRect()).filter(r => r.height > 0);
-  const h = window.innerHeight;
-  // Touch pads in landscape sit beside the table, so they don't need dodging
-  const sidePads = document.body.classList.contains("touch") && window.innerWidth > h;
-  screenInsets = {
-    top: Math.max(0, ...visible.filter(r => r.top < h / 2).map(r => r.bottom)),
-    bottom: sidePads ? 0 : Math.max(0, ...visible.filter(r => r.top >= h / 2).map(r => h - r.top)),
-  };
-}
-window.addEventListener("resize", measureInsets);
-
-// Show the touch or keyboard controls, whichever was used last
-function setTouchMode(on) {
-  document.body.classList.toggle("touch", on);
-  measureInsets();
-}
-setTouchMode(matchMedia("(pointer: coarse)").matches);
-window.addEventListener("pointerdown", e => { if (e.pointerType === "touch") setTouchMode(true); }, true);
-window.addEventListener("keydown", () => setTouchMode(false));
-window.addEventListener("contextmenu", e => e.preventDefault());
-
-// Multi-touch hold: a control stays down while any finger is on it, and
-// pointer capture keeps a finger bound to the control it started on
+// A control that is held while any finger is on it. Pointer capture keeps
+// each finger tied to the control it first touched, even if it slides off.
 function holdControl(el, onChange) {
   const fingers = new Set();
   el.addEventListener("pointerdown", e => {
@@ -69,15 +49,42 @@ function holdControl(el, onChange) {
   el.addEventListener("pointercancel", release);
 }
 
-holdControl(document.getElementById("touchLeft"), down => {
-  setFlipper(0, down);
-  if (down) navigator.vibrate?.(8);
-});
-holdControl(document.getElementById("touchRight"), down => {
-  setFlipper(1, down);
-  if (down) navigator.vibrate?.(8);
-});
+const flipperControl = i => down => {
+  setFlipper(i, down);
+  if (down) navigator.vibrate?.(8);   // short buzz where supported (Android)
+};
+holdControl(document.getElementById("touchLeft"), flipperControl(0));
+holdControl(document.getElementById("touchRight"), flipperControl(1));
 holdControl(document.getElementById("touchLaunch"), setPlunger);
+
+window.addEventListener("pointerdown", e => { if (e.pointerType === "touch") setTouchMode(true); }, true);
+window.addEventListener("contextmenu", e => e.preventDefault());   // long-press menu
+
+// ---------- overlay layout ----------
+
+// CSS px at the top and bottom of the screen covered by the HUD and controls;
+// the renderer frames the table in the space between them
+let screenInsets = { top: 0, bottom: 0 };
+
+function measureInsets() {
+  const rects = [...document.querySelectorAll("#hud, #controls, .pad, #touchLaunch")]
+    .map(el => el.getBoundingClientRect()).filter(r => r.height > 0);   // skip hidden ones
+  const h = window.innerHeight;
+  // In landscape the touch pads sit beside the table, so they don't need room
+  const padsBeside = document.body.classList.contains("touch") && window.innerWidth > h;
+  screenInsets = {
+    top: Math.max(0, ...rects.filter(r => r.top < h / 2).map(r => r.bottom)),
+    bottom: padsBeside ? 0 : Math.max(0, ...rects.filter(r => r.top >= h / 2).map(r => h - r.top)),
+  };
+}
+window.addEventListener("resize", measureInsets);
+
+// Show the touch or keyboard controls, whichever was used last
+function setTouchMode(on) {
+  if (document.body.classList.contains("touch") === on) return;
+  document.body.classList.toggle("touch", on);
+  measureInsets();
+}
 
 // ---------- HUD ----------
 
@@ -89,16 +96,20 @@ function updateHud() {
   hud.textContent = `Score ${game.score}   Balls ${game.balls}   ${status}`;
 }
 
+// ---------- start ----------
+
+document.body.classList.toggle("touch", matchMedia("(pointer: coarse)").matches);
 newGame();
 updateHud();
-measureInsets();   // the HUD has its height now
+measureInsets();   // after the HUD has text, so it has a height
+
 let last = performance.now();
 function frame(now) {
-  // Clamp so a background tab doesn't hand physics a huge step
+  // Cap the step so returning from a background tab doesn't jump the ball
   const dt = Math.min((now - last) / 1000, 1 / 30);
   last = now;
   stepPhysics(dt);
-  render();
+  render(screenInsets);
   updateHud();
   requestAnimationFrame(frame);
 }

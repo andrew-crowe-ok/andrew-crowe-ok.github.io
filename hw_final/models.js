@@ -1,3 +1,11 @@
+// Unit primitives, all centered on the origin:
+//   cube      spans [-1, 1] on every axis
+//   cylinder  radius 1, axis along y from -1 to 1, capped
+//   sphere    radius 1
+// Each returns { positions, normals, tangents, texCoords, indices }. The current
+// renderer only uses positions and normals; texCoords and tangents are there for
+// texture and normal mapping.
+
 function createCube() {
   const positions = new Float32Array([
     -1, -1,  1,   1, -1,  1,   1,  1,  1,  -1,  1,  1,   // front
@@ -103,93 +111,6 @@ function createSphere(latBands = 24, longBands = 24) {
       indices.push(first, first + 1, second, second, first + 1, second + 1);
     }
   }
-
-  return {
-    positions: new Float32Array(positions),
-    normals: new Float32Array(normals),
-    tangents: new Float32Array(tangents),
-    texCoords: new Float32Array(texCoords),
-    indices: new Uint16Array(indices)
-  };
-}
-
-// Torus in the xz plane: ring radius 1, tube radius tubeRatio (scale it uniformly).
-// theta goes around the ring (u), phi around the tube (v), same orientation as the
-// cylinder: T = d(pos)/d(theta) along the ring, B = cross(N, T) along the tube.
-function createTorus(tubeRatio = 0.25, ringSegments = 64, tubeSegments = 24, uRepeat = 8) {
-  const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
-
-  for (let i = 0; i <= ringSegments; i++) {
-    const u = i / ringSegments, theta = 2 * Math.PI * u;
-    const st = Math.sin(theta), ct = Math.cos(theta);
-    for (let j = 0; j <= tubeSegments; j++) {
-      const v = j / tubeSegments, phi = 2 * Math.PI * v;
-      const sp = Math.sin(phi), cp = Math.cos(phi);
-      const r = 1 + tubeRatio * cp;  // distance from the y axis
-      positions.push(r * st, tubeRatio * sp, r * ct);
-      normals.push(cp * st, sp, cp * ct);
-      tangents.push(ct, 0, -st);
-      texCoords.push(u * uRepeat, v);
-    }
-  }
-
-  // Seam vertices are duplicated (i = ringSegments, j = tubeSegments) so u and v wrap cleanly
-  const row = tubeSegments + 1;
-  for (let i = 0; i < ringSegments; i++) {
-    for (let j = 0; j < tubeSegments; j++) {
-      const a = i * row + j, b = a + row;
-      indices.push(a, b, b + 1, a, b + 1, a + 1);
-    }
-  }
-
-  return {
-    positions: new Float32Array(positions),
-    normals: new Float32Array(normals),
-    tangents: new Float32Array(tangents),
-    texCoords: new Float32Array(texCoords),
-    indices: new Uint16Array(indices)
-  };
-}
-
-// Cone along y: base radius 1 at y = -1, apex at y = +1, with a base cap.
-// The side is a strip of quads like the cylinder, but the top row collapses to the
-// apex. Each column keeps its own apex vertex, so u (and the normal) stay per-column
-// instead of all meeting at one smeared point; one triangle per quad is degenerate.
-function createCone(segments = 48, uRepeat = 1) {
-  const positions = [], normals = [], tangents = [], texCoords = [], indices = [];
-  const ny = 1 / Math.sqrt(5), nr = 2 / Math.sqrt(5);  // slant normal for radius 1, height 2
-
-  for (let i = 0; i <= segments; i++) {
-    const u = i / segments, theta = 2 * Math.PI * u;
-    const s = Math.sin(theta), c = Math.cos(theta);
-    for (const y of [-1, 1]) {
-      const r = (1 - y) / 2;  // 1 at the base, 0 at the apex
-      positions.push(r * s, y, r * c);
-      normals.push(nr * s, ny, nr * c);
-      tangents.push(c, 0, -s);
-      texCoords.push(u * uRepeat, (y + 1) / 2);
-    }
-  }
-  for (let i = 0; i < segments; i++) {
-    const k = 2 * i;
-    indices.push(k, k + 2, k + 3, k, k + 3, k + 1);
-  }
-
-  // Base cap: planar mapping of x, z, facing -y
-  const center = positions.length / 3;
-  positions.push(0, -1, 0);
-  normals.push(0, -1, 0);
-  tangents.push(1, 0, 0);
-  texCoords.push(0.5, 0.5);
-  for (let i = 0; i <= segments; i++) {
-    const theta = 2 * Math.PI * i / segments;
-    const s = Math.sin(theta), c = Math.cos(theta);
-    positions.push(s, -1, c);
-    normals.push(0, -1, 0);
-    tangents.push(1, 0, 0);
-    texCoords.push(0.5 + 0.5 * s, 0.5 + 0.5 * c);
-  }
-  for (let i = 0; i < segments; i++) indices.push(center, center + 2 + i, center + 1 + i);
 
   return {
     positions: new Float32Array(positions),

@@ -9,15 +9,16 @@
 // comes back by the inverse's transpose. The direction is not renormalized in
 // object space, so the ray parameter t means the same distance in both.
 //
-// GLSL has no recursion, so the bounce tree is flattened into a loop that
-// follows one path and carries a throughput (how much of the pixel this path
-// still accounts for). At glass the path splits in two: the stronger branch
-// (refraction, usually; reflection at grazing angles, by Schlick's Fresnel
-// term) is followed on, and the weaker one is traced one level only and
-// blended in by its weight.
+// GLSL has no recursion, so the bounce tree is walked by a loop that follows
+// one path at a time, carrying its weight (how much of the pixel it still
+// accounts for). At glass the path splits in two by Schlick's Fresnel term:
+// the stronger branch (refraction, usually; reflection at grazing angles) is
+// followed on, and the weaker one waits on a small stack until the current
+// path ends.
 
-const MAX_PRIMS = 20;      // the scene has 18: 16 ship parts, the planet, the moon
-const MAX_DEPTH = 7;       // the primary ray plus up to 6 bounces
+const MAX_PRIMS = 20;      // the scene has 19: 17 ship parts, the planet, the moon
+const MAX_SEGMENTS = 12;   // ray segments traced per pixel, across all branches
+const STACK_SIZE = 4;      // glass branches waiting their turn
 const NUM_LIGHTS = 3;
 const SPHERE = 0, CYLINDER = 1, CONE = 2, BOX = 3, TORUS = 4;
 // The mapping modes, as in HW6
@@ -48,7 +49,8 @@ precision highp float;
 precision highp int;
 
 #define MAX_PRIMS ${MAX_PRIMS}
-#define MAX_DEPTH ${MAX_DEPTH}
+#define MAX_SEGMENTS ${MAX_SEGMENTS}
+#define STACK_SIZE ${STACK_SIZE}
 #define NUM_LIGHTS ${NUM_LIGHTS}
 #define TEXTURE_UNITS ${TEXTURE_UNITS}
 #define SPHERE ${SPHERE}
@@ -312,11 +314,20 @@ Hit trace(vec3 o, vec3 d, float tmax) {
   return h;
 }
 
+// How much of (tmin, tmax) the ray spends inside the unit sphere
+float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
+  float a = dot(d, d), b = dot(o, d), c = dot(o, o) - 1.0;
+  float disc = b * b - a * c;
+  if (disc < 0.0) return 0.0;
+  float s = sqrt(disc);
+  return max(min((-b + s) / a, tmax) - max((-b - s) / a, tmin), 0.0);
+}
+
 // Shadow ray: how much light gets from o to dist along d. An opaque part
 // blocks it; glass lets through its transmittance, less what it absorbs over
 // the chord the ray cuts through it (Beer-Lambert), so glass casts a pale
 // colored shadow instead of a black one. Glowing parts are light sources
-// themselves and cast none.
+// themselves and cast none. (The glass parts are all spheres.)
 vec3 transmittance(vec3 o, vec3 d, float dist) {
   vec3 tr = vec3(1.0);
   bool ship = groupVisible(o, d, EPS, dist);
@@ -328,14 +339,9 @@ vec3 transmittance(vec3 o, vec3 d, float dist) {
     if (intersect(i, o, d, EPS, t, n, part)) {
       float kt = uMatB[i].y;
       if (kt <= 0.0) return vec3(0.0);
-      // Starting inside the glass, this hit is the way out; otherwise the
-      // way out is the next hit on the same part
-      float chord = t;
-      if (dot(n, toObject(i, d, 0.0)) < 0.0) {
-        float t2 = INF;
-        chord = intersect(i, o, d, t + EPS, t2, n, part) ? t2 - t : 0.0;
-      }
-      tr *= kt * exp(-uMatD[i].rgb * min(chord, dist));
+      float chord = uInfo[i].x == SPHERE
+        ? sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist) : 0.0;
+      tr *= kt * exp(-uMatD[i].rgb * chord);
     }
   }
   return tr;
@@ -601,17 +607,6 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
   return color;
 }
 
-// The weaker branch at glass: one hit, shaded locally, no further bounces
-vec3 shadeOnce(vec3 o, vec3 d, float travelled) {
-  Hit h = trace(o, d, INF);
-  if (h.id < 0) return sky(o, d);
-  Surface s = surfaceAt(o, d, h, (travelled + h.t) * uPixelAngle);
-  if (s.emissive) return s.base;
-  vec4 B = uMatB[h.id];
-  // Beyond this, a mirror shows the sky and glass what's behind it
-  return shadeLocal(s, d, h.id) + B.x * sky(s.p, reflect(d, s.n)) + B.y * sky(s.p, d);
-}
-
 // The ray through this pixel. The warp lens (camera.js) is HW6's projection
 // run backwards: a rectilinear direction, and an equisolid fisheye one with
 // its vertical stretch undone, blended as the lens opens. Outside the
@@ -631,64 +626,99 @@ bool primaryRay(out vec3 d) {
   return true;
 }
 
-void main() {
-  vec3 d;
-  if (!primaryRay(d)) { fragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-  vec3 o = vec3(0.0);
-  vec3 color = vec3(0.0);
-  vec3 throughput = vec3(1.0);
-  vec3 absorb = vec3(0.0);       // per unit length, while the path is inside glass
-  float travelled = 0.0;
+// One ray of the tree still to be followed
+struct Path {
+  vec3 o, d;
+  vec3 weight;       // how much of the pixel it accounts for
+  vec3 absorb;       // per unit length, while it travels inside glass
+  float travelled;   // distance from the eye, for texture filtering
+  int depth;         // bounces so far
+};
 
-  for (int depth = 0; depth < MAX_DEPTH; depth++) {
-    Hit h = trace(o, d, INF);
-    if (h.id < 0) { color += throughput * sky(o, d); break; }
+float maxComponent(vec3 v) { return max(v.r, max(v.g, v.b)); }
+
+// The recursion, as a loop. Each pass follows the current path one segment:
+// it adds that hit's local shading, then turns into the reflected or
+// refracted ray. Glass splits the path in two: the stronger branch carries
+// on here and the weaker waits on a small stack, picked up once the current
+// path ends. Every function that traces, shades or samples the sky is called
+// from exactly one place below: GLSL inlines every call, and a ray tracer
+// with several call sites grows past what some GPU compilers will take.
+void main() {
+  vec3 d0;
+  if (!primaryRay(d0)) { fragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+
+  Path stack[STACK_SIZE];
+  int top = 0;
+  Path p = Path(vec3(0.0), d0, vec3(1.0), vec3(0.0), 0.0, 0);
+  bool live = true;
+  vec3 color = vec3(0.0);
+
+  for (int segment = 0; segment < MAX_SEGMENTS; segment++) {
+    if (!live) {
+      if (top == 0) break;
+      p = stack[--top];
+      live = true;
+    }
+    Hit h = trace(p.o, p.d, INF);
+    if (h.id < 0) {
+      color += p.weight * sky(p.o, p.d);
+      live = false;
+      continue;
+    }
     // Beer-Lambert: glass soaks up light over the distance through it
-    throughput *= exp(-absorb * h.t);
-    travelled += h.t;
-    Surface s = surfaceAt(o, d, h, travelled * uPixelAngle);
-    if (s.emissive) { color += throughput * s.base; break; }
-    color += throughput * shadeLocal(s, d, h.id);
-    if (depth >= uBounces) break;
+    p.weight *= exp(-p.absorb * h.t);
+    p.travelled += h.t;
+    Surface s = surfaceAt(p.o, p.d, h, p.travelled * uPixelAngle);
+    if (s.emissive) {
+      color += p.weight * s.base;
+      live = false;
+      continue;
+    }
+    color += p.weight * shadeLocal(s, p.d, h.id);
 
     vec4 B = uMatB[h.id];
+    if (p.depth >= uBounces || (B.x <= 0.0 && B.y <= 0.0)) {
+      live = false;
+      continue;
+    }
+    p.depth++;
+
     if (B.y > 0.0) {
       // Glass. n faces the incoming ray; entering means going from vacuum in.
-      bool entering = dot(d, s.ng) < 0.0;
+      bool entering = dot(p.d, s.ng) < 0.0;
       vec3 n = entering ? s.n : -s.n;
       vec3 ng = entering ? s.ng : -s.ng;
       float eta = entering ? 1.0 / B.z : B.z;
-      vec3 rdir = reflect(d, n);
-      vec3 tdir = refract(d, n, eta);
+      vec3 rdir = reflect(p.d, n);
+      vec3 tdir = refract(p.d, n, eta);
       vec3 outside = s.p + ng * EPS, inside = s.p - ng * EPS;
       if (tdir == vec3(0.0)) {
         // Total internal reflection: all of it stays in the glass
-        o = outside; d = rdir; throughput *= B.y;
-        continue;
-      }
-      // Schlick, with the angle on the vacuum side
-      float c = entering ? -dot(d, n) : -dot(tdir, n);
-      float r0 = (B.z - 1.0) / (B.z + 1.0);
-      r0 *= r0;
-      float F = r0 + (1.0 - r0) * pow(1.0 - c, 5.0);
-      vec3 reflected = throughput * B.y * F, refracted = throughput * B.y * (1.0 - F);
-      if (F <= 0.5) {
-        color += reflected * shadeOnce(outside, rdir, travelled);
-        o = inside; d = tdir; throughput = refracted;
-        absorb = entering ? uMatD[h.id].rgb : vec3(0.0);
+        p.o = outside; p.d = rdir; p.weight *= B.y;
       } else {
-        color += refracted * shadeOnce(inside, tdir, travelled);
-        o = outside; d = rdir; throughput = reflected;
+        // Schlick, with the angle on the vacuum side
+        float c = entering ? -dot(p.d, n) : -dot(tdir, n);
+        float r0 = (B.z - 1.0) / (B.z + 1.0);
+        r0 *= r0;
+        float F = r0 + (1.0 - r0) * pow(1.0 - c, 5.0);
+        // The reflected ray stays in the medium it came from; the refracted
+        // one crosses into glass, or back out of it
+        Path reflected = Path(outside, rdir, p.weight * B.y * F, p.absorb, p.travelled, p.depth);
+        Path refracted = Path(inside, tdir, p.weight * B.y * (1.0 - F),
+                              entering ? uMatD[h.id].rgb : vec3(0.0), p.travelled, p.depth);
+        Path weaker;
+        if (F <= 0.5) { p = refracted; weaker = reflected; }
+        else          { p = reflected; weaker = refracted; }
+        if (top < STACK_SIZE && maxComponent(weaker.weight) > 0.01) stack[top++] = weaker;
       }
-    } else if (B.x > 0.0) {
-      // Mirror: polished hull, copper dish
-      o = s.p + faceforward(s.ng, d, s.ng) * EPS;
-      d = reflect(d, faceforward(s.n, d, s.ng));
-      throughput *= B.x;
     } else {
-      break;
+      // Mirror: polished hull, copper dish
+      p.o = s.p + faceforward(s.ng, p.d, s.ng) * EPS;
+      p.d = reflect(p.d, faceforward(s.n, p.d, s.ng));
+      p.weight *= B.x;
     }
-    if (max(throughput.r, max(throughput.g, throughput.b)) < 0.01) break;
+    if (maxComponent(p.weight) < 0.01) live = false;
   }
   fragColor = vec4(color, 1.0);
 }

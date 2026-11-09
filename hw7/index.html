@@ -25,6 +25,14 @@
       mix-blend-mode: screen;
     }
     #fade { background: #000; opacity: 1; }
+    #error {
+      position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      width: min(520px, calc(100vw - 32px)); box-sizing: border-box; padding: 1em 1.2em;
+      font: 14px / 1.45 "Segoe UI", system-ui, sans-serif; color: var(--ink);
+      background: rgba(40, 10, 14, 0.85); border: 1px solid rgba(255, 110, 110, 0.6);
+      border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    #error[hidden] { display: none; }
 
     #engageButton {
       position: fixed; left: 50%; bottom: max(7vh, 28px);
@@ -108,6 +116,7 @@
   <canvas id="glcanvas"></canvas>
   <div id="warpFlash" class="wash"></div>
   <div id="fade" class="wash"></div>
+  <div id="error" role="alert" hidden></div>
   <button id="engageButton">Engage</button>
 
   <details id="controls" open>
@@ -130,13 +139,15 @@
     </div>
   </details>
 
-  <script src="transforms.js"></script>
-  <script src="raytrace.js"></script>
-  <script src="textures.js"></script>
-  <script src="ship.js"></script>
-  <script src="camera.js"></script>
-  <script src="scene.js"></script>
-  <script src="main.js"></script>
+  <!-- ?v= changes with each deploy, so a browser never runs a cached script
+       from the last one alongside new ones -->
+  <script src="transforms.js?v=2"></script>
+  <script src="raytrace.js?v=2"></script>
+  <script src="textures.js?v=2"></script>
+  <script src="ship.js?v=2"></script>
+  <script src="camera.js?v=2"></script>
+  <script src="scene.js?v=2"></script>
+  <script src="main.js?v=2"></script>
 </body>
 
 </html>

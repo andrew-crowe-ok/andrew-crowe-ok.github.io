@@ -1,6 +1,21 @@
 // WebGL setup
 const canvas = document.getElementById("glcanvas");
+
+// If the ray tracer can't run -- no WebGL 2, a shader this GPU won't build, a
+// lost context -- say so on the page rather than leave it black (the fade
+// over the canvas only lifts once frames are being drawn)
+function showError(message) {
+  const el = document.getElementById("error");
+  if (!el.hidden) return;     // the first failure is the one that explains the rest
+  el.textContent = message;
+  el.hidden = false;
+}
+window.addEventListener("error", e => showError(`The ray tracer stopped: ${e.message}`));
+canvas.addEventListener("webglcontextlost", () =>
+  showError("The GPU dropped the WebGL context. Reload the page, or lower the bounces with ?bounces=1."));
+
 const gl = canvas.getContext("webgl2");
+if (!gl) showError("This browser has no WebGL 2, which the ray tracer needs.");
 
 function compile(type, source) {
   const shader = gl.createShader(type);
@@ -23,7 +38,8 @@ function createProgram(vsSource, fsSource) {
     gl.attachShader(prog, vs);
     gl.attachShader(prog, fs);
     gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+      throw new Error(gl.getProgramInfoLog(prog) || "the GPU could not build the shader");
     return prog;
   } catch (e) {
     gl.deleteProgram(prog);  // also releases the attached shaders

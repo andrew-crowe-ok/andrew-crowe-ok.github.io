@@ -1,125 +1,3 @@
-const VERTEX_SHADER = `#version 300 es
-in vec3 aPosition;
-in vec3 aNormal;
-in vec3 aTangent;
-in vec2 aTexCoord;
-
-uniform mat4 uModelView;
-uniform mat4 uProjection;
-${LENS_GLSL}
-out vec3 vPosition;
-out vec3 vNormal;
-out vec3 vTangent;
-out vec2 vTexCoord;
-
-void main() {
-  vec4 p = uModelView * vec4(aPosition, 1.0);
-  vPosition = p.xyz;
-
-  // Normals take the inverse transpose, since parts are scaled non-uniformly;
-  // tangents lie in the surface and take the matrix itself
-  mat3 mv = mat3(uModelView);
-  vNormal = transpose(inverse(mv)) * aNormal;
-  vTangent = mv * aTangent;
-  vTexCoord = aTexCoord;
-  // The lens is rectilinear until the chase camera opens it out (camera.js)
-  gl_Position = project(uProjection, p);
-}
-`;
-
-const FRAGMENT_SHADER = `#version 300 es
-precision mediump float;
-
-in vec3 vPosition;
-in vec3 vNormal;
-in vec3 vTangent;
-in vec2 vTexCoord;
-
-// Two lights, as in HW 5: a warm sun and a dim cool fill from the opposite side
-uniform vec3 uLightPos;     // view space
-uniform vec3 uLight2Pos;
-uniform vec3 uLightColor;
-uniform vec3 uLight2Color;
-
-// Per-object material, set by drawPrimitive
-uniform float uKa, uKd, uKs, uShininess;
-uniform float uBumpScale;
-uniform vec3 uAtmosphere;   // rim glow color; black = off
-
-uniform sampler2D uTexture;
-uniform sampler2D uNormalMap;
-// 0 = bump mapping: color from uTexture, relief from its luminance
-// 1 = normal mapping: color from uTexture, tangent-space normals from uNormalMap
-// 2 = emissive: uTexture's color, unlit
-uniform int uMapping;
-
-out vec4 fragColor;
-
-// Bump height: dark is high (1 - Rec. 601 luminance); a negative uBumpScale flips it
-float height(vec2 uv) {
-  vec3 c = texture(uTexture, uv).rgb;
-  return 1.0 - dot(c, vec3(0.299, 0.587, 0.114));
-}
-
-// Phong diffuse + specular from one light; ambient is added once in main()
-vec3 phong(vec3 N, vec3 V, vec3 lightPos, vec3 lightColor, vec3 baseColor) {
-  vec3 L = normalize(lightPos - vPosition);
-  vec3 R = reflect(-L, N);
-  float diff = max(dot(N, L), 0.0);
-  float spec = diff > 0.0 ? pow(max(dot(V, R), 0.0), uShininess) : 0.0;
-  return lightColor * (uKd * baseColor * diff + uKs * spec);
-}
-
-void main() {
-  // Emissive: the surface gives off its own light, so skip lighting entirely
-  if (uMapping == 2) {
-    fragColor = vec4(texture(uTexture, vTexCoord).rgb, 1.0);
-    return;
-  }
-
-  // Tangent frame (T, B, N)
-  vec3 N = normalize(vNormal);
-  vec3 T = normalize(vTangent - dot(vTangent, N) * N);
-  vec3 B = cross(N, T);
-  mat3 TBN = mat3(T, B, N);
-
-  vec3 baseColor;
-  vec3 n;
-
-  if (uMapping == 0) {
-    // Bump mapping: tilt the normal against the gradient of the height field
-    vec2 du = vec2(1.0 / float(textureSize(uTexture, 0).x), 0.0);
-    vec2 dv = vec2(0.0, 1.0 / float(textureSize(uTexture, 0).y));
-    float dhdu = (height(vTexCoord + du) - height(vTexCoord - du)) * 0.5;
-    float dhdv = (height(vTexCoord + dv) - height(vTexCoord - dv)) * 0.5;
-    n = normalize(vec3(-uBumpScale * dhdu, -uBumpScale * dhdv, 1.0));
-    baseColor = texture(uTexture, vTexCoord).rgb;
-  } else {
-    // Normal mapping: uNormalMap stores the tangent-space normal in [0, 1],
-    // baked from the same height field as uTexture's paint (textures.js)
-    n = normalize(texture(uNormalMap, vTexCoord).rgb * 2.0 - 1.0);
-    baseColor = texture(uTexture, vTexCoord).rgb;
-  }
-
-  vec3 Ngeom = N;              // smooth surface normal, before bump/normal mapping
-  N = normalize(TBN * n);
-  vec3 V = normalize(-vPosition);
-
-  vec3 color = uKa * baseColor
-             + phong(N, V, uLightPos, uLightColor, baseColor)
-             + phong(N, V, uLight2Pos, uLight2Color, baseColor);
-
-  // Atmosphere: brightens where the surface turns away from the viewer (the
-  // limb), using the smooth normal so the halo isn't speckled by the bumps,
-  // and only on the sun-facing side
-  float rim = pow(1.0 - max(dot(Ngeom, V), 0.0), 3.0);
-  float day = smoothstep(-0.25, 0.5, dot(Ngeom, normalize(uLightPos - vPosition)));
-  color += uAtmosphere * rim * day;
-
-  fragColor = vec4(color, 1.0);
-}
-`;
-
 // WebGL setup
 const canvas = document.getElementById("glcanvas");
 const gl = canvas.getContext("webgl2");
@@ -136,8 +14,6 @@ function compile(type, source) {
   return shader;
 }
 
-const ATTRIBUTES = { aPosition: 0, aNormal: 1, aTexCoord: 2, aTangent: 3 };
-
 function createProgram(vsSource, fsSource) {
   const prog = gl.createProgram();
   let vs = null, fs = null;
@@ -146,7 +22,6 @@ function createProgram(vsSource, fsSource) {
     fs = compile(gl.FRAGMENT_SHADER, fsSource);
     gl.attachShader(prog, vs);
     gl.attachShader(prog, fs);
-    for (const name in ATTRIBUTES) gl.bindAttribLocation(prog, ATTRIBUTES[name], name);
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     return prog;
@@ -160,84 +35,108 @@ function createProgram(vsSource, fsSource) {
   }
 }
 
-const program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
+// One program does everything (raytrace.js)
+const program = createProgram(RAYTRACE_VS, RAYTRACE_FS);
 gl.useProgram(program);
-const uModelView = gl.getUniformLocation(program, "uModelView");
-const uProjection = gl.getUniformLocation(program, "uProjection");
-const uLightPos = gl.getUniformLocation(program, "uLightPos");
-const uLight2Pos = gl.getUniformLocation(program, "uLight2Pos");
-const uMapping = gl.getUniformLocation(program, "uMapping");
-const setLens = lensUniforms(program);
-gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
-gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
+const uniforms = new Proxy({}, {
+  get: (cache, name) => cache[name] ??= gl.getUniformLocation(program, name)
+});
+gl.uniform1iv(uniforms.uTex, Array.from({ length: TEXTURE_UNITS }, (_, i) => i));
 
-// Lights, fixed in the scene: a warm sun off to the side and outside the orbit,
-// so the planet shows a terminator, and a dim cool fill opposite it to lift the
-// night side. The sun's intensity is folded into its color (1.25x warm white).
-// The colors are set once; the positions are carried into view space each frame.
-const SUN = { pos: [12, 5, 3], color: [1.25, 1.19, 1.06] };
-const FILL = { pos: [-12, -5, -3], color: [0.12, 0.17, 0.3] };
-gl.uniform3fv(gl.getUniformLocation(program, "uLightColor"), SUN.color);
-gl.uniform3fv(gl.getUniformLocation(program, "uLight2Color"), FILL.color);
+// Lights, fixed in the scene as in HW6: a warm sun off to the side and outside
+// the orbit, so the planet shows a terminator, and a dim cool fill opposite it
+// to lift the night side. The third rides the ship (ship.js). Each light's
+// intensity is folded into its color; `ref` is the distance at which
+// attenuation leaves it at full strength -- the planet's center for the two
+// fixed ones, the ship's hull for its own -- and `reach` how far out it keeps
+// falling off: the ship stays lit at warp, leaving the system behind.
+const SUN = { pos: [12, 5, 3], color: [1.25, 1.19, 1.06], ref: 13.3, reach: 21 };
+const FILL = { pos: [-12, -5, -3], color: [0.12, 0.17, 0.3], ref: 13.3, reach: 21 };
+const NAV = { color: [0.35, 0.62, 1.0], ref: 0.5, reach: 1e6 };
 
-const uMaterial = Object.fromEntries(["uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere"]
-  .map(name => [name, gl.getUniformLocation(program, name)]));
+// ---------------------------------------------------------------------------
+// The scene, as the ray tracer sees it
+//
+// The hierarchy from HW6 (ship.js, scene.js) is unchanged: every part still
+// goes through drawPrimitive with its model-view matrix. Instead of drawing a
+// mesh, drawPrimitive now records the part -- its shape, the inverse of that
+// matrix, its textures and material -- and the whole list goes to the shader
+// once a frame.
+// ---------------------------------------------------------------------------
 
-// Shiny painted metal, for parts that don't name a material of their own
+// The meshes are now just which unit shape to intersect. `repeats` is how many
+// times the texture wraps around (models.js's uRepeat), `tube` the torus's.
+const cubeMesh = { shape: BOX, repeats: 1 };
+const cylinderMesh = { shape: CYLINDER, repeats: 3 };
+const coneMesh = { shape: CONE, repeats: 1 };
+const torusMesh = { shape: TORUS, repeats: 24, tube: 0.04 };   // saucer rim
+const sphereMesh = { shape: SPHERE, repeats: 1 };
+const planetMesh = sphereMesh;
+
+// Shiny painted metal, for parts that don't name a material of their own.
+//   kr      share of light mirrored (reflection rays)
+//   kt      share let through (glass: refraction rays)
+//   ior     index of refraction, for glass
+//   absorb  glass's absorption per unit length (Beer-Lambert), per channel
 const DEFAULT_MATERIAL = { ka: 0.2, kd: 0.8, ks: 0.5, shininess: 32, bumpScale: 3.0, atmosphere: [0, 0, 0] };
-function setMaterial({ ka, kd, ks, shininess, bumpScale, atmosphere }) {
-  gl.uniform1f(uMaterial.uKa, ka);
-  gl.uniform1f(uMaterial.uKd, kd);
-  gl.uniform1f(uMaterial.uKs, ks);
-  gl.uniform1f(uMaterial.uShininess, shininess);
-  gl.uniform1f(uMaterial.uBumpScale, bumpScale);
-  gl.uniform3fv(uMaterial.uAtmosphere, atmosphere);
+
+const scene = {
+  count: 0,
+  inv: new Float32Array(MAX_PRIMS * 12),
+  info: new Int32Array(MAX_PRIMS * 4),
+  matA: new Float32Array(MAX_PRIMS * 4),
+  matB: new Float32Array(MAX_PRIMS * 4),
+  matC: new Float32Array(MAX_PRIMS * 4),
+  matD: new Float32Array(MAX_PRIMS * 4),
+  group: { start: 0, end: 0, inv: new Float32Array(12), half: [0, 0, 0] },
+  nav: [0, 0, 0],
+  sky: { center: [0, 0, 0], rot: new Float32Array(9), streak: [0, 0, 0] }
+};
+
+// The three rows of an affine matrix, which is all the shader needs of it
+function affineRows(m, out, at) {
+  for (let i = 0; i < 3; i++) out.set([m[i], m[4 + i], m[8 + i], m[12 + i]], at + 4 * i);
 }
 
-// The shader's uMapping modes
-const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
+const unitOf = texture => texture ? TEXTURES.indexOf(texture) : -1;
 
-// The one draw call every part goes through. normalMap is only for
-// NORMAL_MAPPING, where it is sampled on unit 1.
 function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL, normalMap = null) {
-  setMaterial(material);
-  gl.uniformMatrix4fv(uModelView, false, modelView);
-  gl.uniform1i(uMapping, mapping);
-  if (normalMap) {
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, normalMap);
-  }
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.bindVertexArray(mesh.vao);
-  gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
+  if (scene.count >= MAX_PRIMS) throw new Error(`more than ${MAX_PRIMS} primitives`);
+  const i = scene.count++;
+  const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb = [0, 0, 0] } = material;
+  // Every glass part takes its index of refraction from the slider
+  const ior = kt > 0 ? controls.ior : 1;
+  affineRows(invertAffine(modelView), scene.inv, i * 12);
+  scene.info.set([mesh.shape, unitOf(texture), unitOf(normalMap), mapping], i * 4);
+  scene.matA.set([ka, kd, ks, shininess], i * 4);
+  scene.matB.set([kr, kt, ior, bumpScale], i * 4);
+  scene.matC.set([...atmosphere, mesh.tube ?? 0], i * 4);
+  scene.matD.set([...absorb, mesh.repeats], i * 4);
 }
 
-function bindAttribute(name, data, size) {
-  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-  gl.vertexAttribPointer(ATTRIBUTES[name], size, gl.FLOAT, false, 0, 0);
-  gl.enableVertexAttribArray(ATTRIBUTES[name]);
+// The parts drawn between these two calls fit in the box |p| <= half in
+// `frame`'s space, so the shader can skip them all for a ray that misses it
+function beginGroup(frame, half) {
+  scene.group.start = scene.count;
+  affineRows(invertAffine(frame), scene.group.inv, 0);
+  scene.group.half = half;
+}
+function endGroup() { scene.group.end = scene.count; }
+
+// The ship's own light, in eye space (ship.js)
+function setNavLight(pos) { scene.nav = pos; }
+
+// The sky's frame (scene.js): where its center is and how it is turned, in
+// eye space, and the stars' velocity past the eye at warp
+function setSky(frame, streak) {
+  scene.sky.center = transformPoint(frame, [0, 0, 0]);
+  scene.sky.rot.set([frame[0], frame[1], frame[2], frame[4], frame[5], frame[6], frame[8], frame[9], frame[10]]);
+  scene.sky.streak = streak;
 }
 
-function createMesh({ positions, normals, tangents, texCoords, indices }) {
-  const vao = gl.createVertexArray();
-  gl.bindVertexArray(vao);
-  bindAttribute("aPosition", positions, 3);
-  bindAttribute("aNormal", normals, 3);
-  bindAttribute("aTangent", tangents, 3);
-  bindAttribute("aTexCoord", texCoords, 2);
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-  return { vao, count: indices.length };
-}
-
-const cubeMesh = createMesh(createCube());
-const cylinderMesh = createMesh(createCylinder());
-const coneMesh = createMesh(createCone(48));
-const torusMesh = createMesh(createTorus(0.04, 96, 16, 24));  // saucer rim: thin tube, 24 texture repeats
-const sphereMesh = createMesh(createSphere(28, 28));
-const planetMesh = createMesh(createSphere(64, 64));  // finer than sphereMesh: it fills the view
+// ---------------------------------------------------------------------------
+// Textures
+// ---------------------------------------------------------------------------
 
 // An image file: a 1x1 gray placeholder until it decodes, then the image with mipmaps
 function loadTexture(url) {
@@ -275,32 +174,21 @@ function createDataTexture({ color, size }) {
 }
 
 // Procedural ship skin. The saucer is bump mapped straight from its panel-line
-// image; the dome, hull and nacelles get a color map with a normal map baked
-// from the same height field (NORMAL_MAPPING).
+// image; the hull and nacelles get a color map with a normal map baked from
+// the same height field (NORMAL_MAPPING).
 const hullPlating = createPlating({ cols: 8, rows: 12, seed: 11,
   stripe: { at: 0.5, width: 0.07, color: [0.20, 0.23, 0.30], relief: 0.08 } });
 const nacellePlating = createPlating({ cols: 6, rows: 16, seed: 23,
   base: [0.34, 0.37, 0.43],
   grille: { at: 0.5, width: 0.22, slats: 18, color: [0.13, 0.21, 0.42] } });
 
-const domePlating = createDomeTexture();
-
 const saucerTexture = createDataTexture(createSaucerTexture());
-const domeTexture = createDataTexture(domePlating);
-const domeNormalMap = createDataTexture(normalMap(domePlating, 6));
 const hullTexture = createDataTexture(hullPlating);
 const hullNormalMap = createDataTexture(normalMap(hullPlating, 7));
 const nacelleTexture = createDataTexture(nacellePlating);
 const nacelleNormalMap = createDataTexture(normalMap(nacellePlating, 8));
-
-// Sky: 3000 point sprites in a single draw call (stars.js)
-const starPoints = createStarPoints({ radius: SKY_RADIUS });
-
-// Keep a complete texture on unit 1 even while drawing the modes that ignore it:
-// a sampler with nothing bound counts as incomplete when the draw call is checked
-gl.activeTexture(gl.TEXTURE1);
-gl.bindTexture(gl.TEXTURE_2D, hullNormalMap);
-gl.activeTexture(gl.TEXTURE0);
+// The nav light's bulb: one flat color, drawn glowing
+const beaconTexture = createDataTexture({ color: new Uint8Array([150, 205, 255, 255]), size: 1 });
 
 // Animated texture: a muted, looping <video> whose current frame is re-uploaded
 // every render, so it gets no mipmaps (LINEAR min filter). REPEAT on s lets u
@@ -319,7 +207,6 @@ function loadVideoTexture(sources) {
 
   function update() {
     if (video.readyState < video.HAVE_CURRENT_DATA) return;
-    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
@@ -329,26 +216,81 @@ function loadVideoTexture(sources) {
 
 const plasma = loadVideoTexture(["textures/plasma.webm", "textures/plasma.mp4"]);
 
-gl.enable(gl.DEPTH_TEST);
-gl.clearColor(0, 0, 0, 1);
+// Unit i holds TEXTURES[i] (raytrace.js samples them by unit)
+const TEXTURES = [planetTexture, copperTexture, saucerTexture, hullTexture, hullNormalMap,
+  nacelleTexture, nacelleNormalMap, plasma.texture, beaconTexture];
+if (TEXTURES.length !== TEXTURE_UNITS) throw new Error("TEXTURE_UNITS is out of date");
+function bindTextures() {
+  TEXTURES.forEach((texture, i) => {
+    gl.activeTexture(gl.TEXTURE0 + i);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+  });
+}
 
-// Full-window canvas: match the drawing buffer to the displayed size and keep the
-// scene framed. Vertical FOV is 45 deg; on windows narrower than 16:10 it widens so
-// the horizontal FOV never drops below the 16:10 value and the whole orbit stays in frame.
+// ---------------------------------------------------------------------------
+// Canvas and lens
+// ---------------------------------------------------------------------------
+
+// Full-window canvas, kept framed as in HW6: vertical FOV 45 deg, widened on
+// windows narrower than 16:10 so the whole orbit stays in frame. Every pixel is
+// a ray tree, so the drawing buffer is capped at about 1080p's pixel count and
+// the browser scales it up past that.
 const BASE_FOVY = Math.PI / 4, MIN_ASPECT = 1.6;
-let projection;
+const MAX_PIXELS = 1920 * 1080;
+let projection, renderScale = 1;
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.round(canvas.clientWidth * dpr);
-  canvas.height = Math.round(canvas.clientHeight * dpr);
+  const css = canvas.clientWidth * canvas.clientHeight;
+  renderScale = Math.min(dpr, Math.sqrt(MAX_PIXELS / Math.max(css, 1)));
+  canvas.width = Math.round(canvas.clientWidth * renderScale);
+  canvas.height = Math.round(canvas.clientHeight * renderScale);
   gl.viewport(0, 0, canvas.width, canvas.height);
   const aspect = canvas.width / canvas.height;
   const fovy = aspect >= MIN_ASPECT ? BASE_FOVY
     : 2 * Math.atan(Math.tan(BASE_FOVY / 2) * MIN_ASPECT / aspect);
-  projection = perspective(fovy, aspect, 0.1, 150);  // 150 keeps the sky sphere inside the far plane
+  projection = perspective(fovy, aspect, 0.1, 150);   // only its x and y scales matter now
 }
 window.addEventListener("resize", resize);
 resize();
+
+// The angle one pixel spans mid-frame, which sizes the stars and picks
+// mipmap levels: the plain lens's, blended toward the fisheye's as it opens
+function pixelAngle() {
+  const rect = 2 / (projection[5] * canvas.height);
+  const fish = 4 * Math.sin(CHASE.fishHalfX / 2) / canvas.width;
+  return rect + (fish - rect) * lensFisheye;
+}
+
+// ---------------------------------------------------------------------------
+// Ray tracer controls (index.html)
+// ---------------------------------------------------------------------------
+const controls = {};
+const CONTROL_INPUTS = {
+  bounces:     { read: el => parseInt(el.value), show: v => `${v}` },
+  sun:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
+  fill:        { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
+  nav:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
+  shininess:   { read: el => 2 ** parseFloat(el.value), show: v => `×${v.toFixed(2)}` },
+  ior:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
+  shadows:     { read: el => el.checked },
+  attenuation: { read: el => el.checked }
+};
+// The page's query string can preset any of them, e.g. ?bounces=0&shadows=0
+const presets = new URLSearchParams(location.search);
+for (const [id, { read, show }] of Object.entries(CONTROL_INPUTS)) {
+  const input = document.getElementById(id);
+  const output = document.querySelector(`output[for="${id}"]`);
+  if (presets.has(id)) {
+    if (input.type === "checkbox") input.checked = presets.get(id) !== "0";
+    else input.value = presets.get(id);
+  }
+  const update = () => {
+    controls[id] = read(input);
+    if (output && show) output.textContent = show(controls[id]);
+  };
+  input.addEventListener("input", update);
+  update();
+}
 
 // Interactive controls. While the chase camera has the view, the drag angles
 // steer it around the ship instead of turning the scene, and clicks, the
@@ -379,6 +321,8 @@ window.addEventListener("mousemove", e => {
 const CONTROL_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "s"];
 document.addEventListener("keydown", e => {
   if (!CONTROL_KEYS.includes(e.key)) return;
+  // Arrows on a focused slider move the slider, not the camera
+  if (e.target instanceof HTMLInputElement) return;
   e.preventDefault();         // arrows would scroll the page even when ignored
   if (offOrbit()) return;
   const step = 0.2;
@@ -392,14 +336,15 @@ document.addEventListener("keydown", e => {
   }
 });
 
-// Clicking the ship or the planet centers the view on it. Picking reads the
-// view and ship of the last frame drawn, which is what was clicked on.
-let lastView = null, lastShip = null;
+// Clicking the ship, the planet or the moon centers the view on it. Picking
+// reads the view, ship and moon of the last frame drawn, which is what was
+// clicked on.
+let lastView = null, lastShip = null, lastMoon = null;
 canvas.addEventListener("click", e => {
   if (!lastView || offOrbit() || dragged) return;
   const r = canvas.getBoundingClientRect();
   const hit = pickObject(2 * (e.clientX - r.left) / r.width - 1,
-    1 - 2 * (e.clientY - r.top) / r.height, lastView, lastShip);
+    1 - 2 * (e.clientY - r.top) / r.height, lastView, lastShip, lastMoon);
   if (!hit) return;
   focusOn(hit, performance.now() / 1000, [camX, camY]);
   camX = 0; camY = 0;
@@ -499,6 +444,54 @@ function resetScene(time) {
 }
 resetScene(0);
 
+// Hand this frame's scene, lights, lens and controls to the shader
+function uploadScene(view, t) {
+  const u = uniforms;
+  gl.uniform2f(u.uResolution, canvas.width, canvas.height);
+  gl.uniform1f(u.uProj00, projection[0]);
+  gl.uniform1f(u.uProj11, projection[5]);
+  gl.uniform1f(u.uFisheye, lensFisheye);
+  gl.uniform1f(u.uFishHalfX, CHASE.fishHalfX);
+  gl.uniform1f(u.uFishStretch, CHASE.fishStretch);
+  gl.uniform1f(u.uFishPivot, CHASE.fishPivot);
+  const pixel = pixelAngle();
+  gl.uniform1f(u.uPixelAngle, pixel);
+
+  gl.uniform1i(u.uCount, scene.count);
+  gl.uniform4fv(u.uInv, scene.inv);
+  gl.uniform4iv(u.uInfo, scene.info);
+  gl.uniform4fv(u.uMatA, scene.matA);
+  gl.uniform4fv(u.uMatB, scene.matB);
+  gl.uniform4fv(u.uMatC, scene.matC);
+  gl.uniform4fv(u.uMatD, scene.matD);
+  gl.uniform1i(u.uGroupStart, scene.group.start);
+  gl.uniform1i(u.uGroupEnd, scene.group.end);
+  gl.uniform4fv(u.uGroupInv, scene.group.inv);
+  gl.uniform3fv(u.uGroupHalf, scene.group.half);
+
+  // The fixed lights ride whatever the view is now; the nav light was placed
+  // in eye space by the ship itself
+  gl.uniform3fv(u.uLightPos, [...transformPoint(view, SUN.pos), ...transformPoint(view, FILL.pos), ...scene.nav]);
+  gl.uniform3fv(u.uLightColor, [...vmul(SUN.color, controls.sun), ...vmul(FILL.color, controls.fill),
+    ...vmul(NAV.color, controls.nav)]);
+  gl.uniform2fv(u.uLightRange, [SUN, FILL, NAV].flatMap(l => [l.ref, l.reach]));
+
+  gl.uniform1i(u.uBounces, controls.bounces);
+  gl.uniform1i(u.uShadows, controls.shadows);
+  gl.uniform1i(u.uAttenuation, controls.attenuation);
+  gl.uniform1f(u.uShininessScale, controls.shininess);
+  gl.uniform1f(u.uTime, t);
+
+  gl.uniform3fv(u.uSkyCenter, scene.sky.center);
+  gl.uniformMatrix3fv(u.uSkyRot, false, scene.sky.rot);
+  gl.uniform1f(u.uSkyRadius, SKY_RADIUS);
+  gl.uniform3fv(u.uStreak, scene.sky.streak);
+  gl.uniform1f(u.uShutter, STREAK.shutter);
+  gl.uniform1f(u.uMaxStreak, STREAK.max * renderScale * pixel);
+  gl.uniform1f(u.uStreakDim, STREAK.dim);
+  gl.uniform1f(u.uStarScale, renderScale);
+}
+
 // Render loop
 let lastNow = 0;
 function render(time) {
@@ -507,25 +500,25 @@ function render(time) {
   lastNow = now;
   if (engageExpired(now - sceneStart)) resetScene(now);
   const t = now - sceneStart;   // scene clock
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   const rotation = multiply(rotateY(dragRotY), rotateX(dragRotX));
 
   // The flight path is advanced once, here, because the camera needs to know
   // where the ship is before anything is drawn.
   const ship = shipState(t);
-  const view = updateCamera(t, ship, freeView(now, dt, ship, rotation, [camX, camY]),
+  const moon = moonCenter(t);
+  const view = updateCamera(t, ship, freeView(now, dt, ship, moon, rotation, [camX, camY]),
     { x: dragRotX, y: dragRotY });
-  lastView = view; lastShip = ship;
+  lastView = view; lastShip = ship; lastMoon = moon;
 
-  gl.uniformMatrix4fv(uProjection, false, projection);
-  setLens();
-  // The lights are fixed in the scene, so they ride whatever the view is now
-  gl.uniform3fv(uLightPos, transformPoint(view, SUN.pos));
-  gl.uniform3fv(uLight2Pos, transformPoint(view, FILL.pos));
-
-  plasma.update();
+  // Walk the hierarchy to collect this frame's primitives, then trace them all
+  scene.count = 0;
   drawSystem(view, t, ship);
+  plasma.update();
+  bindTextures();
+  uploadScene(view, t);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
   updateWashes(t, ship);
   updateReveal(t);
   engageButton.disabled = offOrbit();

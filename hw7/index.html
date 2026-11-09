@@ -73,6 +73,34 @@
       #engageButton { animation: none; }
       #engageButton:not(.revealed) { translate: none; }
     }
+
+    /* Ray tracer controls: a small glass panel in the corner, in the Engage
+       button's style, folded away with its summary */
+    #controls {
+      position: fixed; left: 16px; top: 16px; width: min(250px, calc(100vw - 32px));
+      box-sizing: border-box; padding: 0.7em 0.95em;
+      font: 500 12px / 1.3 "Segoe UI", system-ui, sans-serif; color: var(--ink);
+      background: linear-gradient(180deg, rgba(14, 34, 58, 0.62), rgba(4, 12, 24, 0.7));
+      border: 1px solid rgba(var(--glow), 0.45); border-radius: 12px;
+      box-shadow: 0 0 12px rgba(var(--glow), 0.2);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    }
+    #controls summary {
+      cursor: pointer; list-style: none; user-select: none;
+      font: 600 11px / 1 "Orbitron", "Eurostile", "Segoe UI", system-ui, sans-serif;
+      letter-spacing: 0.25em; text-transform: uppercase;
+      text-shadow: 0 0 8px rgba(var(--glow), 0.8);
+    }
+    #controls summary::-webkit-details-marker { display: none; }
+    #controls summary::after { content: "+"; float: right; letter-spacing: 0; }
+    #controls[open] summary::after { content: "\2212"; }
+    #controls[open] summary { margin-bottom: 0.7em; }
+    #controls .row { display: grid; grid-template-columns: 1fr auto; gap: 0.15em 0.5em; margin: 0.5em 0; }
+    #controls .row input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: rgb(var(--glow)); }
+    #controls output { font-variant-numeric: tabular-nums; opacity: 0.8; }
+    #controls .checks { display: flex; gap: 1.2em; margin-top: 0.7em; }
+    #controls .checks label { display: flex; align-items: center; gap: 0.4em; cursor: pointer; }
+    #controls .checks input { margin: 0; accent-color: rgb(var(--glow)); }
   </style>
 </head>
 
@@ -82,12 +110,31 @@
   <div id="fade" class="wash"></div>
   <button id="engageButton">Engage</button>
 
+  <details id="controls" open>
+    <summary>Ray tracer</summary>
+    <label class="row">Bounces <output for="bounces"></output>
+      <input type="range" id="bounces" min="0" max="6" step="1" value="3"></label>
+    <label class="row">Sun <output for="sun"></output>
+      <input type="range" id="sun" min="0" max="2" step="0.05" value="1"></label>
+    <label class="row">Fill light <output for="fill"></output>
+      <input type="range" id="fill" min="0" max="4" step="0.05" value="1"></label>
+    <label class="row">Nav light <output for="nav"></output>
+      <input type="range" id="nav" min="0" max="4" step="0.05" value="1"></label>
+    <label class="row">Shininess <output for="shininess"></output>
+      <input type="range" id="shininess" min="-2" max="2" step="0.1" value="0"></label>
+    <label class="row">Glass index of refraction <output for="ior"></output>
+      <input type="range" id="ior" min="1" max="2.4" step="0.01" value="1.5"></label>
+    <div class="checks">
+      <label><input type="checkbox" id="shadows" checked> Shadows</label>
+      <label><input type="checkbox" id="attenuation" checked> Attenuation</label>
+    </div>
+  </details>
+
   <script src="transforms.js"></script>
-  <script src="models.js"></script>
+  <script src="raytrace.js"></script>
   <script src="textures.js"></script>
   <script src="ship.js"></script>
   <script src="camera.js"></script>
-  <script src="stars.js"></script>
   <script src="scene.js"></script>
   <script src="main.js"></script>
 </body>

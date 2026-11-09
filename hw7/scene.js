@@ -1,12 +1,14 @@
 // Scene above the ship, in the same functional style as ship.js:
 //
 //   drawSystem
-//   ├── drawStarfield     (point-sprite stars all around)
+//   ├── setSky            (the star sphere's frame; the shader draws the stars)
 //   ├── drawPlanet        (spins on its own axis)
+//   ├── drawMoon          (a glass moon on its own tilted orbit)
 //   └── drawOrbit         (tilted orbital plane, carries the ship around)
 //       └── drawShip      (ship.js)
 //
-// The planet and the orbit are siblings, so the planet's spin never reaches the ship.
+// The planet, the moon and the orbit are siblings, so the planet's spin never
+// reaches the ship.
 //
 // shipState() says where the ship is: either on the circle, or on a
 // smooth departure onto the straight line it was flying when "Engage" was
@@ -25,6 +27,17 @@ const PLANET_MATERIAL = {
 };
 const ORBIT = { radius: 4.4, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 
+// The moon: a ball of glass well outside the ship's orbit, on a slower orbit
+// tilted the other way. `phase` puts it just in front of the planet on load,
+// overlapping its limb, so the starting view sees the planet bent through it.
+const MOON = { radius: 0.9, orbit: 7.6, speed: 0.045, tilt: -0.3, phase: -0.95 };
+// Nearly all transmitted, a slight blue cast from absorbing red over the
+// distance through it, and a sharp highlight from each light
+const MOON_MATERIAL = {
+  ka: 0.02, kd: 0.1, ks: 0.9, shininess: 240, bumpScale: 0, atmosphere: [0, 0, 0],
+  kt: 0.94, absorb: [0.22, 0.08, 0.03]
+};
+
 // Level 0: planetary system at the origin; t is the scene clock (main.js).
 // `ship` is this frame's shipState(): the camera needs it before anything is
 // drawn, so main.js advances the flight path and passes the result down.
@@ -39,19 +52,10 @@ function drawSystem(parent, t, ship) {
   // draw out with the lens as it opens (camera.js).
   const o = transformPoint(plane, [0, 0, 0]);
   const streak = vmul(vsub(o, transformPoint(plane, ship.streak)), lensFisheye);
-  drawStarfield(multiply(multiply(plane, translate(...ship.sky)), rotateX(-ORBIT.tilt)), t, streak);
+  setSky(multiply(multiply(plane, translate(...ship.sky)), rotateX(-ORBIT.tilt)), streak);
   drawPlanet(parent, t);
+  drawMoon(parent, t);
   drawOrbit(plane, ship);
-}
-
-// Sky: the point sprites from stars.js, one draw call. Depth writes are off, so
-// the stars never occlude anything -- everything else simply paints over them.
-// The stars have their own program, so the scene's is put back afterwards.
-function drawStarfield(parent, t, streak) {
-  gl.depthMask(false);
-  starPoints.draw(projection, parent, t, streak);
-  gl.depthMask(true);
-  gl.useProgram(program);
 }
 
 // Planet: a fine sphere wearing the antelope photo, bump-mapped from its luminance
@@ -59,6 +63,18 @@ function drawPlanet(parent, t) {
   const r = PLANET.radius;
   drawPrimitive(planetMesh, planetTexture, BUMP_MAPPING,
     multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r))), PLANET_MATERIAL);
+}
+
+// The moon's frame at scene time t, and where that puts its center
+const moonFrame = t => multiply(rotateX(MOON.tilt),
+  multiply(rotateY(MOON.phase + MOON.speed * t), translate(MOON.orbit, 0, 0)));
+const moonCenter = t => transformPoint(moonFrame(t), [0, 0, 0]);
+
+// Moon: one glass sphere, no texture -- what it shows is what's behind it
+function drawMoon(parent, t) {
+  const r = MOON.radius;
+  drawPrimitive(sphereMesh, null, BUMP_MAPPING, multiply(parent, multiply(moonFrame(t), scale(r, r, r))),
+    MOON_MATERIAL);
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +105,7 @@ function drawPlanet(parent, t) {
 // ENGAGE.warpAt seconds after the press -- a beat after the departure blend
 // lands on the line -- the ship jumps straight from orbital speed to
 // ENGAGE.warp times it, with no ramp. The camera's dolly zoom into the
-// fisheye, the star streaks and the warp flash (camera.js, stars.js, main.js)
+// fisheye, the star streaks and the warp flash (camera.js, raytrace.js, main.js)
 // all start at that instant, keyed off `warpTau`, the time since the jump.
 //
 // At warp the ship would leave the star sphere long before the reset, so the
@@ -204,8 +220,14 @@ function shipState(t) {
 // Level 1: place the ship on the path shipState() worked out. On the circle,
 // translate(p) * rotateY(a) equals rotateY(a) * translate(R, 0, 0), and unlike
 // that form it still holds once the ship has left the circle.
+// The ship's parts are grouped in the box that holds them all (the one
+// clicks are tested against), so the ray tracer can pass over the lot for any
+// ray that misses it.
 function drawOrbit(parent, { pos, heading }) {
   const frame = multiply(parent, multiply(translate(...pos), rotateY(heading)));
   const s = ORBIT.shipScale;
-  drawShip(multiply(frame, scale(s, s, s)));
+  const shipFrame = multiply(frame, scale(s, s, s));
+  beginGroup(shipFrame, vmul(SHIP_HALF_EXTENT, 1.02));
+  drawShip(shipFrame);
+  endGroup();
 }

@@ -1,7 +1,8 @@
 // Starship built with the HW 4 functional hierarchy: each drawX(parent) derives
 // its frame from the parent's, draws its own shape with a scaled copy (so the
 // scale never reaches the children), then hands the unscaled frame down.
-// Axes: +z = forward, +y = up. Uses drawPrimitive, meshes and textures from main.js.
+// Axes: +z = forward, +y = up. Uses drawPrimitive, meshes and textures from main.js,
+// which now hands every part to the ray tracer instead of drawing it.
 
 // Layout in ship space. Parts are placed from these, so proportions live in one
 // place; children get offsets relative to their parent's position.
@@ -21,16 +22,27 @@ const SHIP_CENTER = [0, 0.17, -0.27];
 const SHIP_HALF_EXTENT = [1.5, 0.75, 3.0];
 
 // Painted plating: a touch more ambient than the planet so the panel lines stay
-// readable on the night side, and a tight specular for the clearcoat.
+// readable on the night side, a tight specular for the clearcoat, and a little
+// mirror (kr) so the polished hull picks up the planet and the moon.
 // The saucer's bumpScale is negative because the shader takes relief from
 // 1 - luminance: its panel lines are dark, so flipping the sign makes them
 // grooves between raised plates instead of ridges.
-const SAUCER_MATERIAL = { ka: 0.22, kd: 0.85, ks: 0.35, shininess: 48, bumpScale: -8.0, atmosphere: [0, 0, 0] };
+const SAUCER_MATERIAL = { ka: 0.22, kd: 0.85, ks: 0.35, shininess: 48, bumpScale: -8.0, atmosphere: [0, 0, 0], kr: 0.18 };
 // bumpScale is unused with a normal map: the relief comes from the map itself
-const HULL_MATERIAL = { ka: 0.2, kd: 0.85, ks: 0.35, shininess: 64, bumpScale: 1.0, atmosphere: [0, 0, 0] };
-// The dome's windows are painted bright in its texture, so a high ambient term
-// keeps them glowing on the night side instead of going black with the hull
-const DOME_MATERIAL = { ka: 0.5, kd: 0.7, ks: 0.7, shininess: 96, bumpScale: 1.0, atmosphere: [0, 0, 0] };
+const HULL_MATERIAL = { ka: 0.2, kd: 0.85, ks: 0.35, shininess: 64, bumpScale: 1.0, atmosphere: [0, 0, 0], kr: 0.15 };
+// Polished copper on the deflector: more mirror than paint
+const COPPER_MATERIAL = { ka: 0.2, kd: 0.8, ks: 0.6, shininess: 32, bumpScale: 3.0, atmosphere: [0, 0, 0], kr: 0.35 };
+// The bridge dome is a clear glass canopy: mostly transmitted (kt), with a
+// faint blue-green tint from absorbing more red per unit length, and a hard
+// highlight. Its index of refraction comes from the slider (main.js).
+const DOME_MATERIAL = { ka: 0.05, kd: 0.2, ks: 0.9, shininess: 160, bumpScale: 0, atmosphere: [0, 0, 0],
+  kt: 0.88, absorb: [2.0, 0.8, 0.3] };
+
+// Nav light: a blue floodlight in a small glowing bulb under the saucer's
+// leading edge, lighting the hull, neck and deflector from above and in front,
+// so they throw shadows on each other. The light sits just below the bulb, so
+// the bulb's own shell doesn't hide it.
+const NAV_LIGHT = { pos: [0, 0.40, 2.25], bulb: [0, 0.46, 2.25], radius: 0.05 };
 
 const mirrorX = ([x, y, z], side) => [side * x, y, z];
 // Midpoint, length and direction of a strut
@@ -44,6 +56,15 @@ function drawShip(parent) {
   const ship = multiply(parent, translate(...vsub([0, 0, 0], SHIP_CENTER)));
   drawSaucer(multiply(ship, translate(...SAUCER.pos)));
   drawEngineering(multiply(ship, translate(...HULL.pos)));
+  drawNavLight(ship);
+}
+
+// Level 2: the nav light, and the glowing bulb that shows where it is
+function drawNavLight(ship) {
+  setNavLight(transformPoint(ship, NAV_LIGHT.pos));
+  const r = NAV_LIGHT.radius;
+  drawPrimitive(sphereMesh, beaconTexture, EMISSIVE,
+    multiply(ship, multiply(translate(...NAV_LIGHT.bulb), scale(r, r, r))));
 }
 
 // Level 2: saucer section, a squashed sphere
@@ -56,10 +77,9 @@ function drawSaucer(parent) {
   drawRim(parent);  // same center as the saucer, so no offset
 }
 
-// Level 3: bridge dome, half buried in the saucer's top
+// Level 3: bridge dome, a glass canopy half buried in the saucer's top
 function drawBridge(parent) {
-  drawPrimitive(sphereMesh, domeTexture, NORMAL_MAPPING,
-    multiply(parent, scale(0.42, 0.13, 0.42)), DOME_MATERIAL, domeNormalMap);
+  drawPrimitive(sphereMesh, null, BUMP_MAPPING, multiply(parent, scale(0.42, 0.13, 0.42)), DOME_MATERIAL);
 }
 
 // Level 3: rim, a thin torus hugging the saucer's edge. Uniform scale keeps the
@@ -109,9 +129,9 @@ function drawNeck(parent, { length, d }) {
 function drawDeflector(parent) {
   const forward = multiply(parent, rotateX(Math.PI / 2));
   drawPrimitive(coneMesh, copperTexture, BUMP_MAPPING,
-    multiply(forward, multiply(translate(0, 0.06, 0), scale(0.28, 0.06, 0.28))));
+    multiply(forward, multiply(translate(0, 0.06, 0), scale(0.28, 0.06, 0.28))), COPPER_MATERIAL);
   drawPrimitive(coneMesh, copperTexture, BUMP_MAPPING,
-    multiply(forward, multiply(translate(0, 0.2, 0), scale(0.035, 0.2, 0.035))));
+    multiply(forward, multiply(translate(0, 0.2, 0), scale(0.035, 0.2, 0.035))), COPPER_MATERIAL);
 }
 
 // Level 3: pylon, a thin blade from the hull's top out to the nacelle's underside.

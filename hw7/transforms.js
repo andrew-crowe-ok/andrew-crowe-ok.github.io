@@ -60,11 +60,30 @@ function untransformVector(m, [x, y, z]) {
   return [0, 1, 2].map(i => m[i * 4] * x + m[i * 4 + 1] * y + m[i * 4 + 2] * z);
 }
 
+// The inverse of an affine matrix (a linear part A, then a translation t).
+// The rows of A's inverse are the cross products of its columns over its
+// determinant, and the translation undoes as -A^-1 t. The ray tracer needs it
+// for every part, which may be scaled unevenly, so the transpose won't do.
+function invertAffine(m) {
+  const c0 = [m[0], m[1], m[2]], c1 = [m[4], m[5], m[6]], c2 = [m[8], m[9], m[10]];
+  const t = [m[12], m[13], m[14]];
+  const det = vdot(c0, vcross(c1, c2));
+  const rows = [vcross(c1, c2), vcross(c2, c0), vcross(c0, c1)].map(r => vmul(r, 1 / det));
+  const out = new Float32Array(16);
+  rows.forEach((r, i) => {
+    out[i] = r[0]; out[4 + i] = r[1]; out[8 + i] = r[2];
+    out[12 + i] = -vdot(r, t);
+  });
+  out[15] = 1;
+  return out;
+}
+
 // Vectors as plain arrays
 const vadd = (a, b) => a.map((v, i) => v + b[i]);
 const vsub = (a, b) => a.map((v, i) => v - b[i]);
 const vmul = (a, k) => a.map(v => v * k);
 const vdot = (a, b) => a.reduce((sum, v, i) => sum + v * b[i], 0);
+const vcross = ([ax, ay, az], [bx, by, bz]) => [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx];
 
 // ---------------------------------------------------------------------------
 // Blending two camera positions

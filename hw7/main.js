@@ -1,6 +1,10 @@
 // WebGL setup
 const canvas = document.getElementById("glcanvas");
 
+// Phones and tablets: a touch screen and a GPU a fraction of a desktop's. They
+// get touch controls, smaller textures, fewer pixels and fewer default bounces.
+const MOBILE = matchMedia("(pointer: coarse)").matches;
+
 // If the ray tracer can't run -- no WebGL 2, a shader this GPU won't build, a
 // lost context -- say so on the page rather than leave it black (the fade
 // over the canvas only lifts once frames are being drawn)
@@ -228,7 +232,7 @@ const planetTexture = loadTexture("textures/antelope.jpg");
 // circumference several times their height, so they are four times as wide as
 // tall -- for roughly even detail over the ship. Phones get half the
 // resolution each way, a quarter of the memory.
-const generateSkin = createSkinGenerator(gl, { scale: matchMedia("(pointer: coarse)").matches ? 0.5 : 1 });
+const generateSkin = createSkinGenerator(gl, { scale: MOBILE ? 0.5 : 1 });
 
 const PAINT = [0.52, 0.535, 0.56];   // light blue-gray
 // Windows on the saucer: pane width, pane height, spacing (ship units)
@@ -331,15 +335,22 @@ function bindTextures() {
 
 // Full-window canvas, kept framed as in HW6: vertical FOV 45 deg, widened on
 // windows narrower than 16:10 so the whole orbit stays in frame. Every pixel is
-// a ray tree, so the drawing buffer is capped at about 1080p's pixel count and
-// the browser scales it up past that.
+// a ray tree, so the drawing buffer is capped at about 1080p's pixel count
+// (a quarter of that on phones) and the browser scales it up past that.
+//
+// On phones the cap also adapts: every ADAPT.window seconds the mean frame time
+// is checked, and the pixel budget shrinks by ADAPT.step while frames run slower
+// than ADAPT.slow, or grows back toward the cap while they run faster than
+// ADAPT.fast, never below ADAPT.floor of it.
 const BASE_FOVY = Math.PI / 4, MIN_ASPECT = 1.6;
-const MAX_PIXELS = 1920 * 1080;
+const MAX_PIXELS = MOBILE ? 960 * 540 : 1920 * 1080;
+const ADAPT = { window: 1.0, slow: 45, fast: 24, step: 0.8, floor: 0.25 };
+let pixelBudget = 1;   // share of MAX_PIXELS in use
 let projection, renderScale = 1;
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const css = canvas.clientWidth * canvas.clientHeight;
-  renderScale = Math.min(dpr, Math.sqrt(MAX_PIXELS / Math.max(css, 1)));
+  renderScale = Math.min(dpr, Math.sqrt(MAX_PIXELS * pixelBudget / Math.max(css, 1)));
   canvas.width = Math.round(canvas.clientWidth * renderScale);
   canvas.height = Math.round(canvas.clientHeight * renderScale);
   gl.viewport(0, 0, canvas.width, canvas.height);
@@ -350,6 +361,19 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
+
+const adapt = { t0: null, frames: 0, ms: 0 };
+function adaptResolution(now, frameMs) {
+  if (!MOBILE) return;
+  adapt.t0 ??= now;
+  adapt.frames++; adapt.ms += frameMs;
+  if (now - adapt.t0 < ADAPT.window) return;
+  const mean = adapt.ms / adapt.frames;
+  adapt.t0 = now; adapt.frames = 0; adapt.ms = 0;
+  const next = mean > ADAPT.slow ? Math.max(ADAPT.floor, pixelBudget * ADAPT.step)
+    : mean < ADAPT.fast ? Math.min(1, pixelBudget / ADAPT.step) : pixelBudget;
+  if (next !== pixelBudget) { pixelBudget = next; resize(); }
+}
 
 // The angle one pixel spans mid-frame, which sizes the stars and picks
 // mipmap levels: the plain lens's, blended toward the fisheye's as it opens
@@ -571,11 +595,15 @@ const CONTROL_INPUTS = {
   attenuation: { read: el => el.checked },
   stats:       { read: el => el.checked }
 };
+// The panel starts folded on small screens, where it would cover the scene
+if (MOBILE || innerWidth < 560) document.getElementById("controls").open = false;
+
 // The page's query string can preset any of them, e.g. ?bounces=0&shadows=0
 const presets = new URLSearchParams(location.search);
 for (const [id, { read, show }] of Object.entries(CONTROL_INPUTS)) {
   const input = document.getElementById(id);
   const output = document.querySelector(`output[for="${id}"]`);
+  if (MOBILE && id === "bounces" && !presets.has(id)) input.value = "2";
   if (presets.has(id)) {
     if (input.type === "checkbox") input.checked = presets.get(id) !== "0" && presets.get(id) !== "false";
     else input.value = presets.get(id);
@@ -606,22 +634,58 @@ let camX, camY;              // arrow keys; w, s and the wheel zoom (camera.js)
 // planet's spin along with everything else
 let sceneStart = 0;
 
-// A press that strays more than CLICK_SLOP pixels from where it started is a
-// drag, even if it comes back, and its release is not a click
+// Pointer input, mouse and touch alike. One pointer down drags the view
+// around. Two (fingers) pinch to zoom, as the wheel does, and move together to
+// pan, as the arrow keys do, the pan scaled so the focus point tracks the
+// fingers. A press that strays more than CLICK_SLOP pixels from where it
+// started, or that ever has a second finger, is a drag, and its release is not
+// a click.
 const CLICK_SLOP = 5;
-let mouseDown = false, dragged = false, lastX, lastY, pressX, pressY;
-canvas.addEventListener("mousedown", e => {
-  mouseDown = true; dragged = false;
-  lastX = pressX = e.clientX; lastY = pressY = e.clientY;
+const pointers = new Map();   // pointerId -> { x, y } where it was last seen
+let dragged = false, pressX, pressY, pinch = null;
+
+function pinchState() {
+  const [a, b] = [...pointers.values()];
+  return { dist: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+canvas.addEventListener("pointerdown", e => {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) {
+    dragged = false;
+    pressX = e.clientX; pressY = e.clientY;
+  } else {
+    dragged = true;
+  }
+  pinch = pointers.size === 2 ? pinchState() : null;
 });
-window.addEventListener("mouseup", () => mouseDown = false);
-window.addEventListener("mousemove", e => {
-  if (!mouseDown) return;
-  dragRotY += (e.clientX - lastX) * 0.01;
-  dragRotX += (e.clientY - lastY) * 0.01;
-  lastX = e.clientX; lastY = e.clientY;
-  if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > CLICK_SLOP) dragged = true;
+canvas.addEventListener("pointermove", e => {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  if (pointers.size === 1) {
+    dragRotY += (e.clientX - p.x) * 0.01;
+    dragRotX += (e.clientY - p.y) * 0.01;
+    if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > CLICK_SLOP) dragged = true;
+  }
+  p.x = e.clientX; p.y = e.clientY;
+  if (pointers.size === 2 && pinch) {
+    const now = pinchState();
+    if (!offOrbit()) {
+      if (now.dist > 0 && pinch.dist > 0) zoomPinch(pinch.dist / now.dist);
+      const k = 2 * zoom.dist / (projection[5] * canvas.clientHeight);   // units per px at the focus
+      camX += (now.x - pinch.x) * k;
+      camY -= (now.y - pinch.y) * k;
+    }
+    pinch = now;
+  }
 });
+function liftPointer(e) {
+  if (!pointers.delete(e.pointerId)) return;
+  pinch = pointers.size === 2 ? pinchState() : null;
+}
+canvas.addEventListener("pointerup", liftPointer);
+canvas.addEventListener("pointercancel", liftPointer);
 
 const CONTROL_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "s"];
 document.addEventListener("keydown", e => {
@@ -840,6 +904,7 @@ function render(time) {
 
   const cpuMs = performance.now() - frameStart;
   updateStats(time, frameDelta, cpuMs, ship);
+  adaptResolution(now, frameDelta);
 
   requestAnimationFrame(render);
 }

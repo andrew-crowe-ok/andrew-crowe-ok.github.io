@@ -170,6 +170,7 @@ function setZoomGoal(d) {
 }
 const zoomWheel = px => setZoomGoal(zoom.goal * Math.exp(ZOOM.perPixel * px));
 const zoomKey = dir => setZoomGoal(zoom.goal * Math.exp(dir * ZOOM.keyStep));
+const zoomPinch = ratio => setZoomGoal(zoom.goal * ratio);
 
 // Start the slide onto `on`. `pan` is the arrow-key pan as it stands, which
 // the caller zeroes: it is folded into what eases away.

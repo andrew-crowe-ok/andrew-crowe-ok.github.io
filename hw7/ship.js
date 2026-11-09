@@ -62,6 +62,64 @@ const DOME_MATERIAL = { ka: 0.05, kd: 0.2, ks: 0.9, shininess: 160, bumpScale: 0
 // the bulb's own shell doesn't hide it.
 const NAV_LIGHT = { pos: [0, -0.17, 2.4], bulb: [0, -0.1, 2.4], radius: 0.05 };
 
+// Engines, animated with the flight (updateEngines, once a frame). In orbit
+// the impulse engines run at cruise and the warp coils tick over, breathing
+// slowly. Engage spools the impulse engines up for the departure while the
+// coils charge; at the jump the coils and Bussards flare, then settle to a
+// steady warp glow as the impulse engines drop to standby. The levels scale
+// the glows' brightness; flow is how fast the grilles' plasma streams aft, in
+// grille-box units/s (2 is one texture length).
+const ENGINES = {
+  orbit:  { impulse: 1.0, coils: 0.55, bussard: 0.8, flow: 0.15 },
+  charge: { impulse: 1.8, coils: 1.15, bussard: 1.1, flow: 0.7 },   // just before the jump
+  warp:   { impulse: 0.35, coils: 1.5, bussard: 1.4, flow: 2.4 },
+  flare: 2.6,          // coils and Bussards at the instant of the jump
+  settle: 0.45,        // s for the flare to die down to warp's levels
+  spool: 0.8,          // s for the impulse engines to change level
+  breathe: [0.1, 0.4], // shimmer on the coils and Bussards: depth, Hz
+  maxRate: 3.5         // fastest the Bussards' plasma video plays
+};
+const engines = { impulse: 1, coils: 1, bussard: 1, scroll: 0, plasmaRate: 1 };
+
+const lerp = (a, b, k) => a + (b - a) * k;
+const lerpLevels = (a, b, k) => Object.fromEntries(Object.keys(a).map(key => [key, lerp(a[key], b[key], k)]));
+
+// t is the scene clock, dt the frame's step (for the grilles' flow, whose
+// speed changes along the way)
+function updateEngines(t, dt) {
+  const { orbit, charge, warp } = ENGINES;
+  const e = engageElapsed(t);   // scene.js
+  let level;
+  if (e === null) {
+    level = orbit;
+  } else if (e < ENGAGE.warpAt) {
+    // The coils charge slowly at first and fastest just before the jump
+    const k = smootherstep(e / ENGAGE.warpAt) ** 2;
+    level = { ...lerpLevels(orbit, charge, k),
+      impulse: lerp(orbit.impulse, charge.impulse, smootherstep(e / ENGINES.spool)) };
+  } else {
+    const w = e - ENGAGE.warpAt;
+    const flare = Math.exp(-w / ENGINES.settle);
+    level = { ...lerpLevels(charge, warp, 1 - flare),
+      coils: lerp(warp.coils, ENGINES.flare, flare),
+      bussard: lerp(warp.bussard, ENGINES.flare, flare),
+      impulse: lerp(charge.impulse, warp.impulse, smootherstep(w / ENGINES.spool)) };
+  }
+
+  const [depth, hz] = ENGINES.breathe;
+  const breath = 1 + depth * Math.sin(2 * Math.PI * hz * t);
+  engines.impulse = level.impulse;
+  engines.coils = level.coils * breath;
+  engines.bussard = level.bussard * breath;
+  // Slide the grille texture toward -z (aft), kept in one period [0, 2)
+  engines.scroll = (((engines.scroll - level.flow * dt) % 2) + 2) % 2;
+  // The plasma spins faster with the Bussards' power, in quarter steps
+  const rate = Math.min(level.bussard / orbit.bussard, ENGINES.maxRate);
+  engines.plasmaRate = Math.round(rate * 4) / 4;
+}
+// An EMISSIVE part's material at power p (and texture scroll)
+const glowAt = (power, scroll = 0) => ({ ...DEFAULT_MATERIAL, power, scroll });
+
 const mirrorX = ([x, y, z], side) => [side * x, y, z];
 const vnorm = v => vmul(v, 1 / Math.hypot(...v));
 
@@ -154,10 +212,12 @@ function drawBridge(parent) {
   drawPrimitive(sphereMesh, null, BUMP_MAPPING, multiply(parent, scale(0.24, 0.07, 0.2)), DOME_MATERIAL);
 }
 
-// Level 4: impulse engines, a red glowing slab across the keyhole's aft face.
+// Level 4: impulse engines, a red glowing slab across the keyhole's aft face,
+// as bright as the engines' impulse level.
 // The box's back face maps u across and v up, so the glow peaks along the middle.
 function drawImpulse(parent) {
-  drawPrimitive(cubeMesh, impulseGlow, EMISSIVE, multiply(parent, scale(0.22, 0.035, 0.015)));
+  drawPrimitive(cubeMesh, impulseGlow, EMISSIVE, multiply(parent, scale(0.22, 0.035, 0.015)),
+    glowAt(engines.impulse));
 }
 
 // Level 2: engineering hull, an elliptical cylinder along z (tubeZ), boxed as
@@ -242,7 +302,8 @@ function drawNacelle(parent) {
   // proud of both sides; the body hides the rest of it. A box's side faces
   // map u along z and v up, so the slats cross the nacelle.
   drawPrimitive(cubeMesh, grilleGlow, EMISSIVE,
-    multiply(parent, multiply(translate(0, 0.01, -0.08), scale(rx + 0.006, 0.07, l * 0.82))));
+    multiply(parent, multiply(translate(0, 0.01, -0.08), scale(rx + 0.006, 0.07, l * 0.82))),
+    glowAt(engines.coils, engines.scroll));
 
   drawBussard(multiply(parent, translate(0, 0, l)));
 }
@@ -252,5 +313,6 @@ function drawNacelle(parent) {
 // (v = 1) glows at the tip and u wraps around the nacelle's axis.
 function drawBussard(parent) {
   const { radii: [rx, ry], bussard } = NACELLE;
-  drawPrimitive(sphereMesh, plasma.texture, EMISSIVE, multiply(parent, podZ([rx * 0.97, ry * 0.97, bussard])));
+  drawPrimitive(sphereMesh, plasma.texture, EMISSIVE, multiply(parent, podZ([rx * 0.97, ry * 0.97, bussard])),
+    glowAt(engines.bussard));
 }

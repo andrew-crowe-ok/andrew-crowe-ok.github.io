@@ -1,7 +1,7 @@
 // Scene above the ship, in the same functional style as ship.js:
 //
 //   drawSystem
-//   ├── setSky            (the star sphere's frame; the shader draws the stars)
+//   ├── setSky            (the sky's frame; the shader draws the stars)
 //   ├── drawPlanet        (spins on its own axis)
 //   ├── drawMoon          (a glass moon on its own tilted orbit)
 //   └── drawOrbit         (tilted orbital plane, carries the ship around)
@@ -13,9 +13,6 @@
 // shipState() says where the ship is: either on the circle, or on a
 // smooth departure onto the straight line it was flying when "Engage" was
 // pressed.
-
-// The stars sit on this sphere: outside the orbit, well inside the far plane
-const SKY_RADIUS = 45;
 
 const PLANET = { radius: 2.4, spin: 0.08 };                     // spin in rad/s
 
@@ -42,17 +39,14 @@ const MOON_MATERIAL = {
 // `ship` is this frame's shipState(): the camera needs it before anything is
 // drawn, so main.js advances the flight path and passes the result down.
 function drawSystem(parent, t, ship) {
-  // The sky drifts with the ship at warp (see ENGAGE.skyFollow). The
-  // drift is in the orbital plane, so it is applied inside that tilt and the
-  // tilt undone again, leaving the stars' own directions as they were.
-  const tilt = rotateX(ORBIT.tilt);
-  const plane = multiply(parent, tilt);
-  // The stars streak by the ship's warp speed through them, turned into eye
-  // space; they move past the eye the opposite way to the ship. The streaks
-  // draw out with the lens as it opens (camera.js).
+  // The stars are fixed in space around the system (raytrace.js), so the
+  // sky's frame is the system's own. They streak by the ship's warp speed
+  // through them, turned into eye space; they move past the eye the opposite
+  // way to the ship. The streaks draw out with the lens as it opens (camera.js).
+  const plane = multiply(parent, rotateX(ORBIT.tilt));
   const o = transformPoint(plane, [0, 0, 0]);
   const streak = vmul(vsub(o, transformPoint(plane, ship.streak)), lensFisheye);
-  setSky(multiply(multiply(plane, translate(...ship.sky)), rotateX(-ORBIT.tilt)), streak);
+  setSky(parent, streak);
   drawPlanet(parent, t);
   drawMoon(parent, t);
   drawOrbit(plane, ship);
@@ -108,10 +102,8 @@ function drawMoon(parent, t) {
 // fisheye, the star streaks and the warp flash (camera.js, raytrace.js, main.js)
 // all start at that instant, keyed off `warpTau`, the time since the jump.
 //
-// At warp the ship would leave the star sphere long before the reset, so the
-// sky drifts along with it by ENGAGE.skyFollow of warp's extra distance: the
-// stars still stream past, the ship reaches the edge of them just as the
-// scene resets, and the planet falls away at the ship's true speed.
+// At warp the ship flies on into the near star field, which has no edge: the
+// stars stream past at the ship's true speed while the planet falls away.
 //
 // ENGAGE.reset seconds after the press, main.js puts the whole scene back the
 // way it loaded (resetScene, which calls resetFlight below).
@@ -121,9 +113,6 @@ const ENGAGE = {
   blend: 2.5,       // s, length of the departure blend
   warpAt: 3.2,      // s after the press that the ship jumps to warp
   warp: 10,         // warp speed, in multiples of orbital speed
-  skyFollow: 0.525, // share of warp's extra distance the sky drifts along:
-                    //   enough that the reset catches the ship 43 units out,
-                    //   just short of the star sphere's 45
   reset: 10         // s from the press until the scene resets
 };
 const ORBIT_SPEED = ORBIT.radius * ORBIT.speed;   // units/s along the circle
@@ -156,10 +145,9 @@ function resetFlight() { flight = { mode: "orbit" }; engagePending = false; }
 
 // Where a straight leg has reached, and how fast, tau seconds after the press:
 // orbital speed, then warp speed from ENGAGE.warpAt on. `warpTau` is the time
-// since that jump (null before it), `sky` how far the star sphere has drifted
-// along with it, and `streak` the velocity the stars are drawn stretched by:
-// the ship's speed through the drifting sky, at warp only.
-const NO_DRIFT = [0, 0, 0];
+// since that jump (null before it), and `streak` the velocity the stars are
+// drawn stretched by: the ship's own, at warp only.
+const NO_STREAK = [0, 0, 0];
 function straightLeg(f, tau) {
   const warp = tau >= ENGAGE.warpAt;
   const warpTau = warp ? tau - ENGAGE.warpAt : null;
@@ -170,8 +158,7 @@ function straightLeg(f, tau) {
     warpTau,
     pos: vadd(f.p0, vmul(f.f0, ORBIT_SPEED * tau + extraDist)),
     vel: vmul(f.f0, speed),
-    sky: vmul(f.f0, ENGAGE.skyFollow * extraDist),
-    streak: warp ? vmul(f.f0, speed - ENGAGE.skyFollow * extraSpeed) : NO_DRIFT
+    streak: warp ? vmul(f.f0, speed) : NO_STREAK
   };
 }
 
@@ -189,13 +176,13 @@ function shipState(t) {
 
   if (flight.mode === "orbit") {
     const a = orbitAngle(t);
-    return { pos: orbitPoint(a), heading: a, warpTau: null, sky: NO_DRIFT, streak: NO_DRIFT };
+    return { pos: orbitPoint(a), heading: a, warpTau: null, streak: NO_STREAK };
   }
 
   const tau = t - flight.t0;
   const line = straightLeg(flight, tau);
   if (flight.mode === "free")
-    return { pos: line.pos, heading: flight.a0, warpTau: line.warpTau, sky: line.sky, streak: line.streak };
+    return { pos: line.pos, heading: flight.a0, warpTau: line.warpTau, streak: line.streak };
 
   // The circle being left, its phase frozen at the press and carried on from
   // there, so the two paths coincide where the blend starts
@@ -214,7 +201,7 @@ function shipState(t) {
   // At u = 1 the blend already equals the line exactly, so the handover is a no-op
   if (u >= 1) flight = { ...flight, mode: "free" };
 
-  return { pos, heading: headingOf(vel, a), warpTau: line.warpTau, sky: line.sky, streak: line.streak };
+  return { pos, heading: headingOf(vel, a), warpTau: line.warpTau, streak: line.streak };
 }
 
 // Level 1: place the ship on the path shipState() worked out. On the circle,

@@ -146,7 +146,7 @@ const ZOOM = {
   // whole sweep (orbit radius + half its length), so the ship never flies
   // through the lens; around the ship it stays outside the ship's box.
   min: { planet: 5.6, ship: 1.2, moon: 2.0 },
-  max: 30,                        // inside the star sphere even from the ship
+  max: 30,                        // short of the nearest stars (STAR_FIELD.clear) even from the ship
   clearPlanet: 0.25,              // nearest the eye comes to the planet's surface
   perPixel: 0.0012,               // about 13% a wheel notch
   keyStep: 0.015,                 // log distance per w / s, about 1.5%

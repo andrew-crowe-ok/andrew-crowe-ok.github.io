@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pinball</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0d14; }
+    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+    #hud { position: fixed; top: 8px; left: 12px; color: #ddd; font: 16px monospace; white-space: pre; }
+    #help { position: fixed; bottom: 8px; left: 12px; color: #888; font: 13px monospace; }
+  </style>
+</head>
+
+<body>
+  <canvas id="glcanvas"></canvas>
+  <div id="hud"></div>
+  <div id="help">Flippers: Z / &larr; and / / &rarr; (or Shift keys) &middot; Launch: hold Space</div>
+
+  <script src="physics.js"></script>
+  <script src="render.js"></script>
+  <script src="main.js"></script>
+</body>
+
+</html>

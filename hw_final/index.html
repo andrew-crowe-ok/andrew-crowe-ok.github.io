@@ -3,15 +3,24 @@
 
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0d14">
   <title>Pinball</title>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0d14; }
-    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
-    body { font-family: system-ui, sans-serif; color: #eee; }
-    #hud { position: fixed; top: 12px; left: 16px; right: 16px; font: 600 clamp(15px, 2.4vw, 22px) monospace;
-           white-space: pre-wrap; text-shadow: 0 2px 6px #000; }
+    body {
+      font-family: system-ui, sans-serif; color: #eee;
+      /* no scrolling, pinch-zoom, text selection or long-press menus during play */
+      touch-action: none; overscroll-behavior: none;
+      user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; }
+    #hud { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 16px; right: 16px;
+           font: 600 clamp(15px, 2.4vw, 22px) monospace;
+           white-space: pre-wrap; text-shadow: 0 2px 6px #000; pointer-events: none; z-index: 2; }
 
+    /* ---------- keyboard hints ---------- */
     #controls {
       position: fixed; left: 16px; right: 16px; bottom: 16px; margin: 0 auto; width: fit-content;
       display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px 28px;
@@ -31,16 +40,50 @@
     }
     kbd.wide { min-width: 5em; }
     kbd.down { background: #f2c14e; border-color: #b8891f; color: #1a1a1a; transform: translateY(2px); }
+
+    /* ---------- touch controls: each half of the screen is a flipper ---------- */
+    #touch { display: none; position: fixed; inset: 0; z-index: 1; }
+    body.touch #touch { display: block; }
+    body.touch #controls { display: none; }
+    .zone { position: absolute; top: 0; bottom: 0; width: 50%; touch-action: none; }
+    #touchLeft { left: 0; }
+    #touchRight { right: 0; }
+    .pad, #touchLaunch {
+      position: absolute; bottom: calc(16px + env(safe-area-inset-bottom));
+      display: flex; align-items: center; justify-content: center;
+      font: 700 16px system-ui, sans-serif; letter-spacing: 0.08em; color: #fff;
+      background: rgba(20, 24, 36, 0.55); border: 2px solid rgba(255, 255, 255, 0.35);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      transition: background 0.05s, transform 0.05s;
+    }
+    .pad { width: min(34vw, 180px); height: 72px; border-radius: 18px; pointer-events: none; }
+    #touchLeft .pad { left: calc(16px + env(safe-area-inset-left)); }
+    #touchRight .pad { right: calc(16px + env(safe-area-inset-right)); }
+    #touchLaunch {
+      left: 50%; transform: translateX(-50%); z-index: 1;
+      width: 84px; height: 84px; border-radius: 50%; padding: 0; font-size: 13px;
+      touch-action: none; cursor: pointer;
+    }
+    .zone.down .pad, #touchLaunch.down { background: rgba(242, 193, 78, 0.85); color: #1a1a1a; }
+    .zone.down .pad { transform: scale(0.96); }
+    #touchLaunch.down { transform: translateX(-50%) scale(0.94); }
   </style>
 </head>
 
 <body>
   <canvas id="glcanvas"></canvas>
   <div id="hud"></div>
+
   <div id="controls">
     <div class="control"><kbd data-code="KeyZ">Z</kbd><kbd data-code="ArrowLeft">&larr;</kbd><span>Left flipper</span></div>
     <div class="control"><kbd class="wide" data-code="Space">Space</kbd><span>Hold to launch</span></div>
     <div class="control"><span>Right flipper</span><kbd data-code="Slash">/</kbd><kbd data-code="ArrowRight">&rarr;</kbd></div>
+  </div>
+
+  <div id="touch">
+    <div class="zone" id="touchLeft"><div class="pad">&#9664; FLIP</div></div>
+    <div class="zone" id="touchRight"><div class="pad">FLIP &#9654;</div></div>
+    <button id="touchLaunch">LAUNCH</button>
   </div>
 
   <script src="transforms.js"></script>

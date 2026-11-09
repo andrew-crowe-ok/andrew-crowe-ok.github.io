@@ -117,8 +117,45 @@ function lookAt(eye, target, up) {
     -d(s, eye), -d(u, eye), d(f, eye), 1]);
 }
 
-// Player's-eye view from below the table, looking up its length
-const CAMERA = { eye: [10, -19, 29], target: [10, 14, 0], fov: 45 * Math.PI / 180 };
+// Player's-eye view from below the table, looking up its length. Tall (phone
+// portrait) screens blend toward a steeper, more overhead view so the long
+// table fills the screen instead of shrinking to fit its width.
+const CAMERA = {
+  wide: { eye: [10, -19, 29], target: [10, 14, 0] },
+  tall: { eye: [10, -6, 42], target: [10, 15.5, 0] },
+};
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+
+// CSS px at the top/bottom of the screen covered by HTML overlays (set by main.js)
+let screenInsets = { top: 0, bottom: 0 };
+
+// Cabinet corners: the projection is fit so all of them stay on screen
+const FIT_CORNERS = [];
+for (const x of [-1.2, 21.2]) for (const y of [-2.5, 37.2]) for (const z of [-1.4, 1.2]) FIT_CORNERS.push([x, y, z]);
+
+// Off-center perspective frustum (glFrustum)
+function frustum(l, r, b, t, n, f) {
+  return new Float32Array([2 * n / (r - l), 0, 0, 0, 0, 2 * n / (t - b), 0, 0,
+    (r + l) / (r - l), (t + b) / (t - b), -(f + n) / (f - n), -1, 0, 0, -2 * f * n / (f - n), 0]);
+}
+
+// Frame the cabinet as large as possible in the screen area between the
+// overlays, centered there. Works in slopes (x/-z, y/-z) of view space.
+function fitProjection(view, W, H, insets) {
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  for (const c of FIT_CORNERS) {
+    const [x, y, z] = transformPoint(view, c);
+    xmin = Math.min(xmin, x / -z); xmax = Math.max(xmax, x / -z);
+    ymin = Math.min(ymin, y / -z); ymax = Math.max(ymax, y / -z);
+  }
+  const margin = 1.04, usable = H - insets.top - insets.bottom;
+  const s = Math.max((xmax - xmin) * margin / W, (ymax - ymin) * margin / usable);   // slope per px
+  const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2;
+  const bottom = cy - s * (insets.bottom + usable / 2);
+  const near = 1;
+  return frustum((cx - s * W / 2) * near, (cx + s * W / 2) * near,
+                 bottom * near, (bottom + s * H) * near, near, 200);
+}
 
 // ---------- drawing ----------
 
@@ -204,7 +241,7 @@ function drawBallShadow(p) {
 }
 
 function resize() {
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // phones report 3+; not worth the fill cost
   const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width === w && canvas.height === h) return;
   canvas.width = w;
@@ -218,10 +255,11 @@ gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 function render() {
   resize();
   const aspect = canvas.width / canvas.height;
-  // Widen the view on narrow (portrait) screens so the table still fits
-  const fov = aspect < 0.85 ? 2 * Math.atan(Math.tan(CAMERA.fov / 2) * 0.85 / aspect) : CAMERA.fov;
-  gl.uniformMatrix4fv(U.uProjection, false, perspective(fov, aspect, 1, 200));
-  view = lookAt(CAMERA.eye, CAMERA.target, [0, 0, 1]);
+  const tall = Math.min(1, Math.max(0, (1.1 - aspect) / 0.6));   // 0 at aspect >= 1.1, 1 at <= 0.5
+  view = lookAt(lerp3(CAMERA.wide.eye, CAMERA.tall.eye, tall),
+                lerp3(CAMERA.wide.target, CAMERA.tall.target, tall), [0, 0, 1]);
+  gl.uniformMatrix4fv(U.uProjection, false,
+    fitProjection(view, canvas.clientWidth, canvas.clientHeight, screenInsets));
   gl.uniform3fv(U.uLightPos, LIGHTS.flatMap(l => transformPoint(view, l.pos)));
   gl.uniform3fv(U.uLightColor, LIGHTS.flatMap(l => l.color));
 

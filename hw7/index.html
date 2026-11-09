@@ -106,9 +106,86 @@
     #controls .row { display: grid; grid-template-columns: 1fr auto; gap: 0.15em 0.5em; margin: 0.5em 0; }
     #controls .row input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: rgb(var(--glow)); }
     #controls output { font-variant-numeric: tabular-nums; opacity: 0.8; }
-    #controls .checks { display: flex; gap: 1.2em; margin-top: 0.7em; }
+    #controls .checks { display: flex; flex-wrap: wrap; gap: 0.5em 1.1em; margin-top: 0.7em; }
     #controls .checks label { display: flex; align-items: center; gap: 0.4em; cursor: pointer; }
     #controls .checks input { margin: 0; accent-color: rgb(var(--glow)); }
+
+    /* Diagnostic stats / telemetry overlay */
+    #statsOverlay {
+      position: fixed; right: 16px; top: 16px; width: min(240px, calc(100vw - 32px));
+      box-sizing: border-box; padding: 0.7em 0.95em;
+      font: 500 12px / 1.35 "Segoe UI", system-ui, sans-serif; color: var(--ink);
+      background: linear-gradient(180deg, rgba(14, 34, 58, 0.72), rgba(4, 12, 24, 0.8));
+      border: 1px solid rgba(var(--glow), 0.45); border-radius: 12px;
+      box-shadow: 0 0 14px rgba(var(--glow), 0.22);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      user-select: none; pointer-events: none;
+      z-index: 10;
+    }
+    #statsOverlay[hidden] { display: none; }
+    #statsOverlay .stats-header {
+      display: flex; justify-content: space-between; align-items: center;
+      font: 600 11px / 1 "Orbitron", "Eurostile", "Segoe UI", system-ui, sans-serif;
+      letter-spacing: 0.25em; text-transform: uppercase;
+      text-shadow: 0 0 8px rgba(var(--glow), 0.8);
+      margin-bottom: 0.55em; padding-bottom: 0.35em;
+      border-bottom: 1px solid rgba(var(--glow), 0.25);
+    }
+    #statsOverlay .stats-status {
+      font-size: 9px; letter-spacing: 0.15em; opacity: 0.75;
+      padding: 0.15em 0.4em; border-radius: 4px;
+      background: rgba(var(--glow), 0.15); border: 1px solid rgba(var(--glow), 0.3);
+    }
+    #statsOverlay .stats-status.warp {
+      color: #fff; background: rgba(255, 160, 60, 0.25);
+      border-color: rgba(255, 180, 80, 0.6);
+      text-shadow: 0 0 8px rgba(255, 180, 80, 0.8);
+    }
+    #statsOverlay button#statsClose {
+      pointer-events: auto;
+      background: none; border: none; padding: 0 0.2em; margin-left: 0.4em;
+      font: 600 13px / 1 sans-serif; color: var(--ink);
+      opacity: 0.6; cursor: pointer; border-radius: 4px;
+    }
+    #statsOverlay button#statsClose:hover { opacity: 1; color: #fff; }
+    #statsOverlay .stat-row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      gap: 0.5em; margin: 0.2em 0;
+    }
+    #statsOverlay .stat-label {
+      opacity: 0.72; font-size: 11px;
+    }
+    #statsOverlay .stat-val {
+      font-variant-numeric: tabular-nums; font-weight: 600; text-align: right;
+    }
+    #statsOverlay .stat-val.accent {
+      color: #7ef5ff; text-shadow: 0 0 6px rgba(var(--glow), 0.6);
+    }
+    #statsOverlay .stat-val.warn {
+      color: #ffd166;
+    }
+    #statsOverlay .stat-val.alert {
+      color: #ff6b6b;
+    }
+    #statsOverlay .stats-graph {
+      width: 100%; height: 28px; display: block; margin-top: 0.5em;
+      border-radius: 6px; background: rgba(0, 10, 20, 0.55);
+      border: 1px solid rgba(var(--glow), 0.2);
+    }
+    #statsOverlay .stats-gpu-info {
+      font-size: 9px; opacity: 0.55; margin-top: 0.4em;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      text-align: right;
+    }
+    @media (max-width: 560px) {
+      #statsOverlay {
+        top: auto;
+        bottom: calc(max(7vh, 28px) + 54px);
+        right: 16px;
+        left: 16px;
+        width: auto;
+      }
+    }
   </style>
 </head>
 
@@ -136,18 +213,63 @@
     <div class="checks">
       <label><input type="checkbox" id="shadows" checked> Shadows</label>
       <label><input type="checkbox" id="attenuation" checked> Attenuation</label>
+      <label><input type="checkbox" id="stats"> Stats</label>
     </div>
   </details>
 
+  <div id="statsOverlay" hidden>
+    <div class="stats-header">
+      <span>Telemetry</span>
+      <div style="display: flex; align-items: center; gap: 0.3em;">
+        <span id="statsFlightPhase" class="stats-status">ORBIT</span>
+        <button id="statsClose" title="Hide stats (key: I)" aria-label="Close stats">&times;</button>
+      </div>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Frame Rate</span>
+      <span id="statFps" class="stat-val accent">-- FPS</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Latency / Frame</span>
+      <span id="statLatency" class="stat-val">-- ms</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">CPU Render</span>
+      <span id="statCpu" class="stat-val">-- ms</span>
+    </div>
+    <div id="statGpuRow" class="stat-row" hidden>
+      <span class="stat-label">GPU Render</span>
+      <span id="statGpu" class="stat-val">-- ms</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Resolution</span>
+      <span id="statRes" class="stat-val">--</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Viewport / Scale</span>
+      <span id="statScale" class="stat-val">--</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Primitives</span>
+      <span id="statPrims" class="stat-val">--</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Ray Bounces</span>
+      <span id="statBounces" class="stat-val">--</span>
+    </div>
+    <canvas id="statsGraph" class="stats-graph" width="200" height="28"></canvas>
+    <div id="statsGpuInfo" class="stats-gpu-info"></div>
+  </div>
+
   <!-- ?v= changes with each deploy, so a browser never runs a cached script
        from the last one alongside new ones -->
-  <script src="transforms.js?v=3"></script>
-  <script src="raytrace.js?v=3"></script>
-  <script src="textures.js?v=3"></script>
-  <script src="ship.js?v=3"></script>
-  <script src="camera.js?v=3"></script>
-  <script src="scene.js?v=3"></script>
-  <script src="main.js?v=3"></script>
+  <script src="transforms.js?v=4"></script>
+  <script src="raytrace.js?v=4"></script>
+  <script src="textures.js?v=4"></script>
+  <script src="ship.js?v=4"></script>
+  <script src="camera.js?v=4"></script>
+  <script src="scene.js?v=4"></script>
+  <script src="main.js?v=4"></script>
 </body>
 
 </html>

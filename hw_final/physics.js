@@ -48,8 +48,9 @@ const table = {
     { a: [0, 8], b: [5.4, 4.6] },            // left inlane guide
     { a: [LANE_X, 8], b: [13.0, 4.6] },      // right inlane guide
     // apron: keeps a draining ball in the center channel under the flippers
-    { a: [5.4, 4.6], b: [5.4, -1] },
-    { a: [13.0, 4.6], b: [13.0, -1] },
+    // (hidden: the renderer covers this area instead of drawing rails)
+    { a: [5.4, 4.6], b: [5.4, -1], hidden: true },
+    { a: [13.0, 4.6], b: [13.0, -1], hidden: true },
   ],
   bumpers: [
     { c: [6, 24], r: 1.2, kick: 18, points: 100, lit: 0 },

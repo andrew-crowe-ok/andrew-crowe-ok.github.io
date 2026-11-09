@@ -360,9 +360,206 @@ function pixelAngle() {
 }
 
 // ---------------------------------------------------------------------------
-// Ray tracer controls (index.html)
+// Telemetry & stats overlay
 // ---------------------------------------------------------------------------
 const controls = {};
+const statsOverlay = document.getElementById("statsOverlay");
+const statsClose = document.getElementById("statsClose");
+if (statsClose) {
+  statsClose.addEventListener("click", () => {
+    const statsInput = document.getElementById("stats");
+    if (statsInput) {
+      statsInput.checked = false;
+      statsInput.dispatchEvent(new Event("input"));
+    }
+  });
+}
+function setStatsVisible(visible) {
+  if (statsOverlay) statsOverlay.hidden = !visible;
+}
+
+const statEls = {
+  phase: document.getElementById("statsFlightPhase"),
+  fps: document.getElementById("statFps"),
+  latency: document.getElementById("statLatency"),
+  cpu: document.getElementById("statCpu"),
+  gpuRow: document.getElementById("statGpuRow"),
+  gpu: document.getElementById("statGpu"),
+  res: document.getElementById("statRes"),
+  scale: document.getElementById("statScale"),
+  prims: document.getElementById("statPrims"),
+  bounces: document.getElementById("statBounces"),
+  graph: document.getElementById("statsGraph"),
+  gpuInfo: document.getElementById("statsGpuInfo"),
+};
+const graphCtx = statEls.graph ? statEls.graph.getContext("2d") : null;
+
+if (statEls.gpuInfo) {
+  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+  const renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  if (renderer) {
+    statEls.gpuInfo.textContent = renderer;
+    statEls.gpuInfo.title = renderer;
+  }
+}
+
+// WebGL2 Disjoint Timer Query for measuring GPU fragment shader raytracing
+const timerExt = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+let activeGpuQuery = null;
+let pendingGpuQuery = null;
+let lastGpuMs = null;
+
+function beginGpuTimer() {
+  if (!timerExt || !controls.stats || activeGpuQuery || pendingGpuQuery) return;
+  activeGpuQuery = gl.createQuery();
+  gl.beginQuery(timerExt.TIME_ELAPSED_EXT, activeGpuQuery);
+}
+
+function endGpuTimer() {
+  if (!timerExt || !activeGpuQuery) return;
+  gl.endQuery(timerExt.TIME_ELAPSED_EXT);
+  pendingGpuQuery = activeGpuQuery;
+  activeGpuQuery = null;
+}
+
+function pollGpuTimer() {
+  if (!timerExt || !pendingGpuQuery) return;
+  const available = gl.getQueryParameter(pendingGpuQuery, gl.QUERY_RESULT_AVAILABLE);
+  const disjoint = gl.getParameter(timerExt.GPU_DISJOINT_EXT);
+  if (available) {
+    if (!disjoint) {
+      const elapsedNs = gl.getQueryParameter(pendingGpuQuery, gl.QUERY_RESULT);
+      lastGpuMs = elapsedNs / 1e6;
+    }
+    gl.deleteQuery(pendingGpuQuery);
+    pendingGpuQuery = null;
+  }
+}
+
+let statFrames = 0;
+let statAccumTime = 0;
+let statAccumCpu = 0;
+let lastStatUpdate = 0;
+let lastRafTime = 0;
+const latencyHistory = [];
+const MAX_LATENCY_HISTORY = 70;
+
+function drawStatsGraph(history) {
+  if (!graphCtx) return;
+  const w = statEls.graph.width;
+  const h = statEls.graph.height;
+  graphCtx.clearRect(0, 0, w, h);
+
+  // Guide lines: 16.67ms (60 FPS) and 33.33ms (30 FPS) against a 50ms ceiling
+  const maxMs = 50;
+  const y60 = h - (16.67 / maxMs) * h;
+  const y30 = h - (33.33 / maxMs) * h;
+
+  graphCtx.lineWidth = 1;
+  graphCtx.setLineDash([2, 3]);
+
+  // 60 FPS reference line (cyan)
+  graphCtx.strokeStyle = "rgba(110, 200, 255, 0.3)";
+  graphCtx.beginPath();
+  graphCtx.moveTo(0, y60);
+  graphCtx.lineTo(w, y60);
+  graphCtx.stroke();
+
+  // 30 FPS reference line (dim red)
+  graphCtx.strokeStyle = "rgba(255, 120, 100, 0.22)";
+  graphCtx.beginPath();
+  graphCtx.moveTo(0, y30);
+  graphCtx.lineTo(w, y30);
+  graphCtx.stroke();
+  graphCtx.setLineDash([]);
+
+  const n = history.length;
+  if (!n) return;
+  const barWidth = w / MAX_LATENCY_HISTORY;
+  const startX = w - n * barWidth;
+
+  for (let i = 0; i < n; i++) {
+    const ms = history[i];
+    const barH = Math.max(1, Math.min(h, (ms / maxMs) * h));
+    const x = startX + i * barWidth;
+    const y = h - barH;
+
+    if (ms <= 18) graphCtx.fillStyle = "rgba(110, 200, 255, 0.85)";       // ~60+ FPS
+    else if (ms <= 35) graphCtx.fillStyle = "rgba(255, 209, 102, 0.85)";  // ~30-55 FPS
+    else graphCtx.fillStyle = "rgba(255, 107, 107, 0.85)";                 // < 30 FPS
+
+    graphCtx.fillRect(x, y, Math.max(1, barWidth - 0.5), barH);
+  }
+}
+
+function updateStats(nowMs, frameDelta, cpuMs, ship) {
+  if (!controls.stats) return;
+
+  statFrames++;
+  statAccumTime += frameDelta;
+  statAccumCpu += cpuMs;
+
+  latencyHistory.push(frameDelta);
+  if (latencyHistory.length > MAX_LATENCY_HISTORY) latencyHistory.shift();
+
+  drawStatsGraph(latencyHistory);
+
+  if (nowMs - lastStatUpdate >= 250) {
+    const avgDelta = statAccumTime / statFrames;
+    const fps = 1000 / avgDelta;
+    const avgCpu = statAccumCpu / statFrames;
+
+    if (statEls.fps) {
+      statEls.fps.textContent = `${fps.toFixed(1)} FPS`;
+      statEls.fps.className = fps >= 55 ? "stat-val accent" : fps >= 28 ? "stat-val warn" : "stat-val alert";
+    }
+    if (statEls.latency) {
+      statEls.latency.textContent = `${avgDelta.toFixed(1)} ms`;
+    }
+    if (statEls.cpu) {
+      statEls.cpu.textContent = `${avgCpu.toFixed(1)} ms`;
+    }
+    if (statEls.gpuRow) {
+      if (lastGpuMs !== null) {
+        statEls.gpuRow.hidden = false;
+        statEls.gpu.textContent = `${lastGpuMs.toFixed(1)} ms`;
+      } else {
+        statEls.gpuRow.hidden = true;
+      }
+    }
+    if (statEls.res) {
+      const mp = (canvas.width * canvas.height / 1e6).toFixed(2);
+      statEls.res.textContent = `${canvas.width}×${canvas.height} (${mp}MP)`;
+    }
+    if (statEls.scale) {
+      const dpr = (window.devicePixelRatio || 1).toFixed(1);
+      const pct = Math.round(renderScale * 100);
+      statEls.scale.textContent = `${pct}% @ ${dpr}× DPR`;
+    }
+    if (statEls.prims) {
+      statEls.prims.textContent = `${scene.count} (${scene.groupCount} grp)`;
+    }
+    if (statEls.bounces) {
+      const sh = controls.shadows ? "+shd" : "";
+      const at = controls.attenuation ? "+atn" : "";
+      statEls.bounces.textContent = `${controls.bounces} ${sh} ${at}`.trim();
+    }
+    if (statEls.phase) {
+      const phase = ship.warpTau !== null ? "WARP" : offOrbit() ? "DEPART" : "ORBIT";
+      statEls.phase.textContent = phase;
+      statEls.phase.classList.toggle("warp", phase === "WARP");
+    }
+
+    statFrames = 0;
+    statAccumTime = 0;
+    statAccumCpu = 0;
+    lastStatUpdate = nowMs;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ray tracer controls (index.html)
+// ---------------------------------------------------------------------------
 const CONTROL_INPUTS = {
   bounces:     { read: el => parseInt(el.value), show: v => `${v}` },
   sun:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
@@ -598,203 +795,6 @@ function uploadScene(view, t) {
   gl.uniform1f(u.uMaxStreak, STREAK.max * renderScale * pixel);
   gl.uniform1f(u.uStreakDim, STREAK.dim);
   gl.uniform1f(u.uStarScale, renderScale);
-}
-
-// ---------------------------------------------------------------------------
-// Telemetry & stats overlay
-// ---------------------------------------------------------------------------
-const statsOverlay = document.getElementById("statsOverlay");
-const statsClose = document.getElementById("statsClose");
-if (statsClose) {
-  statsClose.addEventListener("click", () => {
-    const statsInput = document.getElementById("stats");
-    if (statsInput) {
-      statsInput.checked = false;
-      statsInput.dispatchEvent(new Event("input"));
-    }
-  });
-}
-function setStatsVisible(visible) {
-  if (statsOverlay) statsOverlay.hidden = !visible;
-}
-
-const statEls = {
-  phase: document.getElementById("statsFlightPhase"),
-  fps: document.getElementById("statFps"),
-  latency: document.getElementById("statLatency"),
-  cpu: document.getElementById("statCpu"),
-  gpuRow: document.getElementById("statGpuRow"),
-  gpu: document.getElementById("statGpu"),
-  res: document.getElementById("statRes"),
-  scale: document.getElementById("statScale"),
-  prims: document.getElementById("statPrims"),
-  bounces: document.getElementById("statBounces"),
-  graph: document.getElementById("statsGraph"),
-  gpuInfo: document.getElementById("statsGpuInfo"),
-};
-const graphCtx = statEls.graph ? statEls.graph.getContext("2d") : null;
-
-if (statEls.gpuInfo) {
-  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
-  const renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
-  if (renderer) {
-    statEls.gpuInfo.textContent = renderer;
-    statEls.gpuInfo.title = renderer;
-  }
-}
-
-// WebGL2 Disjoint Timer Query for measuring GPU fragment shader raytracing
-const timerExt = gl.getExtension("EXT_disjoint_timer_query_webgl2");
-let activeGpuQuery = null;
-let pendingGpuQuery = null;
-let lastGpuMs = null;
-
-function beginGpuTimer() {
-  if (!timerExt || !controls.stats || activeGpuQuery || pendingGpuQuery) return;
-  activeGpuQuery = gl.createQuery();
-  gl.beginQuery(timerExt.TIME_ELAPSED_EXT, activeGpuQuery);
-}
-
-function endGpuTimer() {
-  if (!timerExt || !activeGpuQuery) return;
-  gl.endQuery(timerExt.TIME_ELAPSED_EXT);
-  pendingGpuQuery = activeGpuQuery;
-  activeGpuQuery = null;
-}
-
-function pollGpuTimer() {
-  if (!timerExt || !pendingGpuQuery) return;
-  const available = gl.getQueryParameter(pendingGpuQuery, gl.QUERY_RESULT_AVAILABLE);
-  const disjoint = gl.getParameter(timerExt.GPU_DISJOINT_EXT);
-  if (available) {
-    if (!disjoint) {
-      const elapsedNs = gl.getQueryParameter(pendingGpuQuery, gl.QUERY_RESULT);
-      lastGpuMs = elapsedNs / 1e6;
-    }
-    gl.deleteQuery(pendingGpuQuery);
-    pendingGpuQuery = null;
-  }
-}
-
-let statFrames = 0;
-let statAccumTime = 0;
-let statAccumCpu = 0;
-let lastStatUpdate = 0;
-let lastRafTime = 0;
-const latencyHistory = [];
-const MAX_LATENCY_HISTORY = 70;
-
-function drawStatsGraph(history) {
-  if (!graphCtx) return;
-  const w = statEls.graph.width;
-  const h = statEls.graph.height;
-  graphCtx.clearRect(0, 0, w, h);
-
-  // Guide lines: 16.67ms (60 FPS) and 33.33ms (30 FPS) against a 50ms ceiling
-  const maxMs = 50;
-  const y60 = h - (16.67 / maxMs) * h;
-  const y30 = h - (33.33 / maxMs) * h;
-
-  graphCtx.lineWidth = 1;
-  graphCtx.setLineDash([2, 3]);
-
-  // 60 FPS reference line (cyan)
-  graphCtx.strokeStyle = "rgba(110, 200, 255, 0.3)";
-  graphCtx.beginPath();
-  graphCtx.moveTo(0, y60);
-  graphCtx.lineTo(w, y60);
-  graphCtx.stroke();
-
-  // 30 FPS reference line (dim red)
-  graphCtx.strokeStyle = "rgba(255, 120, 100, 0.22)";
-  graphCtx.beginPath();
-  graphCtx.moveTo(0, y30);
-  graphCtx.lineTo(w, y30);
-  graphCtx.stroke();
-  graphCtx.setLineDash([]);
-
-  const n = history.length;
-  if (!n) return;
-  const barWidth = w / MAX_LATENCY_HISTORY;
-  const startX = w - n * barWidth;
-
-  for (let i = 0; i < n; i++) {
-    const ms = history[i];
-    const barH = Math.max(1, Math.min(h, (ms / maxMs) * h));
-    const x = startX + i * barWidth;
-    const y = h - barH;
-
-    if (ms <= 18) graphCtx.fillStyle = "rgba(110, 200, 255, 0.85)";       // ~60+ FPS
-    else if (ms <= 35) graphCtx.fillStyle = "rgba(255, 209, 102, 0.85)";  // ~30-55 FPS
-    else graphCtx.fillStyle = "rgba(255, 107, 107, 0.85)";                 // < 30 FPS
-
-    graphCtx.fillRect(x, y, Math.max(1, barWidth - 0.5), barH);
-  }
-}
-
-function updateStats(nowMs, frameDelta, cpuMs, ship) {
-  if (!controls.stats) return;
-
-  statFrames++;
-  statAccumTime += frameDelta;
-  statAccumCpu += cpuMs;
-
-  latencyHistory.push(frameDelta);
-  if (latencyHistory.length > MAX_LATENCY_HISTORY) latencyHistory.shift();
-
-  drawStatsGraph(latencyHistory);
-
-  if (nowMs - lastStatUpdate >= 250) {
-    const avgDelta = statAccumTime / statFrames;
-    const fps = 1000 / avgDelta;
-    const avgCpu = statAccumCpu / statFrames;
-
-    if (statEls.fps) {
-      statEls.fps.textContent = `${fps.toFixed(1)} FPS`;
-      statEls.fps.className = fps >= 55 ? "stat-val accent" : fps >= 28 ? "stat-val warn" : "stat-val alert";
-    }
-    if (statEls.latency) {
-      statEls.latency.textContent = `${avgDelta.toFixed(1)} ms`;
-    }
-    if (statEls.cpu) {
-      statEls.cpu.textContent = `${avgCpu.toFixed(1)} ms`;
-    }
-    if (statEls.gpuRow) {
-      if (lastGpuMs !== null) {
-        statEls.gpuRow.hidden = false;
-        statEls.gpu.textContent = `${lastGpuMs.toFixed(1)} ms`;
-      } else {
-        statEls.gpuRow.hidden = true;
-      }
-    }
-    if (statEls.res) {
-      const mp = (canvas.width * canvas.height / 1e6).toFixed(2);
-      statEls.res.textContent = `${canvas.width}×${canvas.height} (${mp}MP)`;
-    }
-    if (statEls.scale) {
-      const dpr = (window.devicePixelRatio || 1).toFixed(1);
-      const pct = Math.round(renderScale * 100);
-      statEls.scale.textContent = `${pct}% @ ${dpr}× DPR`;
-    }
-    if (statEls.prims) {
-      statEls.prims.textContent = `${scene.count} (${scene.groupCount} grp)`;
-    }
-    if (statEls.bounces) {
-      const sh = controls.shadows ? "+shd" : "";
-      const at = controls.attenuation ? "+atn" : "";
-      statEls.bounces.textContent = `${controls.bounces} ${sh} ${at}`.trim();
-    }
-    if (statEls.phase) {
-      const phase = ship.warpTau !== null ? "WARP" : offOrbit() ? "DEPART" : "ORBIT";
-      statEls.phase.textContent = phase;
-      statEls.phase.classList.toggle("warp", phase === "WARP");
-    }
-
-    statFrames = 0;
-    statAccumTime = 0;
-    statAccumCpu = 0;
-    lastStatUpdate = nowMs;
-  }
 }
 
 // Render loop

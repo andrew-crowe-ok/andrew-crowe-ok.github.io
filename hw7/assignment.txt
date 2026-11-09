@@ -1,0 +1,15 @@
+1. Ray tracing with local Phong, shadow, reflection and refraction (10 pts)
+
+At least one geometry is transparent and glass-like (refraction). All the geometries need to be rendered through ray tracing with recursive process (use loop to simulate the recursive process as GLSL doesn't support recursive functions).
+
+local illumination (Phong). It is fine to only have Phong model partially implemented in order to get a more visually appealing effect. (1/11)
+ray traced shadow (2/11)
+intersections (2/11)
+reflection (2/11)
+refraction (3/11) (It is fine to use any of "choose, blend or sample" refraction approaches we covered in class)
+attenuation is not necessary but encouraged.
+2. Multiple light sources (2 pts)
+
+3. Interactive user interface and movements (1 pts)
+
+At least two additional user interfaces to control parameters or movements (e.g. bounce steps, lighting intensity, shininess, attenuation, etc.) 

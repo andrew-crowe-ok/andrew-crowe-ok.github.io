@@ -9,6 +9,10 @@
 // comes back by the inverse's transpose. The direction is not renormalized in
 // object space, so the ray parameter t means the same distance in both.
 //
+// The ship's parts come in groups, each boxed (main.js fits the boxes as the
+// parts are drawn): a ray tests a group's parts only if it passes through its
+// box, so it pays for the few parts near it rather than the whole ship.
+//
 // GLSL has no recursion, so the bounce tree is walked by a loop that follows
 // one path at a time, carrying its weight (how much of the pixel it still
 // accounts for). At glass the path splits in two by Schlick's Fresnel term:
@@ -16,7 +20,8 @@
 // followed on, and the weaker one waits on a small stack until the current
 // path ends.
 
-const MAX_PRIMS = 20;      // the scene has 19: 17 ship parts, the planet, the moon
+const MAX_PRIMS = 32;      // the scene has 32: 30 ship parts, the planet, the moon
+const MAX_GROUPS = 4;      // the ship uses 4: saucer, hull, and each pylon with its nacelle
 const MAX_SEGMENTS = 12;   // ray segments traced per pixel, across all branches
 const STACK_SIZE = 4;      // glass branches waiting their turn
 const NUM_LIGHTS = 3;
@@ -24,8 +29,9 @@ const SPHERE = 0, CYLINDER = 1, CONE = 2, BOX = 3, TORUS = 4;
 // The mapping modes, as in HW6
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
 // Texture units in use (main.js binds them); the shader samples each by a
-// constant index, since GLSL ES can't index a sampler array with a variable
-const TEXTURE_UNITS = 9;
+// constant index, since GLSL ES can't index a sampler array with a variable.
+// 16 is all WebGL 2 promises.
+const TEXTURE_UNITS = 16;
 
 // Warp streaks, as in HW6's point sprites: each star is smeared over the path
 // it covers in `shutter` seconds, at most `max` CSS pixels long, and dims as
@@ -49,6 +55,7 @@ precision highp float;
 precision highp int;
 
 #define MAX_PRIMS ${MAX_PRIMS}
+#define MAX_GROUPS ${MAX_GROUPS}
 #define MAX_SEGMENTS ${MAX_SEGMENTS}
 #define STACK_SIZE ${STACK_SIZE}
 #define NUM_LIGHTS ${NUM_LIGHTS}
@@ -75,19 +82,22 @@ uniform float uFishHalfX, uFishStretch, uFishPivot;
 uniform float uPixelAngle;        // radians across one pixel, mid-frame
 
 // ---- scene -----------------------------------------------------------------
-uniform int uCount;
-uniform vec4 uInv[3 * MAX_PRIMS];   // rows of each primitive's eye-to-object matrix
-uniform ivec4 uInfo[MAX_PRIMS];     // shape, texture unit, normal map unit (-1 = none), mapping
-uniform vec4 uMatA[MAX_PRIMS];      // ka, kd, ks, shininess
-uniform vec4 uMatB[MAX_PRIMS];      // kr (mirror), kt (glass), index of refraction, bump scale
-uniform vec4 uMatC[MAX_PRIMS];      // atmosphere color, torus tube radius
-uniform vec4 uMatD[MAX_PRIMS];      // glass absorption per unit length, texture repeats around u
-
-// The ship's parts, [start, end), sit inside one box: rays that miss the box
-// skip them all
-uniform int uGroupStart, uGroupEnd;
-uniform vec4 uGroupInv[3];
-uniform vec3 uGroupHalf;
+// The primitives, in a uniform buffer (main.js fills it in this order, std140:
+// every array element one vec4). Plain uniforms run out at a couple of dozen
+// primitives on some GPUs; a block holds far more.
+layout(std140) uniform Scene {
+  vec4 uInv[3 * MAX_PRIMS];       // rows of each primitive's eye-to-object matrix
+  ivec4 uInfo[MAX_PRIMS];         // shape, texture unit, normal map unit (-1 = none), mapping
+  vec4 uMatA[MAX_PRIMS];          // ka, kd, ks, shininess
+  vec4 uMatB[MAX_PRIMS];          // kr (mirror), kt (glass), index of refraction, bump scale
+  vec4 uMatC[MAX_PRIMS];          // atmosphere color, torus tube radius
+  vec4 uMatD[MAX_PRIMS];          // glass absorption per unit length, texture repeats around u
+  vec4 uMatE[MAX_PRIMS];          // glow (emission's strength), group (-1 = none)
+  vec4 uGroupInv[3 * MAX_GROUPS]; // rows of each group box's eye-to-box matrix
+  vec4 uGroupHalf[MAX_GROUPS];    // each box's half-size
+  ivec4 uGroupRange[MAX_GROUPS];  // start primitive index, end primitive index
+};
+uniform int uCount, uGroupCount;
 
 uniform vec3 uLightPos[NUM_LIGHTS];     // eye space
 uniform vec3 uLightColor[NUM_LIGHTS];   // intensity folded in
@@ -112,11 +122,13 @@ uniform float uStarScale;     // pixels rendered per CSS pixel
 out vec4 fragColor;
 
 // ============================================================================
-// Textures
+// Textures, filtered by the footprint's two axes -- gx and gy, how far uv
+// moves across one pixel's cone of rays each way -- so the GPU's anisotropic
+// filtering keeps a surface seen at a slant sharp, as it would rasterized
 // ============================================================================
-vec4 sampleTex(int unit, vec2 uv, float lod) {
+vec4 sampleTex(int unit, vec2 uv, vec2 gx, vec2 gy) {
   switch (unit) {
-${textureSwitch(s => `textureLod(${s}, uv, lod)`)}
+${textureSwitch(s => `textureGrad(${s}, uv, gx, gy)`)}
   }
   return vec4(1.0);
 }
@@ -288,13 +300,12 @@ bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out
   return hitTorus(oo, dd, uMatC[i].w, tmin, t, n);
 }
 
-// Does the ray come within the ship's box anywhere in (tmin, tmax)?
-bool groupVisible(vec3 o, vec3 d, float tmin, float tmax) {
-  if (uGroupEnd <= uGroupStart) return false;
+// Does the ray come within group g's box anywhere in (tmin, tmax)?
+bool groupVisible(int g, vec3 o, vec3 d, float tmin, float tmax) {
   vec4 q = vec4(o, 1.0), v = vec4(d, 0.0);
-  vec3 go = vec3(dot(uGroupInv[0], q), dot(uGroupInv[1], q), dot(uGroupInv[2], q));
-  vec3 gd = vec3(dot(uGroupInv[0], v), dot(uGroupInv[1], v), dot(uGroupInv[2], v));
-  vec2 span = boxSpan(go, gd, uGroupHalf);
+  vec3 go = vec3(dot(uGroupInv[3 * g], q), dot(uGroupInv[3 * g + 1], q), dot(uGroupInv[3 * g + 2], q));
+  vec3 gd = vec3(dot(uGroupInv[3 * g], v), dot(uGroupInv[3 * g + 1], v), dot(uGroupInv[3 * g + 2], v));
+  vec2 span = boxSpan(go, gd, uGroupHalf[g].xyz);
   return span.x <= span.y && span.y > tmin && span.x < tmax;
 }
 
@@ -304,12 +315,18 @@ struct Hit { float t; int id; int part; vec3 n; };
 Hit trace(vec3 o, vec3 d, float tmax) {
   Hit h;
   h.t = tmax; h.id = -1; h.part = 0; h.n = vec3(0.0, 1.0, 0.0);
-  bool ship = groupVisible(o, d, EPS, tmax);
-  for (int i = 0; i < MAX_PRIMS; i++) {
-    if (i >= uCount) break;
-    if (!ship && i >= uGroupStart && i < uGroupEnd) continue;
+  int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
+  for (int i = 0; i < ungrouped; i++) {
     vec3 n; int part;
     if (intersect(i, o, d, EPS, h.t, n, part)) { h.id = i; h.n = n; h.part = part; }
+  }
+  for (int g = 0; g < MAX_GROUPS; g++) {
+    if (g >= uGroupCount) break;
+    if (!groupVisible(g, o, d, EPS, h.t)) continue;
+    for (int i = uGroupRange[g].x; i < uGroupRange[g].y; i++) {
+      vec3 n; int part;
+      if (intersect(i, o, d, EPS, h.t, n, part)) { h.id = i; h.n = n; h.part = part; }
+    }
   }
   return h;
 }
@@ -330,10 +347,8 @@ float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
 // themselves and cast none. (The glass parts are all spheres.)
 vec3 transmittance(vec3 o, vec3 d, float dist) {
   vec3 tr = vec3(1.0);
-  bool ship = groupVisible(o, d, EPS, dist);
-  for (int i = 0; i < MAX_PRIMS; i++) {
-    if (i >= uCount) break;
-    if (!ship && i >= uGroupStart && i < uGroupEnd) continue;
+  int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
+  for (int i = 0; i < ungrouped; i++) {
     if (uInfo[i].w == EMISSIVE) continue;
     float t = dist; vec3 n; int part;
     if (intersect(i, o, d, EPS, t, n, part)) {
@@ -342,6 +357,21 @@ vec3 transmittance(vec3 o, vec3 d, float dist) {
       float chord = uInfo[i].x == SPHERE
         ? sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist) : 0.0;
       tr *= kt * exp(-uMatD[i].rgb * chord);
+    }
+  }
+  for (int g = 0; g < MAX_GROUPS; g++) {
+    if (g >= uGroupCount) break;
+    if (!groupVisible(g, o, d, EPS, dist)) continue;
+    for (int i = uGroupRange[g].x; i < uGroupRange[g].y; i++) {
+      if (uInfo[i].w == EMISSIVE) continue;
+      float t = dist; vec3 n; int part;
+      if (intersect(i, o, d, EPS, t, n, part)) {
+        float kt = uMatB[i].y;
+        if (kt <= 0.0) return vec3(0.0);
+        float chord = uInfo[i].x == SPHERE
+          ? sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist) : 0.0;
+        tr *= kt * exp(-uMatD[i].rgb * chord);
+      }
     }
   }
   return tr;
@@ -400,18 +430,19 @@ struct Surface {
   vec3 ng;         // geometric normal, outward
   vec3 n;          // shading normal (bumped), outward
   vec3 base;       // texture color
+  float emit;      // texture's emission (generated skins keep it in alpha)
   bool emissive;
 };
 
 // Bump height, as in HW6: dark is high (1 - Rec. 601 luminance)
-float height(int unit, vec2 uv, float lod) {
-  return 1.0 - dot(sampleTex(unit, uv, lod).rgb, vec3(0.299, 0.587, 0.114));
+float height(int unit, vec2 uv, vec2 gx, vec2 gy) {
+  return 1.0 - dot(sampleTex(unit, uv, gx, gy).rgb, vec3(0.299, 0.587, 0.114));
 }
 
 // footprint: how wide a pixel's cone of rays is at the hit, in eye units. It
-// picks the mipmap level the way the GPU would have from screen derivatives,
-// which don't exist inside the bounce loop: two points one footprint apart
-// on the surface, how far apart they land in the texture.
+// stands in for the screen derivatives the GPU filters by, which don't exist
+// inside the bounce loop: two points one footprint apart on the surface, how
+// far apart they land in the texture.
 Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   int i = h.id;
   ivec4 info = uInfo[i];
@@ -427,6 +458,7 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   vec3 B = cross(s.ng, T);
   s.n = s.ng;
   s.base = vec3(1.0);
+  s.emit = 0.0;
   s.emissive = info.w == EMISSIVE;
   if (info.y < 0) return s;
 
@@ -435,13 +467,13 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   vec3 e1 = cross(d, s.ng);
   e1 = dot(e1, e1) > 1e-8 ? normalize(e1) : T;
   vec3 e2 = cross(s.ng, e1) / max(abs(dot(d, s.ng)), 0.15);
-  vec2 size = texSize(info.y);
   vec2 d1 = uvAt(info.x, h.part, toObject(i, s.p + e1 * footprint, 1.0), repeats) - uv;
   vec2 d2 = uvAt(info.x, h.part, toObject(i, s.p + e2 * footprint, 1.0), repeats) - uv;
   d1 -= round(d1); d2 -= round(d2);     // across a seam, the short way round
-  float lod = max(log2(max(length(d1 * size), length(d2 * size))), 0.0);
 
-  s.base = sampleTex(info.y, uv, lod).rgb;
+  vec4 tex = sampleTex(info.y, uv, d1, d2);
+  s.base = tex.rgb;
+  s.emit = tex.a;
   if (s.emissive) return s;
 
   vec3 nt = vec3(0.0, 0.0, 1.0);        // tangent space
@@ -450,14 +482,17 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
     // at the level being read, so a far surface's bumps soften with its color
     float bump = uMatB[i].w;
     if (bump != 0.0) {
+      // The level is the one the footprint's longer axis reads
+      vec2 size = texSize(info.y);
+      float lod = max(log2(max(length(d1 * size), length(d2 * size))), 0.0);
       vec2 texel = exp2(lod) / size;
       vec2 du = vec2(texel.x, 0.0), dv = vec2(0.0, texel.y);
-      float dhdu = (height(info.y, uv + du, lod) - height(info.y, uv - du, lod)) * 0.5 / exp2(lod);
-      float dhdv = (height(info.y, uv + dv, lod) - height(info.y, uv - dv, lod)) * 0.5 / exp2(lod);
+      float dhdu = (height(info.y, uv + du, d1, d2) - height(info.y, uv - du, d1, d2)) * 0.5 / exp2(lod);
+      float dhdv = (height(info.y, uv + dv, d1, d2) - height(info.y, uv - dv, d1, d2)) * 0.5 / exp2(lod);
       nt = normalize(vec3(-bump * dhdu, -bump * dhdv, 1.0));
     }
   } else if (info.z >= 0) {
-    nt = normalize(sampleTex(info.z, uv, lod).rgb * 2.0 - 1.0);
+    nt = normalize(sampleTex(info.z, uv, d1, d2).rgb * 2.0 - 1.0);
   }
   s.n = normalize(mat3(T, B, s.ng) * nt);
   return s;
@@ -597,6 +632,9 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
     float spec = pow(max(dot(V, reflect(-L, n)), 0.0), A.w * uShininessScale);
     color += uLightColor[j] * vis * att * (A.y * body * s.base * diff + A.z * spec);
   }
+  // Lit windows and lights in the skin shine whatever the lighting, so they
+  // stay bright on the night side
+  color += uMatE[i].x * s.emit * s.base;
   // The planet's atmosphere, as in HW6: a glow at the limb, on the sunlit side
   vec3 glow = uMatC[i].rgb;
   if (glow != vec3(0.0)) {

@@ -219,15 +219,10 @@ function shipState(t) {
 
 // Level 1: place the ship on the path shipState() worked out. On the circle,
 // translate(p) * rotateY(a) equals rotateY(a) * translate(R, 0, 0), and unlike
-// that form it still holds once the ship has left the circle.
-// The ship's parts are grouped in the box that holds them all (the one
-// clicks are tested against), so the ray tracer can pass over the lot for any
-// ray that misses it.
+// that form it still holds once the ship has left the circle. (The ship boxes
+// its own parts into groups for the ray tracer, ship.js.)
 function drawOrbit(parent, { pos, heading }) {
   const frame = multiply(parent, multiply(translate(...pos), rotateY(heading)));
   const s = ORBIT.shipScale;
-  const shipFrame = multiply(frame, scale(s, s, s));
-  beginGroup(shipFrame, vmul(SHIP_HALF_EXTENT, 1.02));
-  drawShip(shipFrame);
-  endGroup();
+  drawShip(multiply(frame, scale(s, s, s)));
 }

@@ -68,7 +68,7 @@ gl.uniform1iv(uniforms.uTex, Array.from({ length: TEXTURE_UNITS }, (_, i) => i))
 // falling off: the ship stays lit at warp, leaving the system behind.
 const SUN = { pos: [12, 5, 3], color: [1.25, 1.19, 1.06], ref: 13.3, reach: 21 };
 const FILL = { pos: [-12, -5, -3], color: [0.12, 0.17, 0.3], ref: 13.3, reach: 21 };
-const NAV = { color: [0.35, 0.62, 1.0], ref: 0.5, reach: 1e6 };
+const NAV = { color: [0.35, 0.62, 1.0], ref: 0.85, reach: 1e6 };
 
 // ---------------------------------------------------------------------------
 // The scene, as the ray tracer sees it
@@ -84,30 +84,47 @@ const NAV = { color: [0.35, 0.62, 1.0], ref: 0.5, reach: 1e6 };
 // times the texture wraps around (models.js's uRepeat), `tube` the torus's.
 const cubeMesh = { shape: BOX, repeats: 1 };
 const cylinderMesh = { shape: CYLINDER, repeats: 3 };
+const hullMesh = { shape: CYLINDER, repeats: 1 };   // once around, to line up with the hull's caps
 const coneMesh = { shape: CONE, repeats: 1 };
-const torusMesh = { shape: TORUS, repeats: 24, tube: 0.04 };   // saucer rim
+const torusMesh = { shape: TORUS, repeats: 1, tube: 0.04 };   // saucer rim
 const sphereMesh = { shape: SPHERE, repeats: 1 };
-const planetMesh = sphereMesh;
+const saucerMesh = sphereMesh, planetMesh = sphereMesh;
 
 // Shiny painted metal, for parts that don't name a material of their own.
 //   kr      share of light mirrored (reflection rays)
 //   kt      share let through (glass: refraction rays)
 //   ior     index of refraction, for glass
 //   absorb  glass's absorption per unit length (Beer-Lambert), per channel
+//   glow    how brightly the texture's emission (its alpha) shines
 const DEFAULT_MATERIAL = { ka: 0.2, kd: 0.8, ks: 0.5, shininess: 32, bumpScale: 3.0, atmosphere: [0, 0, 0] };
+
+// The per-primitive arrays live in one ArrayBuffer laid out as raytrace.js's
+// Scene block (std140, one vec4 per element, in this order), so a frame's
+// upload is a single call. Each entry: its length in vec4s.
+const SCENE_BLOCK = { inv: 3 * MAX_PRIMS, info: MAX_PRIMS, matA: MAX_PRIMS, matB: MAX_PRIMS,
+  matC: MAX_PRIMS, matD: MAX_PRIMS, matE: MAX_PRIMS, groupInv: 3 * MAX_GROUPS, groupHalf: MAX_GROUPS, groupRange: MAX_GROUPS };
+const sceneBytes = new ArrayBuffer(16 * Object.values(SCENE_BLOCK).reduce((a, n) => a + n, 0));
 
 const scene = {
   count: 0,
-  inv: new Float32Array(MAX_PRIMS * 12),
-  info: new Int32Array(MAX_PRIMS * 4),
-  matA: new Float32Array(MAX_PRIMS * 4),
-  matB: new Float32Array(MAX_PRIMS * 4),
-  matC: new Float32Array(MAX_PRIMS * 4),
-  matD: new Float32Array(MAX_PRIMS * 4),
-  group: { start: 0, end: 0, inv: new Float32Array(12), half: [0, 0, 0] },
+  groupCount: 0,
   nav: [0, 0, 0],
   sky: { center: [0, 0, 0], rot: new Float32Array(9), streak: [0, 0, 0] }
 };
+let blockAt = 0;
+for (const [name, vec4s] of Object.entries(SCENE_BLOCK)) {
+  scene[name] = new (name === "info" || name === "groupRange" ? Int32Array : Float32Array)(sceneBytes, 16 * blockAt, 4 * vec4s);
+  blockAt += vec4s;
+}
+
+const sceneBuffer = gl.createBuffer();
+gl.bindBuffer(gl.UNIFORM_BUFFER, sceneBuffer);
+gl.bufferData(gl.UNIFORM_BUFFER, sceneBytes.byteLength, gl.DYNAMIC_DRAW);
+const sceneBlock = gl.getUniformBlockIndex(program, "Scene");
+if (gl.getActiveUniformBlockParameter(program, sceneBlock, gl.UNIFORM_BLOCK_DATA_SIZE) !== sceneBytes.byteLength)
+  throw new Error("SCENE_BLOCK doesn't match the shader's Scene block");
+gl.uniformBlockBinding(program, sceneBlock, 0);
+gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, sceneBuffer);
 
 // The three rows of an affine matrix, which is all the shader needs of it
 function affineRows(m, out, at) {
@@ -119,7 +136,7 @@ const unitOf = texture => texture ? TEXTURES.indexOf(texture) : -1;
 function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL, normalMap = null) {
   if (scene.count >= MAX_PRIMS) throw new Error(`more than ${MAX_PRIMS} primitives`);
   const i = scene.count++;
-  const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb = [0, 0, 0] } = material;
+  const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb = [0, 0, 0], glow = 0 } = material;
   // Every glass part takes its index of refraction from the slider
   const ior = kt > 0 ? controls.ior : 1;
   affineRows(invertAffine(modelView), scene.inv, i * 12);
@@ -128,16 +145,40 @@ function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MAT
   scene.matB.set([kr, kt, ior, bumpScale], i * 4);
   scene.matC.set([...atmosphere, mesh.tube ?? 0], i * 4);
   scene.matD.set([...absorb, mesh.repeats], i * 4);
+  scene.matE.set([glow, group ? group.index : -1, 0, 0], i * 4);
+  if (group) fitGroup(mesh, modelView);
 }
 
-// The parts drawn between these two calls fit in the box |p| <= half in
-// `frame`'s space, so the shader can skip them all for a ray that misses it
-function beginGroup(frame, half) {
-  scene.group.start = scene.count;
-  affineRows(invertAffine(frame), scene.group.inv, 0);
-  scene.group.half = half;
+// The parts drawn between beginGroup(frame) and endGroup() are boxed together,
+// so the shader can skip them all for a ray that misses the box. The box is
+// aligned with frame and fitted as they're drawn: each part's unit shape fits
+// in a box of its own (|p| <= 1, or the torus's ring plus tube), and that
+// box's corners, carried into frame's space, bound the part there.
+let group = null;
+function beginGroup(frame) {
+  if (group) throw new Error("groups don't nest");
+  if (scene.groupCount >= MAX_GROUPS) throw new Error(`more than ${MAX_GROUPS} groups`);
+  group = { index: scene.groupCount++, toFrame: invertAffine(frame),
+    min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity],
+    start: scene.count };
 }
-function endGroup() { scene.group.end = scene.count; }
+function fitGroup(mesh, modelView) {
+  const toFrame = multiply(group.toFrame, modelView);
+  const r = mesh.shape === TORUS ? 1 + mesh.tube : 1, h = mesh.shape === TORUS ? mesh.tube : 1;
+  for (const x of [-r, r]) for (const y of [-h, h]) for (const z of [-r, r]) {
+    const p = transformPoint(toFrame, [x, y, z]);
+    group.min = group.min.map((m, k) => Math.min(m, p[k]));
+    group.max = group.max.map((m, k) => Math.max(m, p[k]));
+  }
+}
+// The box's matrix takes eye space to the box's own, centered on it
+function endGroup() {
+  const center = vmul(vadd(group.min, group.max), 0.5);
+  affineRows(multiply(translate(...vmul(center, -1)), group.toFrame), scene.groupInv, 12 * group.index);
+  scene.groupHalf.set([...vmul(vsub(group.max, group.min), 0.5), 0], 4 * group.index);
+  scene.groupRange.set([group.start, scene.count, 0, 0], 4 * group.index);
+  group = null;
+}
 
 // The ship's own light, in eye space (ship.js)
 function setNavLight(pos) { scene.nav = pos; }
@@ -154,6 +195,11 @@ function setSky(frame, streak) {
 // Textures
 // ---------------------------------------------------------------------------
 
+// Anisotropic filtering keeps textures sharp on surfaces seen at a slant
+// (raytrace.js filters by the footprint's two axes, which brings it into play)
+const ANISO = gl.getExtension("EXT_texture_filter_anisotropic");
+const MAX_ANISO = ANISO ? gl.getParameter(ANISO.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 1;
+
 // An image file: a 1x1 gray placeholder until it decodes, then the image with mipmaps
 function loadTexture(url) {
   const texture = gl.createTexture();
@@ -169,42 +215,77 @@ function loadTexture(url) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT, MAX_ANISO);
   };
   image.src = url;
   return texture;
 }
 
 const planetTexture = loadTexture("textures/antelope.jpg");
-const copperTexture = loadTexture("textures/mars2.jpg");   // deflector dish
 
-// Upload a procedurally generated image (RGBA bytes from textures.js). No flip:
-// the generators already work in texture coordinates, with v = 0 at the bottom.
-function createDataTexture({ color, size }) {
-  const texture = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, color);
-  gl.generateMipmap(gl.TEXTURE_2D);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-  return texture;
-}
+// Procedural ship skin, generated on the GPU (textures.js). Every part's
+// texture is sized to the surface it wraps -- the saucer's go around a
+// circumference several times their height, so they are four times as wide as
+// tall -- for roughly even detail over the ship. Phones get half the
+// resolution each way, a quarter of the memory.
+const generateSkin = createSkinGenerator(gl, { scale: matchMedia("(pointer: coarse)").matches ? 0.5 : 1 });
 
-// Procedural ship skin. The saucer is bump mapped straight from its panel-line
-// image; the hull and nacelles get a color map with a normal map baked from
-// the same height field (NORMAL_MAPPING).
-const hullPlating = createPlating({ cols: 8, rows: 12, seed: 11,
-  stripe: { at: 0.5, width: 0.07, color: [0.20, 0.23, 0.30], relief: 0.08 } });
-const nacellePlating = createPlating({ cols: 6, rows: 16, seed: 23,
-  base: [0.34, 0.37, 0.43],
-  grille: { at: 0.5, width: 0.22, slats: 18, color: [0.13, 0.21, 0.42] } });
+const PAINT = [0.52, 0.535, 0.56];   // light blue-gray
+// Windows on the saucer: pane width, pane height, spacing (ship units)
+const SAUCER_WINDOWS = [0.02, 0.009, 0.04];
 
-const saucerTexture = createDataTexture(createSaucerTexture());
-const hullTexture = createDataTexture(hullPlating);
-const hullNormalMap = createDataTexture(normalMap(hullPlating, 7));
-const nacelleTexture = createDataTexture(nacellePlating);
-const nacelleNormalMap = createDataTexture(normalMap(nacellePlating, 8));
+// Saucer lens: the outer ring is all that shows, with an escape pod or two
+// in some plates and a thruster quad on each diagonal near the rim
+const { color: saucerTexture, normal: saucerNormalMap } = generateSkin("saucer", {
+  size: [4096, 1024], seed: 7,
+  uniforms: { uRadius: 1.97, uThick: 0.075, uPlate: [0.2, 0.16], uPaint: PAINT, uContrast: 0.07,
+    uFeatures: 1, uPods: true, uRowCount: 0, uRcs: [0.94, 4] } });
+// Decks, the keyhole's head and the sensor dome: two rows of windows on each
+// face's flank, just inside where it rises out of the lens -- rho 0.86 and
+// 0.905 on top, 0.83 and 0.87 underneath, where the lower deck is smaller
+const { color: deckTexture, normal: deckNormalMap } = generateSkin("saucer", {
+  size: [4096, 1024], seed: 9,
+  uniforms: { uRadius: 1.55, uThick: 0.22, uPlate: [0.2, 0.16], uPaint: PAINT, uContrast: 0.07,
+    uFeatures: 1, uPods: true, uRcs: [0, 0], uWindow: SAUCER_WINDOWS,
+    uRows: [[0.86, 1, 0, 0], [0.905, 1, 0, 0], [0.83, -1, 0, 0], [0.87, -1, 0, 0]], uRowCount: 4 } });
+// Rim: a torus around the lens's edge, whose tube closes on itself (wrapV)
+const { color: rimTexture, normal: rimNormalMap } = generateSkin("rim", {
+  size: [4096, 256], seed: 13, wrapV: true,
+  uniforms: { uRadius: 1.95, uTube: 0.062, uPlate: [0.2, 0.1], uPaint: PAINT, uContrast: 0.07,
+    uWindow: [0.018, 0.008, 0.04], uRowY: [0.014, -0.014] } });
+// Engineering hull: the cylinder's circumference and length set the scale
+// (its caps, neck and pylons reuse the texture); a raised spine along the top
+// (u = 0.25) and three rows of windows down each flank, just above and below
+// its widest line
+const { color: hullTexture, normal: hullNormalMap } = generateSkin("plating", {
+  size: [2048, 1024], seed: 11,
+  uniforms: { uCirc: 2.86, uLength: 1.3, uPlate: [0.18, 0.13], uPaint: [0.5, 0.515, 0.54], uContrast: 0.07,
+    uFeatures: 1, uSpine: [0.25, 0.03, 0.002], uTrim: [0, 0],
+    uWinU: [0.015, 0.05, 0.985, 0.485, 0.45, 0.515], uWinCount: 6, uWinV: [0.1, 0.9],
+    uWindow: [0.022, 0.01, 0.045] } });
+// Nacelles: darker, with a spine on top and dark trim down both sides behind
+// the glowing grilles (u = 0 and 0.5)
+const { color: nacelleTexture, normal: nacelleNormalMap } = generateSkin("plating", {
+  size: [512, 1024], seed: 23,
+  uniforms: { uCirc: 1.14, uLength: 2.1, uPlate: [0.12, 0.15], uPaint: [0.42, 0.44, 0.49], uContrast: 0.06,
+    uFeatures: 0.6, uSpine: [0.25, 0.025, 0.002], uTrim: [0, 0.085], uWinCount: 0 } });
+
+// Emissive glows, drawn unlit: the deflector dish, the warp grilles (blue)
+// and the impulse engines (red-orange)
+const { color: deflectorGlow } = generateSkin("deflector", {
+  size: [1024, 1024], uniforms: { uInner: [0.85, 0.97, 1.0], uOuter: [0.05, 0.3, 0.95], uRings: 9, uSpokes: 24 } });
+const { color: grilleGlow } = generateSkin("strip", {
+  size: [1024, 128], uniforms: { uInner: [0.55, 0.82, 1.0], uOuter: [0.06, 0.22, 0.8],
+    uFrame: [0.08, 0.09, 0.12], uSlats: 40, uFlow: 0.35 } });
+const { color: impulseGlow } = generateSkin("strip", {
+  size: [512, 128], uniforms: { uInner: [1.0, 0.6, 0.35], uOuter: [0.75, 0.06, 0.03],
+    uFrame: [0.1, 0.08, 0.08], uSlats: 10, uFlow: 0.25 } });
+
 // The nav light's bulb: one flat color, drawn glowing
-const beaconTexture = createDataTexture({ color: new Uint8Array([150, 205, 255, 255]), size: 1 });
+const beaconTexture = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, beaconTexture);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([150, 205, 255, 255]));
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
 
 // Animated texture: a muted, looping <video> whose current frame is re-uploaded
 // every render, so it gets no mipmaps (LINEAR min filter). REPEAT on s lets u
@@ -233,8 +314,9 @@ function loadVideoTexture(sources) {
 const plasma = loadVideoTexture(["textures/plasma.webm", "textures/plasma.mp4"]);
 
 // Unit i holds TEXTURES[i] (raytrace.js samples them by unit)
-const TEXTURES = [planetTexture, copperTexture, saucerTexture, hullTexture, hullNormalMap,
-  nacelleTexture, nacelleNormalMap, plasma.texture, beaconTexture];
+const TEXTURES = [planetTexture, saucerTexture, saucerNormalMap, deckTexture, deckNormalMap,
+  rimTexture, rimNormalMap, hullTexture, hullNormalMap, nacelleTexture, nacelleNormalMap,
+  deflectorGlow, grilleGlow, impulseGlow, plasma.texture, beaconTexture];
 if (TEXTURES.length !== TEXTURE_UNITS) throw new Error("TEXTURE_UNITS is out of date");
 function bindTextures() {
   TEXTURES.forEach((texture, i) => {
@@ -474,16 +556,9 @@ function uploadScene(view, t) {
   gl.uniform1f(u.uPixelAngle, pixel);
 
   gl.uniform1i(u.uCount, scene.count);
-  gl.uniform4fv(u.uInv, scene.inv);
-  gl.uniform4iv(u.uInfo, scene.info);
-  gl.uniform4fv(u.uMatA, scene.matA);
-  gl.uniform4fv(u.uMatB, scene.matB);
-  gl.uniform4fv(u.uMatC, scene.matC);
-  gl.uniform4fv(u.uMatD, scene.matD);
-  gl.uniform1i(u.uGroupStart, scene.group.start);
-  gl.uniform1i(u.uGroupEnd, scene.group.end);
-  gl.uniform4fv(u.uGroupInv, scene.group.inv);
-  gl.uniform3fv(u.uGroupHalf, scene.group.half);
+  gl.uniform1i(u.uGroupCount, scene.groupCount);
+  gl.bindBuffer(gl.UNIFORM_BUFFER, sceneBuffer);
+  gl.bufferSubData(gl.UNIFORM_BUFFER, 0, sceneBytes);
 
   // The fixed lights ride whatever the view is now; the nav light was placed
   // in eye space by the ship itself
@@ -529,6 +604,7 @@ function render(time) {
 
   // Walk the hierarchy to collect this frame's primitives, then trace them all
   scene.count = 0;
+  scene.groupCount = 0;
   drawSystem(view, t, ship);
   plasma.update();
   bindTextures();

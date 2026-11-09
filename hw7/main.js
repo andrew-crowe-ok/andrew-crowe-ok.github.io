@@ -96,6 +96,8 @@ const saucerMesh = sphereMesh, planetMesh = sphereMesh;
 //   ior     index of refraction, for glass
 //   absorb  glass's absorption per unit length (Beer-Lambert), per channel
 //   glow    how brightly the texture's emission (its alpha) shines
+//   power   an EMISSIVE part's brightness (the engines' animated levels, ship.js)
+//   scroll  how far an EMISSIVE part's texture has slid along its z axis
 const DEFAULT_MATERIAL = { ka: 0.2, kd: 0.8, ks: 0.5, shininess: 32, bumpScale: 3.0, atmosphere: [0, 0, 0] };
 
 // The per-primitive arrays live in one ArrayBuffer laid out as raytrace.js's
@@ -136,7 +138,8 @@ const unitOf = texture => texture ? TEXTURES.indexOf(texture) : -1;
 function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL, normalMap = null) {
   if (scene.count >= MAX_PRIMS) throw new Error(`more than ${MAX_PRIMS} primitives`);
   const i = scene.count++;
-  const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb = [0, 0, 0], glow = 0 } = material;
+  const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb = [0, 0, 0], glow = 0,
+    power = 1, scroll = 0 } = material;
   // Every glass part takes its index of refraction from the slider
   const ior = kt > 0 ? controls.ior : 1;
   affineRows(invertAffine(modelView), scene.inv, i * 12);
@@ -145,7 +148,7 @@ function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MAT
   scene.matB.set([kr, kt, ior, bumpScale], i * 4);
   scene.matC.set([...atmosphere, mesh.tube ?? 0], i * 4);
   scene.matD.set([...absorb, mesh.repeats], i * 4);
-  scene.matE.set([glow, group ? group.index : -1, 0, 0], i * 4);
+  scene.matE.set([glow, group ? group.index : -1, power, scroll], i * 4);
   if (group) fitGroup(mesh, modelView);
 }
 
@@ -308,7 +311,12 @@ function loadVideoTexture(sources) {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
   }
-  return { texture, update };
+  // Playback speed; only touched when it changes, since every change makes
+  // the browser re-time the stream
+  function setRate(rate) {
+    if (video.playbackRate !== rate) video.playbackRate = rate;
+  }
+  return { texture, update, setRate };
 }
 
 const plasma = loadVideoTexture(["textures/plasma.webm", "textures/plasma.mp4"]);
@@ -825,7 +833,9 @@ function render(time) {
   // Walk the hierarchy to collect this frame's primitives, then trace them all
   scene.count = 0;
   scene.groupCount = 0;
+  updateEngines(t, dt);
   drawSystem(view, t, ship);
+  plasma.setRate(engines.plasmaRate);
   plasma.update();
   bindTextures();
   uploadScene(view, t);

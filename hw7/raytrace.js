@@ -92,7 +92,8 @@ layout(std140) uniform Scene {
   vec4 uMatB[MAX_PRIMS];          // kr (mirror), kt (glass), index of refraction, bump scale
   vec4 uMatC[MAX_PRIMS];          // atmosphere color, torus tube radius
   vec4 uMatD[MAX_PRIMS];          // glass absorption per unit length, texture repeats around u
-  vec4 uMatE[MAX_PRIMS];          // glow (emission's strength), group (-1 = none)
+  vec4 uMatE[MAX_PRIMS];          // glow (emission's strength), group (-1 = none),
+                                  //   an EMISSIVE part's power, and how far its texture slides along z
   vec4 uGroupInv[3 * MAX_GROUPS]; // rows of each group box's eye-to-box matrix
   vec4 uGroupHalf[MAX_GROUPS];    // each box's half-size
   ivec4 uGroupRange[MAX_GROUPS];  // start primitive index, end primitive index
@@ -462,13 +463,16 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   s.emissive = info.w == EMISSIVE;
   if (info.y < 0) return s;
 
-  vec2 uv = uvAt(info.x, h.part, po, repeats);
+  // A scrolling glow (the warp grilles) slides its texture along the part's
+  // z axis, the same way on every face, so the flow runs aft on both sides
+  vec3 slide = vec3(0.0, 0.0, uMatE[i].w);
+  vec2 uv = uvAt(info.x, h.part, po - slide, repeats);
   // Footprint across the ray, and along it, stretched by how obliquely it lands
   vec3 e1 = cross(d, s.ng);
   e1 = dot(e1, e1) > 1e-8 ? normalize(e1) : T;
   vec3 e2 = cross(s.ng, e1) / max(abs(dot(d, s.ng)), 0.15);
-  vec2 d1 = uvAt(info.x, h.part, toObject(i, s.p + e1 * footprint, 1.0), repeats) - uv;
-  vec2 d2 = uvAt(info.x, h.part, toObject(i, s.p + e2 * footprint, 1.0), repeats) - uv;
+  vec2 d1 = uvAt(info.x, h.part, toObject(i, s.p + e1 * footprint, 1.0) - slide, repeats) - uv;
+  vec2 d2 = uvAt(info.x, h.part, toObject(i, s.p + e2 * footprint, 1.0) - slide, repeats) - uv;
   d1 -= round(d1); d2 -= round(d2);     // across a seam, the short way round
 
   vec4 tex = sampleTex(info.y, uv, d1, d2);
@@ -709,7 +713,7 @@ void main() {
     p.travelled += h.t;
     Surface s = surfaceAt(p.o, p.d, h, p.travelled * uPixelAngle);
     if (s.emissive) {
-      color += p.weight * s.base;
+      color += p.weight * s.base * uMatE[h.id].z;   // its power (the engines' levels, ship.js)
       live = false;
       continue;
     }

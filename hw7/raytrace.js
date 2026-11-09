@@ -38,6 +38,15 @@ const TEXTURE_UNITS = 16;
 // its light is spread along that path
 const STREAK = { shutter: 0.45, max: 40, dim: 0.1 };
 
+// The near star field (see the shader's Sky section): an endless grid of
+// `cell`-unit cubes, each holding a star with chance `density` (up to three
+// times that in the galaxy's disc, `disc` units thick either side of y = 0).
+// None within `clear` of the system, so they stay behind everything the
+// camera can frame; past `reach` from the eye they have faded into the
+// distant layer. A star `ref` away shines at its base level.
+const STAR_FIELD = { cell: 8, density: 0.06, disc: 30, clear: 36, reach: 160, ref: 60, steps: 40 };
+const glslFloat = x => Number.isInteger(x) ? x.toFixed(1) : String(x);
+
 const RAYTRACE_VS = `#version 300 es
 // One triangle that covers the screen: (-1,-1), (3,-1), (-1,3)
 void main() {
@@ -113,10 +122,9 @@ uniform sampler2D uTex[TEXTURE_UNITS];
 uniform float uTime;
 
 // ---- sky -------------------------------------------------------------------
-uniform vec3 uSkyCenter;      // eye space
+uniform vec3 uSkyCenter;      // the system's center, eye space
 uniform mat3 uSkyRot;         // the sky frame's axes in eye space
-uniform float uSkyRadius;
-uniform vec3 uStreak;         // the stars' velocity past the eye, eye space
+uniform vec3 uStreak;        // the stars' velocity past the eye, eye space
 uniform float uShutter, uMaxStreak, uStreakDim;
 uniform float uStarScale;     // pixels rendered per CSS pixel
 
@@ -503,13 +511,34 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
 }
 
 // ============================================================================
-// Sky: a procedural star field on a sphere around the system, hashed by
-// direction. The sphere is cut into the six faces of a cube and each face into
-// a grid; each cell holds at most one star, with HW6's distribution -- a third
-// of them crowded into a galactic band, a few bright and many faint, blue-white
-// through orange, each twinkling on its own phase.
+// Sky, in three layers, all in the sky's own frame: fixed to the system,
+// centered on it, its y axis the galaxy's pole.
+//
+//   backdrop      at infinity: the galaxy's band of unresolved stars with dark
+//                 dust lanes along it, its core glowing warmer, and two
+//                 nebulae -- all from one three-channel fractal noise
+//   distant stars at infinity too, hashed by direction (HW6's distribution:
+//                 crowded into the band, a few bright and many faint, blue-
+//                 white through orange). They hold still even at warp, as
+//                 anything that far away would.
+//   near stars    at real points in space: an endless grid of cells, each
+//                 holding at most one star, walked cell by cell along the ray.
+//                 There is no edge to fly out of -- the ship can head off in
+//                 any direction for as long as it likes. They brighten as it
+//                 closes on them, and at warp each streaks by its own
+//                 parallax: the near ones long, the far ones barely.
 // ============================================================================
 #define STAR_GRID 64.0
+#define STAR_CELL ${glslFloat(STAR_FIELD.cell)}
+#define STAR_DENSITY ${glslFloat(STAR_FIELD.density)}
+#define STAR_DISC ${glslFloat(STAR_FIELD.disc)}
+#define STAR_CLEAR ${glslFloat(STAR_FIELD.clear)}
+#define STAR_REACH ${glslFloat(STAR_FIELD.reach)}
+#define STAR_REF ${glslFloat(STAR_FIELD.ref)}
+#define STAR_STEPS ${STAR_FIELD.steps}
+// Cell coordinates are offset before hashing, so negative ones don't lean on
+// how int converts to uint
+#define CELL_BIAS 32768
 
 uvec3 pcg3d(uvec3 v) {
   v = v * 1664525u + 1013904223u;
@@ -519,6 +548,86 @@ uvec3 pcg3d(uvec3 v) {
   return v;
 }
 vec3 random3(uvec3 v) { return vec3(pcg3d(v)) * (1.0 / 4294967296.0); }
+
+// ---- backdrop --------------------------------------------------------------
+
+// Value noise with three independent channels for the price of one: each
+// lattice corner's hash already gives three numbers
+vec3 noise3(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  uvec3 c = uvec3(ivec3(i) + CELL_BIAS);
+  vec3 x00 = mix(random3(c),                  random3(c + uvec3(1, 0, 0)), f.x);
+  vec3 x10 = mix(random3(c + uvec3(0, 1, 0)), random3(c + uvec3(1, 1, 0)), f.x);
+  vec3 x01 = mix(random3(c + uvec3(0, 0, 1)), random3(c + uvec3(1, 0, 1)), f.x);
+  vec3 x11 = mix(random3(c + uvec3(0, 1, 1)), random3(c + uvec3(1, 1, 1)), f.x);
+  return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
+}
+// Five octaves, each shifted so their lattices don't line up; about [0, 1]
+vec3 fbm3(vec3 p) {
+  vec3 sum = vec3(0.0);
+  float amp = 0.5;
+  for (int i = 0; i < 5; i++) {
+    sum += amp * noise3(p);
+    p = p * 2.03 + vec3(17.1, 31.7, 7.3);
+    amp *= 0.5;
+  }
+  return sum / 0.96875;
+}
+
+// One nebula: a soft patch around center, its edge torn up by the noise
+float nebula(vec3 s, vec3 center, float radius, float n) {
+  float r = length(s - center) / radius;
+  return smoothstep(0.05, 0.6, exp(-r * r) * (0.1 + 2.2 * n * n) - 0.3);
+}
+
+vec3 backdrop(vec3 s) {
+  // Two noises: a broad one for the clouds' shapes, and a finer one, bent by
+  // the first and drawn out along the band, for grain and dust filaments
+  vec3 n = fbm3(s * 4.0);
+  vec3 m = fbm3(s * vec3(8.0, 20.0, 8.0) + 1.6 * n);
+  float lat = s.y + 0.03 * (n.x - 0.5);
+  // The galactic core sits in the band, toward +x
+  float core = exp(-pow(length(s - normalize(vec3(1.0, 0.0, -0.35))) / 0.7, 2.0));
+  float band = exp(-lat * lat / (2.0 * 0.12 * 0.12)) * (0.3 + 0.8 * n.x + 0.6 * m.x)
+             + exp(-lat * lat / (2.0 * 0.2 * 0.2)) * core * (1.2 + 0.8 * m.x);
+  // Dust lanes: dark filaments threaded along the band's middle
+  float lane = exp(-(lat - 0.012) * (lat - 0.012) / (2.0 * 0.06 * 0.06));
+  band *= 1.0 - 0.9 * lane * smoothstep(0.42, 0.62, mix(n.y, m.y, 0.6));
+  vec3 glow = 0.11 * band * mix(vec3(0.55, 0.62, 0.85), vec3(1.0, 0.8, 0.55), core);
+  // An emission nebula glowing hydrogen red above the band, and a bluer one
+  // below it on the far side
+  glow += 0.22 * nebula(s, normalize(vec3(-0.55, 0.38, -0.75)), 0.55, mix(n.z, m.z, 0.5)) * vec3(0.95, 0.22, 0.38);
+  glow += 0.17 * nebula(s, normalize(vec3(0.5, -0.42, 0.75)), 0.48, mix(n.z, m.y, 0.5)) * vec3(0.18, 0.55, 0.75);
+  return glow + vec3(0.002, 0.003, 0.006);
+}
+
+// ---- stars -----------------------------------------------------------------
+
+vec3 starColor(float temp) {
+  return vec3(0.80 + 0.30 * temp, 0.88 + 0.08 * abs(temp - 0.5), 1.10 - 0.35 * temp);
+}
+
+// Pixels from direction d to the streak running from s0 back to s1 (a round
+// dot when they are the same)
+float pixelsFrom(vec3 d, vec3 s0, vec3 s1) {
+  vec3 ab = s1 - s0;
+  float k = dot(ab, ab) > 0.0 ? clamp(dot(d - s0, ab) / dot(ab, ab), 0.0, 1.0) : 0.0;
+  return length(d - (s0 + ab * k)) / uPixelAngle;
+}
+
+// The light a star size pixels across gives a pixel dist pixels from it,
+// once smeared along a streak streakPx long
+vec3 starDot(vec3 color, float size, float dist, float streakPx, float phase) {
+  // A star smaller than a pixel would flicker in and out as the view moves,
+  // so it is drawn a pixel and a half across, dimmed by the extra area
+  float radius = max(0.5 * size, 0.75);
+  float a = 1.0 - smoothstep(0.35, 1.0, dist / radius);
+  float twinkle = 0.78 + 0.22 * sin(uTime * 1.7 + phase * TAU);
+  float spread = size / (size + uStreakDim * streakPx);
+  float area = min(1.0, 0.25 * size * size / (radius * radius));
+  return color * twinkle * spread * area * a;
+}
 
 int cubeFace(vec3 s, out vec2 uv) {
   vec3 a = abs(s);
@@ -532,10 +641,9 @@ vec3 cubeDir(int face, vec2 uv) {
   return vec3(uv, face == 4 ? 1.0 : -1.0);
 }
 
-// The star in the cell under direction s (sky frame), lit for a pixel whose
-// streak runs from s0 back to s1: 0 if the cell is empty or the star is off
-// the streak
-vec3 starLight(vec3 s, vec3 s0, vec3 s1, float streakPx) {
+// The distant star, if any, in the cell under direction s. The sphere of
+// directions is cut into the six faces of a cube and each face into a grid.
+vec3 distantStar(vec3 s) {
   vec2 uv;
   int face = cubeFace(s, uv);
   vec2 cell = floor((uv * 0.5 + 0.5) * STAR_GRID);
@@ -544,64 +652,106 @@ vec3 starLight(vec3 s, vec3 s0, vec3 s1, float streakPx) {
   vec3 r2 = random3(uvec3(uvec2(cell), uint(face) + 101u));
   // Cells near a face's corners cover less of the sky, so they hold a star
   // less often, keeping the density even; the band packs more in near the
-  // sky's equator. Together: about 3000 stars, as in HW6.
+  // sky's equator. About 2000 stars.
   vec3 centerDir = normalize(cubeDir(face, mid));
   float area = pow(1.0 + dot(mid, mid), -1.5);
   float band = 1.0 + 2.28 * exp(-centerDir.y * centerDir.y / (2.0 * 0.175 * 0.175));
-  if (r1.x > 0.155 * area * band) return vec3(0.0);
+  if (r1.x > 0.1 * area * band) return vec3(0.0);
 
   vec3 star = normalize(cubeDir(face, (cell + 0.15 + 0.7 * r1.yz) / STAR_GRID * 2.0 - 1.0));
   float mag = r2.x * r2.x * r2.x;
-  float temp = r2.y;
-  float level = 0.45 + 0.55 * mag;
-  vec3 color = level * vec3(0.80 + 0.30 * temp, 0.88 + 0.08 * abs(temp - 0.5), 1.10 - 0.35 * temp);
-  float size = (1.1 + 2.3 * mag) * uStarScale;      // pixels across
-
-  // Distance from the star to the streak, in pixels: a round dot when there
-  // is no streak, a capsule when there is
-  vec3 ab = s1 - s0;
-  float k = dot(ab, ab) > 0.0 ? clamp(dot(star - s0, ab) / dot(ab, ab), 0.0, 1.0) : 0.0;
-  float dist = length(star - (s0 + ab * k)) / uPixelAngle;
-  // A star smaller than a pixel would flicker in and out as the view moves,
-  // so it is drawn a pixel and a half across, dimmed by the extra area
-  float radius = max(0.5 * size, 0.75);
-  float a = 1.0 - smoothstep(0.35, 1.0, dist / radius);
-  float twinkle = 0.78 + 0.22 * sin(uTime * 1.7 + r2.z * TAU);
-  float spread = size / (size + uStreakDim * streakPx);
-  float area2 = min(1.0, 0.25 * size * size / (radius * radius));
-  return color * twinkle * spread * area2 * a;
+  vec3 color = (0.35 + 0.5 * mag) * starColor(r2.y);
+  float size = (1.0 + 1.8 * mag) * uStarScale;
+  return starDot(color, size, length(s - star) / uPixelAngle, 0.0, r2.z);
 }
 
-vec3 sky(vec3 o, vec3 d) {
-  // Where the ray leaves the sky's sphere: the stars sit at a real distance,
-  // so they shift a little as the ship flies through them at warp
-  vec3 oc = o - uSkyCenter;
-  float b = dot(oc, d), c = dot(oc, oc) - uSkyRadius * uSkyRadius;
-  float disc = b * b - c;
-  float t = disc > 0.0 ? -b + sqrt(disc) : -1.0;
-  vec3 p = t > 0.0 ? oc + d * t : d;
-  vec3 s0 = normalize(p * uSkyRot);           // into the sky's own frame
-  if (dot(uStreak, uStreak) == 0.0) return starLight(s0, s0, s0, 0.0);
+// The near star in cell c, if it has one, seen along ray o + t d; v is how
+// far the stars move past the eye over the shutter
+vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v) {
+  uvec3 key = uvec3(c + CELL_BIAS);
+  vec3 r1 = random3(key);
+  vec3 mid = (vec3(c) + 0.5) * STAR_CELL;
+  float chance = STAR_DENSITY * (1.0 + 2.0 * exp(-mid.y * mid.y / (STAR_DISC * STAR_DISC)));
+  if (r1.x >= chance) return vec3(0.0);
+  vec3 r2 = random3(key + uvec3(0, 0, 7919));
+  // Kept off the cell's walls, so a star's glow never spills into a cell the
+  // walk doesn't look in
+  vec3 pos = (vec3(c) + 0.15 + 0.7 * vec3(r1.yz, r2.x)) * STAR_CELL;
+  if (dot(pos, pos) < STAR_CLEAR * STAR_CLEAR) return vec3(0.0);
+  vec3 q = pos - o;
+  float dist = length(q);
+  if (dist > STAR_REACH || dist < 0.5 || dot(q, d) <= 0.0) return vec3(0.0);
 
-  // At warp a pixel sees every star that passed through it during the
-  // shutter: the ones that were, shutter seconds ago, back along the streak
-  vec3 s1 = normalize((p - uStreak * uShutter) * uSkyRot);
-  float angle = acos(clamp(dot(s0, s1), -1.0, 1.0));
-  if (angle > uMaxStreak) {
-    s1 = normalize(mix(s0, s1, uMaxStreak / angle));
-    angle = uMaxStreak;
+  float mag = r2.y * r2.y * r2.y;
+  // Brighter and a little larger as the ship closes on it, fading toward the
+  // far edge of the field, where the distant layer carries on
+  float near = STAR_REF / dist;
+  float level = (0.45 + 0.55 * mag) * min(near * near, 4.0) * smoothstep(STAR_REACH, 0.6 * STAR_REACH, dist);
+  float size = (1.0 + 2.2 * mag) * clamp(sqrt(near), 0.7, 2.0) * uStarScale;
+
+  vec3 s0 = q / dist, s1 = s0;
+  float streakPx = 0.0;
+  if (v != vec3(0.0)) {
+    // Where it was a shutter ago, its streak no longer than uMaxStreak
+    s1 = normalize(q - v);
+    float angle = acos(clamp(dot(s0, s1), -1.0, 1.0));
+    if (angle > uMaxStreak) {
+      s1 = normalize(mix(s0, s1, uMaxStreak / angle));
+      angle = uMaxStreak;
+    }
+    streakPx = angle / uPixelAngle;
   }
-  float streakPx = angle / uPixelAngle;
-  // Look in every cell the streak crosses, a half cell apart, for the
-  // brightest star on it
-  int taps = int(clamp(ceil(angle * STAR_GRID * 4.0 / PI) + 1.0, 1.0, 16.0));
-  vec3 best = vec3(0.0);
-  for (int k = 0; k < 16; k++) {
-    if (k >= taps) break;
-    vec3 s = normalize(mix(s0, s1, taps == 1 ? 0.0 : float(k) / float(taps - 1)));
-    best = max(best, starLight(s, s0, s1, streakPx));
+  // The chance test above leaves r1.x uniform in [0, chance): the twinkle's phase
+  return starDot(level * starColor(r2.z), size, pixelsFrom(d, s0, s1), streakPx, r1.x / chance);
+}
+
+// The near stars along ray o + t d: an Amanatides-Woo walk through the cells
+// it crosses, out to STAR_REACH. A streaking star leaves its own cell during
+// the shutter, moving back along -v, so each cell the ray crosses also asks
+// the neighbors toward +v -- along each axis v moves far enough to carry a
+// star over a wall -- whether their star passed through it. The brightest
+// wins, so a star found twice isn't counted twice.
+vec3 nearStars(vec3 o, vec3 d, vec3 v) {
+  // A cell wholly inside the clear sphere holds no star, so from inside it
+  // the walk starts where the ray leaves the part of it no cell (or a
+  // neighbor) reaching past it could cover
+  float inner = max(STAR_CLEAR - 2.0 * 1.7321 * STAR_CELL, 0.0);
+  float b = dot(o, d), c = dot(o, o) - inner * inner;
+  float t = c < 0.0 ? -b + sqrt(b * b - c) : 0.0;
+
+  vec3 p = o + d * t;
+  ivec3 cell = ivec3(floor(p / STAR_CELL));
+  ivec3 stepDir = ivec3(greaterThanEqual(d, vec3(0.0))) * 2 - 1;
+  vec3 invAbs = 1.0 / max(abs(d), vec3(1e-8));
+  vec3 tDelta = STAR_CELL * invAbs;
+  vec3 wall = (vec3(cell) + step(0.0, d)) * STAR_CELL;
+  vec3 tMax = t + abs(wall - p) * invAbs;
+  ivec3 reach = ivec3(greaterThan(abs(v), vec3(0.075 * STAR_CELL))) * ivec3(sign(v));
+
+  vec3 light = vec3(0.0);
+  for (int i = 0; i < STAR_STEPS; i++) {
+    if (t > STAR_REACH) break;
+    for (int k = 0; k < 8; k++) {
+      ivec3 off = ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+      if (any(greaterThan(off, abs(reach)))) continue;
+      light = max(light, nearStar(cell + off * reach, o, d, v));
+    }
+    if (tMax.x < tMax.y && tMax.x < tMax.z) { cell.x += stepDir.x; t = tMax.x; tMax.x += tDelta.x; }
+    else if (tMax.y < tMax.z)               { cell.y += stepDir.y; t = tMax.y; tMax.y += tDelta.y; }
+    else                                    { cell.z += stepDir.z; t = tMax.z; tMax.z += tDelta.z; }
   }
-  return best;
+  return light;
+}
+
+// Everything a ray that leaves the scene sees. Only rays straight from the eye
+// look for near stars: a reflected or refracted one would cost the whole walk
+// again for a star the curved surface has smeared out of shape anyway.
+vec3 sky(vec3 o, vec3 d, bool primary) {
+  vec3 s = d * uSkyRot;                                  // into the sky's own frame
+  vec3 color = backdrop(s) + distantStar(s);
+  if (primary)
+    color += nearStars((o - uSkyCenter) * uSkyRot, s, (uStreak * uShutter) * uSkyRot);
+  return color;
 }
 
 // ============================================================================
@@ -704,7 +854,7 @@ void main() {
     }
     Hit h = trace(p.o, p.d, INF);
     if (h.id < 0) {
-      color += p.weight * sky(p.o, p.d);
+      color += p.weight * sky(p.o, p.d, p.depth == 0);
       live = false;
       continue;
     }

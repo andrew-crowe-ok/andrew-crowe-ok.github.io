@@ -861,7 +861,6 @@ function uploadScene(view, t) {
 
   gl.uniform3fv(u.uSkyCenter, scene.sky.center);
   gl.uniformMatrix3fv(u.uSkyRot, false, scene.sky.rot);
-  gl.uniform1f(u.uSkyRadius, SKY_RADIUS);
   gl.uniform3fv(u.uStreak, scene.sky.streak);
   gl.uniform1f(u.uShutter, STREAK.shutter);
   gl.uniform1f(u.uMaxStreak, STREAK.max * renderScale * pixel);

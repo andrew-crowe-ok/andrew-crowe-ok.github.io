@@ -8,15 +8,40 @@
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0d14; }
     canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
-    #hud { position: fixed; top: 8px; left: 12px; color: #ddd; font: 16px monospace; white-space: pre; }
-    #help { position: fixed; bottom: 8px; left: 12px; color: #888; font: 13px monospace; }
+    body { font-family: system-ui, sans-serif; color: #eee; }
+    #hud { position: fixed; top: 12px; left: 16px; right: 16px; font: 600 clamp(15px, 2.4vw, 22px) monospace;
+           white-space: pre-wrap; text-shadow: 0 2px 6px #000; }
+
+    #controls {
+      position: fixed; left: 16px; right: 16px; bottom: 16px; margin: 0 auto; width: fit-content;
+      display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px 28px;
+      box-sizing: border-box;
+      padding: 12px 22px; border-radius: 14px;
+      background: rgba(10, 12, 20, 0.78); border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    }
+    .control { display: flex; align-items: center; gap: 6px; font-size: 16px; }
+    .control span { margin: 0 4px; color: #cfd6e4; white-space: nowrap; }
+    kbd {
+      min-width: 1.4em; padding: 5px 10px; text-align: center;
+      font: 600 17px monospace; color: #fff;
+      background: linear-gradient(#3a3f4d, #262a35);
+      border: 1px solid #5b6274; border-bottom-width: 3px; border-radius: 7px;
+      transition: background 0.05s, border-color 0.05s, transform 0.05s;
+    }
+    kbd.wide { min-width: 5em; }
+    kbd.down { background: #f2c14e; border-color: #b8891f; color: #1a1a1a; transform: translateY(2px); }
   </style>
 </head>
 
 <body>
   <canvas id="glcanvas"></canvas>
   <div id="hud"></div>
-  <div id="help">Flippers: Z / &larr; and / / &rarr; (or Shift keys) &middot; Launch: hold Space</div>
+  <div id="controls">
+    <div class="control"><kbd data-code="KeyZ">Z</kbd><kbd data-code="ArrowLeft">&larr;</kbd><span>Left flipper</span></div>
+    <div class="control"><kbd class="wide" data-code="Space">Space</kbd><span>Hold to launch</span></div>
+    <div class="control"><span>Right flipper</span><kbd data-code="Slash">/</kbd><kbd data-code="ArrowRight">&rarr;</kbd></div>
+  </div>
 
   <script src="transforms.js"></script>
   <script src="models.js"></script>

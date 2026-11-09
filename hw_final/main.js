@@ -6,8 +6,16 @@ const KEYS = {      // key -> flipper index
 };
 const PLUNGER_KEYS = new Set(["Space", "ArrowDown"]);
 
+// Light up the on-screen key caps while held (Shift and ArrowDown share a cap)
+const CAP_FOR = { ShiftLeft: "KeyZ", ShiftRight: "Slash", ArrowDown: "Space" };
+function showKey(code, down) {
+  const cap = document.querySelector(`kbd[data-code="${CAP_FOR[code] ?? code}"]`);
+  if (cap) cap.classList.toggle("down", down);
+}
+
 function onKey(e, down) {
   if (e.repeat) return;
+  showKey(e.code, down);
   if (e.code in KEYS) setFlipper(KEYS[e.code], down);
   else if (PLUNGER_KEYS.has(e.code)) setPlunger(down);
   else return;

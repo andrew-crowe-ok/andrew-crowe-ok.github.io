@@ -116,6 +116,12 @@ function drawEntities(parent, t, playerShip) {
           scroll: 0
         };
       }
+      if (e.warp) {
+        if (e.warp.state === "on") e.engines.coils = 2.0;
+        else if (e.warp.state === "charge") e.engines.coils = 0.6 + (e.warp.tau / FLIGHT.warpCharge) * 1.0;
+        else e.engines.coils = 0.6;
+      }
+      e.engines.impulse = (e.throttle ?? 0.5) * 1.5;
       e.engines.scroll = (0.15 * t) % 2;
       drawShipAt(parent, pose, e.engines, false);
     }

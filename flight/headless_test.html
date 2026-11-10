@@ -14,15 +14,20 @@
   <div id="helmHud" hidden>
     <div id="stick" class="touch" role="slider" aria-label="Pitch and yaw"><div id="stickKnob"></div></div>
     <div id="helmPanel">
-      <div id="helmReadout"><span id="helmMode">Impulse</span><span id="helmSpeed">0.0</span></div>
+      <div id="helmReadout">
+        <span id="helmMode">Impulse</span>
+        <span id="helmSpeed">0.0</span>
+        <span id="helmTarget" hidden></span>
+      </div>
       <input type="range" id="throttle" aria-label="Throttle" title="Throttle" min="0" max="1" step="0.01" value="0">
       <div id="helmButtons">
         <button id="rollLeft" class="touch" aria-label="Roll left">&#x27F2;</button>
         <button id="warpButton" aria-pressed="false">Warp</button>
+        <button id="wingmanButton" aria-pressed="false">Escort</button>
         <button id="orbitButton">Orbit</button>
         <button id="rollRight" class="touch" aria-label="Roll right">&#x27F3;</button>
       </div>
-      <div id="helmKeys">W S pitch &middot; A D yaw &middot; Q E roll &middot; R F throttle &middot; Space warp &middot; Esc orbit</div>
+      <div id="helmKeys">W S pitch &middot; A D yaw &middot; Q E roll &middot; R F throttle &middot; Space warp &middot; C escort &middot; Esc orbit</div>
     </div>
   </div>
 
@@ -62,6 +67,7 @@
       <label><input type="checkbox" id="attenuation" checked> Attenuation</label>
       <label><input type="checkbox" id="stats"> Stats</label>
       <label><input type="checkbox" id="invert"> Invert pitch</label>
+      <label><input type="checkbox" id="wingmanToggle"> Wingman</label>
     </div>
   </details>
 
@@ -104,6 +110,14 @@
     <div class="stat-row">
       <span class="stat-label">Ray Bounces</span>
       <span id="statBounces" class="stat-val">--</span>
+    </div>
+    <div id="statEntitiesRow" class="stat-row">
+      <span class="stat-label">Entities</span>
+      <span id="statEntities" class="stat-val">--</span>
+    </div>
+    <div id="statTargetRow" class="stat-row" hidden>
+      <span class="stat-label">Escort Target</span>
+      <span id="statTarget" class="stat-val">--</span>
     </div>
     <canvas id="statsGraph" class="stats-graph" width="200" height="28"></canvas>
     <div id="statsGpuInfo" class="stats-gpu-info"></div>
@@ -214,6 +228,28 @@
       }
       check("robustness: entity without controller survives free flight step", idleSafe);
 
+      // 9. Test wingman toggle
+      resetScene(0);
+      check("toggleWingman: initial entities is 1", world.entities.length === 1);
+      toggleWingman();
+      check("toggleWingman: companion added", world.entities.length === 2 && world.entities[1].role === "wingman");
+      toggleWingman();
+      check("toggleWingman: companion removed", world.entities.length === 1);
+
+      // 10. Test AI Wingman formation & rendering under WebGL free flight
+      resetScene(0);
+      toggleWingman();
+      requestEngage();
+      const frameEngage = stepFrame(0.5, 0.016);
+      buildScene(frameEngage, false);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      check("webgl: wingman engage drawArrays NO_ERROR", gl.getError() === gl.NO_ERROR);
+      check("ai: wingman active and flown", world.entities.length === 2 && world.entities[1].controller === wingmanController && !world.entities[1].rail);
+
+      // 11. Test HUD & Telemetry updates with wingman
+      updateHud(frameEngage.ship);
+      check("hud: wingman button reflects active state", document.getElementById("wingmanButton").getAttribute("aria-pressed") === "true");
+      check("hud: wingman target text rendered", document.getElementById("helmTarget").textContent.includes("TGT"));
     } catch (err) {
       out.push("ERROR " + err.stack);
     }

@@ -599,6 +599,9 @@ const statEls = {
   scale: document.getElementById("statScale"),
   prims: document.getElementById("statPrims"),
   bounces: document.getElementById("statBounces"),
+  entities: document.getElementById("statEntities"),
+  targetRow: document.getElementById("statTargetRow"),
+  target: document.getElementById("statTarget"),
   graph: document.getElementById("statsGraph"),
   gpuInfo: document.getElementById("statsGpuInfo"),
 };
@@ -758,6 +761,26 @@ function updateStats(nowMs, frameDelta, cpuMs, ship) {
       const phase = ship.warp.state === "on" ? "WARP" : ship.helm ? "HELM" : "ORBIT";
       statEls.phase.textContent = phase;
       statEls.phase.classList.toggle("warp", phase === "WARP");
+    }
+    if (statEls.entities) {
+      const entCount = (typeof world !== "undefined" && world.entities) ? world.entities.length : 1;
+      statEls.entities.textContent = `${entCount} ${entCount === 1 ? "ship" : "ships"}`;
+    }
+    if (statEls.target && statEls.targetRow) {
+      const escort = (typeof world !== "undefined" && world.entities)
+        ? world.entities.find(e => e !== world.player)
+        : null;
+      if (escort) {
+        statEls.targetRow.hidden = false;
+        const dx = escort.pos[0] - ship.pos[0];
+        const dy = escort.pos[1] - ship.pos[1];
+        const dz = escort.pos[2] - ship.pos[2];
+        const dist = Math.hypot(dx, dy, dz);
+        const state = escort.rail ? "ORBIT" : escort.warp && escort.warp.state === "on" ? "WARP" : (dist < 6 ? "ESCORT" : "FLYING");
+        statEls.target.textContent = `${dist.toFixed(1)}u [${state}]`;
+      } else {
+        statEls.targetRow.hidden = true;
+      }
     }
 
     statFrames = 0;
@@ -946,7 +969,7 @@ engageButton.addEventListener("click", requestEngage);
 // on AZERTY and Dvorak too. Dragging on the scene still swings the camera
 // round the ship.
 // ---------------------------------------------------------------------------
-const FLIGHT_KEYS = ["KeyW", "KeyS", "KeyA", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF",
+const FLIGHT_KEYS = ["KeyW", "KeyS", "KeyA", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF", "KeyC",
   "ArrowUp", "ArrowDown", "Space", "Escape"];
 const held = new Set();                     // flight keys down right now
 const stick = { x: 0, y: 0, id: null };     // the touch stick: -1 .. 1, y down the screen
@@ -960,6 +983,7 @@ window.addEventListener("keydown", e => {
   if (e.code.startsWith("Arrow") && e.target instanceof HTMLInputElement) return;
   e.preventDefault();
   if (e.code === "Space") { if (!e.repeat) helm.toggleWarp = true; }
+  else if (e.code === "KeyC") { if (!e.repeat) toggleWingman(); }
   else if (e.code === "Escape") returnToOrbit();
   else held.add(e.code);
 });
@@ -967,16 +991,56 @@ window.addEventListener("keyup", e => held.delete(e.code));
 window.addEventListener("blur", () => held.clear());
 
 const helmHud = document.getElementById("helmHud");
-const helmEls = Object.fromEntries(["helmMode", "helmSpeed", "throttle", "warpButton", "orbitButton",
-  "stick", "stickKnob", "rollLeft", "rollRight"].map(id => [id, document.getElementById(id)]));
+const helmEls = Object.fromEntries(["helmMode", "helmSpeed", "helmTarget", "throttle", "warpButton",
+  "wingmanButton", "orbitButton", "stick", "stickKnob", "rollLeft", "rollRight"].map(id => [id, document.getElementById(id)]));
 
 helmEls.throttle.addEventListener("input", () => { helm.lever = parseFloat(helmEls.throttle.value); });
 // Buttons and the slider give the focus back once used, so Space and the
 // arrows go on flying the ship instead of pressing them again
-for (const el of [helmEls.throttle, helmEls.warpButton, helmEls.orbitButton])
-  el.addEventListener("pointerup", () => el.blur());
+for (const el of [helmEls.throttle, helmEls.warpButton, helmEls.wingmanButton, helmEls.orbitButton])
+  if (el) el.addEventListener("pointerup", () => el.blur());
 helmEls.warpButton.addEventListener("click", () => { helm.toggleWarp = true; });
+if (helmEls.wingmanButton) helmEls.wingmanButton.addEventListener("click", toggleWingman);
 helmEls.orbitButton.addEventListener("click", returnToOrbit);
+
+const wingmanToggleEl = document.getElementById("wingmanToggle");
+if (wingmanToggleEl) {
+  wingmanToggleEl.addEventListener("change", toggleWingman);
+}
+
+function toggleWingman() {
+  if (typeof world === "undefined" || !world.entities) return;
+  const companionIdx = world.entities.findIndex(e => e !== world.player);
+  if (companionIdx >= 0) {
+    world.entities.splice(companionIdx, 1);
+  } else {
+    if (world.player.rail) {
+      addEntity({
+        model: "galaxy",
+        rail: companionOrbitPose(-0.5),
+        role: "wingman"
+      });
+    } else {
+      const p = world.player;
+      const slot = [-3.2, 0.4, -4.5];
+      const slotPos = vadd(p.pos, quatRotate(p.quat, slot));
+      addEntity({
+        model: "galaxy",
+        rail: null,
+        controller: wingmanController,
+        pos: slotPos,
+        quat: p.quat.slice(),
+        vel: p.vel.slice(),
+        speed: p.speed,
+        role: "wingman"
+      });
+    }
+  }
+  const hasCompanion = world.entities.some(e => e !== world.player);
+  if (wingmanToggleEl) wingmanToggleEl.checked = hasCompanion;
+  if (helmEls.wingmanButton) helmEls.wingmanButton.setAttribute("aria-pressed", hasCompanion);
+}
+window.toggleWingman = toggleWingman;
 
 // The stick: where the finger is from the middle, as a share of the radius,
 // held inside the unit circle
@@ -1034,6 +1098,29 @@ function updateHud(ship) {
   setHud("speed", ship.speed.toFixed(1), v => { helmEls.helmSpeed.textContent = v; });
   setHud("lever", helm.lever.toFixed(2), v => { helmEls.throttle.value = v; });
   setHud("warp", ship.warp.state !== "off", v => { helmEls.warpButton.setAttribute("aria-pressed", v); });
+
+  const hasWingman = typeof world !== "undefined" && world.entities && world.entities.some(e => e !== world.player);
+  if (helmEls.wingmanButton) {
+    setHud("wingman", hasWingman, v => {
+      helmEls.wingmanButton.setAttribute("aria-pressed", v);
+    });
+  }
+  if (helmEls.helmTarget) {
+    const escort = hasWingman ? world.entities.find(e => e !== world.player) : null;
+    if (escort) {
+      const dx = escort.pos[0] - ship.pos[0];
+      const dy = escort.pos[1] - ship.pos[1];
+      const dz = escort.pos[2] - ship.pos[2];
+      const dist = Math.hypot(dx, dy, dz);
+      const st = escort.rail ? "ORBIT" : escort.warp && escort.warp.state === "on" ? "WARP" : (dist < 6 ? "ESCORT" : "PURSUIT");
+      setHud("tgtText", `TGT ${dist.toFixed(1)}U ${st}`, v => {
+        helmEls.helmTarget.textContent = v;
+        helmEls.helmTarget.hidden = false;
+      });
+    } else {
+      setHud("tgtText", "", () => { helmEls.helmTarget.hidden = true; });
+    }
+  }
 }
 
 // The button is held back until the viewer has had a moment with the scene.
@@ -1114,8 +1201,11 @@ function resetScene(time) {
   resetWorld();
   const shipCount = Math.max(1, Math.min(MAX_INSTANCES - 2, Number(presets.get("ships") || (presets.has("wingman") ? 2 : 1))));
   for (let s = 1; s < shipCount; s++) {
-    addEntity({ model: "galaxy", rail: companionOrbitPose(s * 0.45) });
+    addEntity({ model: "galaxy", rail: companionOrbitPose(s * 0.45), role: "wingman" });
   }
+  const toggleEl = document.getElementById("wingmanToggle");
+  if (toggleEl) toggleEl.checked = shipCount > 1;
+  if (helmEls.wingmanButton) helmEls.wingmanButton.setAttribute("aria-pressed", shipCount > 1);
   held.clear();
   dropStick();
   rollHeld = 0;

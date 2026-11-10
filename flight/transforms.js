@@ -205,12 +205,12 @@ function matrixFromQuat([x, y, z, w]) {
   ]);
 }
 
-// Constant-rate rotation from a to b. q and -q are the same rotation, so the
-// sign is picked to turn the short way round; near-parallel quaternions get a
-// plain lerp, where sin(theta) would divide out to nothing.
-function slerp(a, b, u) {
+function slerpInto(a, b, u, out) {
   let cos = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-  const q = cos < 0 ? b.map(v => -v) : b;
+  const b0 = cos < 0 ? -b[0] : b[0];
+  const b1 = cos < 0 ? -b[1] : b[1];
+  const b2 = cos < 0 ? -b[2] : b[2];
+  const b3 = cos < 0 ? -b[3] : b[3];
   cos = Math.abs(cos);
   let wa = 1 - u, wb = u;
   if (cos < 0.9995) {
@@ -218,9 +218,23 @@ function slerp(a, b, u) {
     wa = Math.sin(wa * theta) / sin;
     wb = Math.sin(wb * theta) / sin;
   }
-  const r = a.map((v, i) => v * wa + q[i] * wb);
-  const len = Math.hypot(...r);
-  return r.map(v => v / len);
+  const r0 = a[0] * wa + b0 * wb;
+  const r1 = a[1] * wa + b1 * wb;
+  const r2 = a[2] * wa + b2 * wb;
+  const r3 = a[3] * wa + b3 * wb;
+  const invLen = 1 / Math.hypot(r0, r1, r2, r3);
+  out[0] = r0 * invLen;
+  out[1] = r1 * invLen;
+  out[2] = r2 * invLen;
+  out[3] = r3 * invLen;
+  return out;
+}
+
+// Constant-rate rotation from a to b. q and -q are the same rotation, so the
+// sign is picked to turn the short way round; near-parallel quaternions get a
+// plain lerp, where sin(theta) would divide out to nothing.
+function slerp(a, b, u) {
+  return slerpInto(a, b, u, [0, 0, 0, 0]);
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +242,16 @@ function slerp(a, b, u) {
 // kept in (world.js). quatMul(a, b) is "b, then a" on a vector, like the
 // matrices; so a ship turning about its OWN axes multiplies on the right.
 // ---------------------------------------------------------------------------
+function quatMulInto(a, b, out) {
+  const ax = a[0], ay = a[1], az = a[2], aw = a[3];
+  const bx = b[0], by = b[1], bz = b[2], bw = b[3];
+  out[0] = aw * bx + ax * bw + ay * bz - az * by;
+  out[1] = aw * by - ax * bz + ay * bw + az * bx;
+  out[2] = aw * bz + ax * by - ay * bx + az * bw;
+  out[3] = aw * bw - ax * bx - ay * by - az * bz;
+  return out;
+}
+
 const quatMul = ([ax, ay, az, aw], [bx, by, bz, bw]) => [
   aw * bx + ax * bw + ay * bz - az * by,
   aw * by - ax * bz + ay * bw + az * bx,
@@ -235,10 +259,31 @@ const quatMul = ([ax, ay, az, aw], [bx, by, bz, bw]) => [
   aw * bw - ax * bx - ay * by - az * bz
 ];
 const quatConj = ([x, y, z, w]) => [-x, -y, -z, w];   // the inverse, at unit length
+
+function quatNormalizeInto(q, out) {
+  const invLen = 1 / Math.hypot(q[0], q[1], q[2], q[3]);
+  out[0] = q[0] * invLen;
+  out[1] = q[1] * invLen;
+  out[2] = q[2] * invLen;
+  out[3] = q[3] * invLen;
+  return out;
+}
+
 function quatNormalize(q) {
   const len = Math.hypot(...q);
   return q.map(v => v / len);
 }
+
+function quatFromRotVecInto([x, y, z], out) {
+  const a = Math.hypot(x, y, z);
+  const s = a < 1e-9 ? 0.5 : Math.sin(a / 2) / a;
+  out[0] = x * s;
+  out[1] = y * s;
+  out[2] = z * s;
+  out[3] = Math.cos(a / 2);
+  return out;
+}
+
 // The rotation by |v| radians about v: what an angular velocity turns
 // through in one step. Small angles fall back to the series' first term.
 function quatFromRotVec([x, y, z]) {
@@ -246,6 +291,23 @@ function quatFromRotVec([x, y, z]) {
   const s = a < 1e-9 ? 0.5 : Math.sin(a / 2) / a;
   return [x * s, y * s, z * s, Math.cos(a / 2)];
 }
+
+function quatRotateInto(q, v, out) {
+  const qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+  const vx = v[0], vy = v[1], vz = v[2];
+  const c1x = qy * vz - qz * vy;
+  const c1y = qz * vx - qx * vz;
+  const c1z = qx * vy - qy * vx;
+  const c2x = qy * c1z - qz * c1y;
+  const c2y = qz * c1x - qx * c1z;
+  const c2z = qx * c1y - qy * c1x;
+  const w2 = 2 * qw;
+  out[0] = vx + w2 * c1x + 2 * c2x;
+  out[1] = vy + w2 * c1y + 2 * c2y;
+  out[2] = vz + w2 * c1z + 2 * c2z;
+  return out;
+}
+
 // q turns v: v + 2w (u x v) + 2 u x (u x v), u being q's vector part
 function quatRotate(q, v) {
   const u = [q[0], q[1], q[2]];

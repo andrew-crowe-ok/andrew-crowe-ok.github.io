@@ -77,15 +77,20 @@ function companionOrbitPose(offsetAngle = -Math.PI / 4) {
 // Entities
 // ---------------------------------------------------------------------------
 // warp.state: "off", "charge" (lever thrown, coils charging) or "on";
+// ---------------------------------------------------------------------------
+// Entities
+// ---------------------------------------------------------------------------
+// warp.state: "off", "charge" (lever thrown, coils charging) or "on";
 // warp.tau: seconds in that state. warpRamp is the lens's progress, 0 .. 1.
-function makeEntity({ model, rail = null, controller = null }) {
-  return { model, rail, controller, pos: [0, 0, 0], quat: [0, 0, 0, 1], vel: [0, 0, 0],
+function makeEntity({ model, rail = null, controller = null, role = null }) {
+  return { model, rail, controller, role, pos: [0, 0, 0], quat: [0, 0, 0, 1], vel: [0, 0, 0],
     angVel: [0, 0, 0], speed: 0, throttle: 0, warp: { state: "off", tau: 0 }, warpRamp: 0,
-    radius: FLIGHT.radius, prev: null };
+    radius: FLIGHT.radius, prev: null, pose: null,
+    intent: { pitch: 0, yaw: 0, roll: 0, throttle: 0, toggleWarp: false } };
 }
 
-function addEntity({ model = "galaxy", rail = null, controller = null, pos = [0, 0, 0], quat = [0, 0, 0, 1], vel = [0, 0, 0], speed = 0, throttle = 0, engines = null } = {}) {
-  const e = makeEntity({ model, rail, controller });
+function addEntity({ model = "galaxy", rail = null, controller = null, role = null, pos = [0, 0, 0], quat = [0, 0, 0, 1], vel = [0, 0, 0], speed = 0, throttle = 0, engines = null } = {}) {
+  const e = makeEntity({ model, rail, controller, role });
   e.pos = pos.slice();
   e.quat = quat.slice();
   e.vel = vel.slice();
@@ -107,6 +112,14 @@ function setWarp(e, state) {
   if (state !== "charge") e.warpRamp = state === "on" ? 1 - Math.cbrt(1 - level) : Math.cbrt(level);
 }
 
+// Scratch structures to eliminate per-step heap allocations
+const FLY_SCRATCH = {
+  angStep: [0, 0, 0],
+  qRot: [0, 0, 0, 1],
+  qMul: [0, 0, 0, 1],
+  nose: [0, 0, 0]
+};
+
 // One fixed step of a flown ship.
 function fly(e, intent, dt, bodies) {
   // Warp: lever -> charge -> jump; the lever again drops back out
@@ -123,11 +136,20 @@ function fly(e, intent, dt, bodies) {
   // roll right a positive one about +z. Multiplying on the right is what
   // keeps those the SHIP's axes however it is already turned.
   const turn = 1 + (FLIGHT.warpTurn - 1) * level;
-  const want = [-intent.pitch * FLIGHT.rates.pitch * turn, -intent.yaw * FLIGHT.rates.yaw * turn,
-    intent.roll * FLIGHT.rates.roll * turn];
+  const want0 = -intent.pitch * FLIGHT.rates.pitch * turn;
+  const want1 = -intent.yaw * FLIGHT.rates.yaw * turn;
+  const want2 = intent.roll * FLIGHT.rates.roll * turn;
   const k = easeShare(dt, FLIGHT.turnEase);
-  e.angVel = e.angVel.map((w, i) => w + (want[i] - w) * k);
-  e.quat = quatNormalize(quatMul(e.quat, quatFromRotVec(vmul(e.angVel, dt))));
+  e.angVel[0] += (want0 - e.angVel[0]) * k;
+  e.angVel[1] += (want1 - e.angVel[1]) * k;
+  e.angVel[2] += (want2 - e.angVel[2]) * k;
+
+  FLY_SCRATCH.angStep[0] = e.angVel[0] * dt;
+  FLY_SCRATCH.angStep[1] = e.angVel[1] * dt;
+  FLY_SCRATCH.angStep[2] = e.angVel[2] * dt;
+  quatFromRotVecInto(FLY_SCRATCH.angStep, FLY_SCRATCH.qRot);
+  quatMulInto(e.quat, FLY_SCRATCH.qRot, FLY_SCRATCH.qMul);
+  quatNormalizeInto(FLY_SCRATCH.qMul, e.quat);
 
   // Speed answers the throttle; velocity swings round to the nose
   e.throttle = clamp01(intent.throttle);
@@ -135,23 +157,336 @@ function fly(e, intent, dt, bodies) {
   // (dropping out of warp sheds the speed quickly, while the lens closes)
   const ease = atWarp ? FLIGHT.warpEase : FLIGHT.speedEase + (FLIGHT.dropEase - FLIGHT.speedEase) * e.warpRamp;
   e.speed += (target - e.speed) * easeShare(dt, ease);
-  const nose = quatRotate(e.quat, [0, 0, 1]);
+
+  quatRotateInto(e.quat, [0, 0, 1], FLY_SCRATCH.nose);
   const grip = easeShare(dt, FLIGHT.grip + (FLIGHT.warpGrip - FLIGHT.grip) * level);
-  e.vel = e.vel.map((v, i) => v + (nose[i] * e.speed - v) * grip);
-  e.pos = vadd(e.pos, vmul(e.vel, dt));
+  e.vel[0] += (FLY_SCRATCH.nose[0] * e.speed - e.vel[0]) * grip;
+  e.vel[1] += (FLY_SCRATCH.nose[1] * e.speed - e.vel[1]) * grip;
+  e.vel[2] += (FLY_SCRATCH.nose[2] * e.speed - e.vel[2]) * grip;
+
+  e.pos[0] += e.vel[0] * dt;
+  e.pos[1] += e.vel[1] * dt;
+  e.pos[2] += e.vel[2] * dt;
 
   // Running into a planet or a moon: back out to the surface and keep only
   // the motion along it, so the ship slides round. It also ends a warp.
-  for (const body of bodies) {
-    const d = vsub(e.pos, body.center), dist = Math.hypot(...d), reach = body.radius + e.radius;
+  for (let b = 0; b < bodies.length; b++) {
+    const body = bodies[b];
+    const dx = e.pos[0] - body.center[0];
+    const dy = e.pos[1] - body.center[1];
+    const dz = e.pos[2] - body.center[2];
+    const dist = Math.hypot(dx, dy, dz);
+    const reach = body.radius + e.radius;
     if (dist >= reach) continue;
-    const out = dist > 1e-6 ? vmul(d, 1 / dist) : nose.map(v => -v);
-    e.pos = vadd(body.center, vmul(out, reach));
-    const inward = vdot(e.vel, out);
-    if (inward < 0) e.vel = vsub(e.vel, vmul(out, inward));
+    const invDist = dist > 1e-6 ? 1 / dist : 0;
+    const outX = dist > 1e-6 ? dx * invDist : -FLY_SCRATCH.nose[0];
+    const outY = dist > 1e-6 ? dy * invDist : -FLY_SCRATCH.nose[1];
+    const outZ = dist > 1e-6 ? dz * invDist : -FLY_SCRATCH.nose[2];
+    e.pos[0] = body.center[0] + outX * reach;
+    e.pos[1] = body.center[1] + outY * reach;
+    e.pos[2] = body.center[2] + outZ * reach;
+    const inward = e.vel[0] * outX + e.vel[1] * outY + e.vel[2] * outZ;
+    if (inward < 0) {
+      e.vel[0] -= outX * inward;
+      e.vel[1] -= outY * inward;
+      e.vel[2] -= outZ * inward;
+    }
     if (e.warp.state !== "off") setWarp(e, "off");
     e.speed = Math.min(e.speed, FLIGHT.impulse);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Entity-to-entity collisions
+// ---------------------------------------------------------------------------
+// Ships bounce/slide or deflect rather than passing through each other.
+function resolveEntityCollisions(entities) {
+  const count = entities.length;
+  if (count < 2) return;
+  for (let i = 0; i < count - 1; i++) {
+    const a = entities[i];
+    const ra = a.radius || FLIGHT.radius;
+    for (let j = i + 1; j < count; j++) {
+      const b = entities[j];
+      const rb = b.radius || FLIGHT.radius;
+      const reach = ra + rb;
+      const dx = a.pos[0] - b.pos[0];
+      const dy = a.pos[1] - b.pos[1];
+      const dz = a.pos[2] - b.pos[2];
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq >= reach * reach) continue;
+
+      const dist = Math.sqrt(distSq);
+      const invDist = dist > 1e-6 ? 1 / dist : 0;
+      const nx = dist > 1e-6 ? dx * invDist : 0;
+      const ny = dist > 1e-6 ? dy * invDist : 1;
+      const nz = dist > 1e-6 ? dz * invDist : 0;
+      const overlap = reach - dist;
+
+      const aRail = !!a.rail;
+      const bRail = !!b.rail;
+
+      if (aRail && bRail) {
+        continue;
+      } else if (aRail) {
+        b.pos[0] -= nx * overlap;
+        b.pos[1] -= ny * overlap;
+        b.pos[2] -= nz * overlap;
+      } else if (bRail) {
+        a.pos[0] += nx * overlap;
+        a.pos[1] += ny * overlap;
+        a.pos[2] += nz * overlap;
+      } else {
+        const half = overlap * 0.5;
+        a.pos[0] += nx * half;
+        a.pos[1] += ny * half;
+        a.pos[2] += nz * half;
+        b.pos[0] -= nx * half;
+        b.pos[1] -= ny * half;
+        b.pos[2] -= nz * half;
+      }
+
+      // Interrupt warp on any collision/overlap
+      if (!aRail && a.warp && a.warp.state !== "off") {
+        setWarp(a, "off");
+        a.speed = Math.min(Math.hypot(a.vel[0], a.vel[1], a.vel[2]), FLIGHT.impulse);
+      }
+      if (!bRail && b.warp && b.warp.state !== "off") {
+        setWarp(b, "off");
+        b.speed = Math.min(Math.hypot(b.vel[0], b.vel[1], b.vel[2]), FLIGHT.impulse);
+      }
+
+      // Relative velocity along collision normal
+      const rvx = a.vel[0] - b.vel[0];
+      const rvy = a.vel[1] - b.vel[1];
+      const rvz = a.vel[2] - b.vel[2];
+      const vn = rvx * nx + rvy * ny + rvz * nz;
+
+      if (vn < 0) {
+        const restitution = 0.5;
+        const imp = -(1 + restitution) * vn;
+        if (!aRail && !bRail) {
+          const halfImp = imp * 0.5;
+          a.vel[0] += nx * halfImp;
+          a.vel[1] += ny * halfImp;
+          a.vel[2] += nz * halfImp;
+          b.vel[0] -= nx * halfImp;
+          b.vel[1] -= ny * halfImp;
+          b.vel[2] -= nz * halfImp;
+        } else if (!aRail && bRail) {
+          a.vel[0] += nx * imp;
+          a.vel[1] += ny * imp;
+          a.vel[2] += nz * imp;
+        } else if (aRail && !bRail) {
+          b.vel[0] -= nx * imp;
+          b.vel[1] -= ny * imp;
+          b.vel[2] -= nz * imp;
+        }
+
+        if (!aRail) a.speed = Math.min(Math.hypot(a.vel[0], a.vel[1], a.vel[2]), FLIGHT.impulse);
+        if (!bRail) b.speed = Math.min(Math.hypot(b.vel[0], b.vel[1], b.vel[2]), FLIGHT.impulse);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Autonomous AI Flight Controllers & Steering
+// ---------------------------------------------------------------------------
+// AI controllers compute pilot intents { pitch, yaw, roll, throttle, toggleWarp }
+// to fly ships autonomously towards target waypoints or in formation.
+
+const AI_SCRATCH = {
+  conj: [0, 0, 0, 1],
+  wAim: [0, 0, 0],
+  localAim: [0, 0, 0],
+  worldUp: [0, 0, 0],
+  localUp: [0, 0, 0],
+  slotWorld: [0, 0, 0]
+};
+
+function computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, options = {}, outIntent = null) {
+  const intent = outIntent || e.intent || { pitch: 0, yaw: 0, roll: 0, throttle: 0, toggleWarp: false };
+  const dx = targetPos[0] - e.pos[0];
+  const dy = targetPos[1] - e.pos[1];
+  const dz = targetPos[2] - e.pos[2];
+  const dist = Math.hypot(dx, dy, dz);
+
+  // Velocity leading: predict target motion to intercept/arrive smoothly
+  const targetSpeed = targetVel ? Math.hypot(targetVel[0], targetVel[1], targetVel[2]) : 0;
+  const leadTime = Math.min(1.2, dist / Math.max(e.speed, FLIGHT.impulse * 0.5));
+  const aimX = targetPos[0] + (targetVel ? targetVel[0] * leadTime * 0.4 : 0);
+  const aimY = targetPos[1] + (targetVel ? targetVel[1] * leadTime * 0.4 : 0);
+  const aimZ = targetPos[2] + (targetVel ? targetVel[2] * leadTime * 0.4 : 0);
+
+  const adx = aimX - e.pos[0];
+  const ady = aimY - e.pos[1];
+  const adz = aimZ - e.pos[2];
+  const aimDist = Math.hypot(adx, ady, adz);
+  const invAim = aimDist > 1e-5 ? 1 / aimDist : 1;
+  AI_SCRATCH.wAim[0] = aimDist > 1e-5 ? adx * invAim : 0;
+  AI_SCRATCH.wAim[1] = aimDist > 1e-5 ? ady * invAim : 0;
+  AI_SCRATCH.wAim[2] = aimDist > 1e-5 ? adz * invAim : 1;
+
+  // Transform world aim direction into ship's local coordinates
+  AI_SCRATCH.conj[0] = -e.quat[0];
+  AI_SCRATCH.conj[1] = -e.quat[1];
+  AI_SCRATCH.conj[2] = -e.quat[2];
+  AI_SCRATCH.conj[3] = e.quat[3];
+  quatRotateInto(AI_SCRATCH.conj, AI_SCRATCH.wAim, AI_SCRATCH.localAim);
+  const lax = AI_SCRATCH.localAim[0];
+  const lay = AI_SCRATCH.localAim[1];
+  const laz = AI_SCRATCH.localAim[2];
+
+  // Pitch: positive lifts nose up (towards +y)
+  const pitchAngle = Math.atan2(lay, laz);
+  const pitch = Math.max(-1, Math.min(1, pitchAngle * 1.8));
+
+  // Yaw: positive swings nose starboard (towards -x)
+  const yawAngle = Math.atan2(-lax, laz);
+  const yaw = Math.max(-1, Math.min(1, yawAngle * 1.8));
+
+  // Roll: align ship's dorsal up with target's up or system up, banking into turns
+  if (targetQuat) {
+    quatRotateInto(targetQuat, [0, 1, 0], AI_SCRATCH.worldUp);
+  } else {
+    AI_SCRATCH.worldUp[0] = 0; AI_SCRATCH.worldUp[1] = 1; AI_SCRATCH.worldUp[2] = 0;
+  }
+  quatRotateInto(AI_SCRATCH.conj, AI_SCRATCH.worldUp, AI_SCRATCH.localUp);
+  const rollAngle = Math.atan2(AI_SCRATCH.localUp[0], AI_SCRATCH.localUp[1]);
+  const roll = Math.max(-1, Math.min(1, rollAngle * 1.5 + yaw * 0.35));
+
+  // Throttle
+  const standoff = options.standoff || options.arrivalDist || 0;
+  const effectiveDist = Math.max(0, dist - standoff);
+  let desiredSpeed;
+  if (effectiveDist > 8.0) {
+    desiredSpeed = FLIGHT.impulse;
+  } else {
+    desiredSpeed = targetSpeed + effectiveDist * 0.6;
+  }
+  if (laz < 0.2) {
+    desiredSpeed = Math.min(desiredSpeed, FLIGHT.impulse * 0.35);
+  }
+  const throttle = clamp01(desiredSpeed / FLIGHT.impulse);
+
+  // Warp synchronization
+  let toggleWarp = false;
+  if (options.allowWarp !== false) {
+    const targetWarp = options.targetWarpState || (options.target && options.target.warp ? options.target.warp.state : "off");
+    if (targetWarp === "on" && e.warp.state === "off") {
+      toggleWarp = true;
+    } else if (targetWarp === "off" && e.warp.state === "on") {
+      toggleWarp = true;
+    } else if (dist > 25 && e.warp.state === "off" && laz > 0.7) {
+      toggleWarp = true;
+    } else if (dist < 6 && e.warp.state === "on" && targetWarp !== "on") {
+      toggleWarp = true;
+    }
+  }
+
+  intent.pitch = pitch;
+  intent.yaw = yaw;
+  intent.roll = roll;
+  intent.throttle = throttle;
+  intent.toggleWarp = toggleWarp;
+  return intent;
+}
+
+const WINGMAN_SLOTS = [
+  [-3.2, 0.4, -4.5],  // Port wingman
+  [3.2, 0.4, -4.5],   // Starboard wingman
+  [0.0, 1.8, -6.5],   // High rear escort
+  [-5.5, 0.8, -8.0],  // Wide port wingman
+  [5.5, 0.8, -8.0]    // Wide starboard wingman
+];
+
+function createWingmanController({ target = null, slotOffset = null, slotIndex = 0 } = {}) {
+  const defaultSlot = slotOffset || WINGMAN_SLOTS[slotIndex % WINGMAN_SLOTS.length];
+  const targetPos = [0, 0, 0];
+  const targetVel = [0, 0, 0];
+  const targetQuat = [0, 0, 0, 1];
+
+  return function wingmanCtrl(e, dt, worldRef) {
+    const lead = target || (worldRef ? worldRef.player : world.player);
+    if (!lead) {
+      return { pitch: 0, yaw: 0, roll: 0, throttle: 0.5, toggleWarp: false };
+    }
+
+    // Determine formation slot offset
+    let slot = defaultSlot;
+    if (!slotOffset && worldRef && worldRef.entities) {
+      const idx = worldRef.entities.filter(ent => ent !== lead).indexOf(e);
+      if (idx >= 0) slot = WINGMAN_SLOTS[idx % WINGMAN_SLOTS.length];
+    }
+
+    // Calculate slot world position
+    quatRotateInto(lead.quat, slot, AI_SCRATCH.slotWorld);
+    targetPos[0] = lead.pos[0] + AI_SCRATCH.slotWorld[0];
+    targetPos[1] = lead.pos[1] + AI_SCRATCH.slotWorld[1];
+    targetPos[2] = lead.pos[2] + AI_SCRATCH.slotWorld[2];
+    targetVel[0] = lead.vel[0];
+    targetVel[1] = lead.vel[1];
+    targetVel[2] = lead.vel[2];
+    targetQuat[0] = lead.quat[0];
+    targetQuat[1] = lead.quat[1];
+    targetQuat[2] = lead.quat[2];
+    targetQuat[3] = lead.quat[3];
+
+    return computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, {
+      arrivalDist: 0.2,
+      target: lead,
+      allowWarp: true
+    }, e.intent);
+  };
+}
+
+const defaultWingmanController = createWingmanController();
+function wingmanController(e, dt, worldRef) {
+  return defaultWingmanController(e, dt, worldRef);
+}
+
+function createPursuitController({ target = null, standoff = 2.0 } = {}) {
+  return function pursuitCtrl(e, dt, worldRef) {
+    const tgt = target || (worldRef ? worldRef.player : world.player);
+    if (!tgt) return { pitch: 0, yaw: 0, roll: 0, throttle: 0, toggleWarp: false };
+    return computeSteeringIntent(e, tgt.pos, tgt.vel, tgt.quat, dt, {
+      standoff,
+      target: tgt,
+      allowWarp: true
+    }, e.intent);
+  };
+}
+
+const defaultPursuitController = createPursuitController();
+function pursuitController(e, dt, worldRef) {
+  return defaultPursuitController(e, dt, worldRef);
+}
+
+function createPatrolController({ waypoints = null, radius = 5.0, speed = 0.5 } = {}) {
+  let wpIndex = 0;
+  const pts = waypoints || [
+    [radius, 0, 0],
+    [0, radius * 0.5, radius],
+    [-radius, 0, 0],
+    [0, -radius * 0.5, -radius]
+  ];
+  return function patrolCtrl(e, dt) {
+    const wp = pts[wpIndex];
+    const dist = Math.hypot(wp[0] - e.pos[0], wp[1] - e.pos[1], wp[2] - e.pos[2]);
+    if (dist < 1.5) {
+      wpIndex = (wpIndex + 1) % pts.length;
+    }
+    return computeSteeringIntent(e, pts[wpIndex], null, null, dt, {
+      standoff: 0.5,
+      allowWarp: false
+    }, e.intent);
+  };
+}
+
+const defaultPatrolController = createPatrolController();
+function patrolController(e, dt, worldRef) {
+  return defaultPatrolController(e, dt, worldRef);
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +507,7 @@ const world = { entities: [], player: null, helmT0: null, resetAt: null, pending
 
 // Back to how the page loads: one ship, riding the orbit
 function resetWorld() {
-  const player = makeEntity({ model: "galaxy", rail: orbitPose });
+  const player = makeEntity({ model: "galaxy", rail: orbitPose, role: "player" });
   Object.assign(world, { entities: [player], player, helmT0: null, resetAt: null, pending: 0, engage: false });
   Object.assign(helm, { pitch: 0, yaw: 0, roll: 0, leverRate: 0, toggleWarp: false,
     lever: ORBIT_SPEED / FLIGHT.impulse });
@@ -187,26 +522,41 @@ function engageElapsed(t) { return offOrbit() ? t - world.helmT0 : null; }
 function requestReset(t, lead) { if (offOrbit()) world.resetAt ??= t + lead; }
 function resetDue(t) { return world.resetAt !== null && t >= world.resetAt; }
 
+const SYSTEM_BODIES = [
+  { center: [0, 0, 0], radius: PLANET.radius },
+  { center: [0, 0, 0], radius: MOON.radius }
+];
+
 function stepWorld(t, dt) {
-  const bodies = [{ center: [0, 0, 0], radius: PLANET.radius }, { center: moonCenter(t), radius: MOON.radius }];
-  for (const e of world.entities) {
-    e.prev = { pos: e.pos, quat: e.quat };
-    if (e.rail) Object.assign(e, e.rail(t));
-    else {
-      const intent = e.controller ? e.controller(e, dt, world) : { pitch: 0, yaw: 0, roll: 0, throttle: e.throttle, toggleWarp: false };
-      fly(e, intent, dt, bodies);
+  const mc = moonCenter(t);
+  SYSTEM_BODIES[1].center[0] = mc[0];
+  SYSTEM_BODIES[1].center[1] = mc[1];
+  SYSTEM_BODIES[1].center[2] = mc[2];
+
+  for (let i = 0; i < world.entities.length; i++) {
+    const e = world.entities[i];
+    if (!e.prev) e.prev = { pos: [0, 0, 0], quat: [0, 0, 0, 1] };
+    e.prev.pos[0] = e.pos[0];
+    e.prev.pos[1] = e.pos[1];
+    e.prev.pos[2] = e.pos[2];
+    e.prev.quat[0] = e.quat[0];
+    e.prev.quat[1] = e.quat[1];
+    e.prev.quat[2] = e.quat[2];
+    e.prev.quat[3] = e.quat[3];
+
+    if (e.rail) {
+      Object.assign(e, e.rail(t));
+    } else {
+      const intent = e.controller ? e.controller(e, dt, world) : (e.intent || { pitch: 0, yaw: 0, roll: 0, throttle: e.throttle, toggleWarp: false });
+      fly(e, intent, dt, SYSTEM_BODIES);
     }
   }
+
+  resolveEntityCollisions(world.entities);
 }
 
 // Once a frame: advance the world to scene time t (dt since the last frame)
 // and return the player's ship as the scene should draw it.
-//
-// The world moves in whole FLIGHT.step steps whatever the frame rate, so
-// flight feels the same at 30 fps as at 144 and a slow frame can't tunnel a
-// ship through the moon. What is left over of the frame is kept for the next
-// one, and the pose drawn is blended between the last two steps by that
-// remainder, so motion stays smooth when frames and steps don't line up.
 function advanceWorld(t, dt) {
   const player = world.player;
   if (world.engage) {
@@ -217,13 +567,29 @@ function advanceWorld(t, dt) {
       Object.assign(player, player.rail(t), { rail: null, controller: playerController, speed: ORBIT_SPEED });
       world.helmT0 = t;
       world.pending = 0;
+
+      // Transition wingmen into free flight formation
+      for (let i = 0; i < world.entities.length; i++) {
+        const e = world.entities[i];
+        if (e === player) continue;
+        if (e.rail && e.role === "wingman") {
+          Object.assign(e, e.rail(t), {
+            rail: null,
+            controller: e.controller || wingmanController,
+            speed: ORBIT_SPEED
+          });
+        }
+      }
     }
   }
 
   let pose;
   if (player.rail) {
     // Rails are exact at any t: nothing to step or blend
-    for (const e of world.entities) if (e.rail) Object.assign(e, e.rail(t));
+    for (let i = 0; i < world.entities.length; i++) {
+      const e = world.entities[i];
+      if (e.rail) Object.assign(e, e.rail(t));
+    }
     player.throttle = ORBIT_SPEED / FLIGHT.impulse;
     pose = { pos: player.pos, quat: player.quat };
   } else {
@@ -233,17 +599,34 @@ function advanceWorld(t, dt) {
       stepWorld(t - world.pending, FLIGHT.step);
     }
     const a = world.pending / FLIGHT.step, prev = player.prev ?? player;
-    pose = { pos: prev.pos.map((v, i) => v + (player.pos[i] - v) * a), quat: slerp(prev.quat, player.quat, a) };
-    for (const e of world.entities) {
+    pose = {
+      pos: [
+        prev.pos[0] + (player.pos[0] - prev.pos[0]) * a,
+        prev.pos[1] + (player.pos[1] - prev.pos[1]) * a,
+        prev.pos[2] + (player.pos[2] - prev.pos[2]) * a
+      ],
+      quat: slerp(prev.quat, player.quat, a)
+    };
+    for (let i = 0; i < world.entities.length; i++) {
+      const e = world.entities[i];
       if (e === player) continue;
-      if (e.rail) Object.assign(e, e.rail(t));
-      else if (e.prev) {
-        e.pose = {
-          pos: e.prev.pos.map((v, i) => v + (e.pos[i] - v) * a),
-          quat: slerp(e.prev.quat, e.quat, a)
-        };
+      if (e.rail) {
+        Object.assign(e, e.rail(t));
+      } else if (e.prev) {
+        if (!e.pose) e.pose = { pos: [0, 0, 0], quat: [0, 0, 0, 1] };
+        e.pose.pos[0] = e.prev.pos[0] + (e.pos[0] - e.prev.pos[0]) * a;
+        e.pose.pos[1] = e.prev.pos[1] + (e.pos[1] - e.prev.pos[1]) * a;
+        e.pose.pos[2] = e.prev.pos[2] + (e.pos[2] - e.prev.pos[2]) * a;
+        slerpInto(e.prev.quat, e.quat, a, e.pose.quat);
       } else {
-        e.pose = { pos: e.pos.slice(), quat: e.quat.slice() };
+        if (!e.pose) e.pose = { pos: [0, 0, 0], quat: [0, 0, 0, 1] };
+        e.pose.pos[0] = e.pos[0];
+        e.pose.pos[1] = e.pos[1];
+        e.pose.pos[2] = e.pos[2];
+        e.pose.quat[0] = e.quat[0];
+        e.pose.quat[1] = e.quat[1];
+        e.pose.quat[2] = e.quat[2];
+        e.pose.quat[3] = e.quat[3];
       }
     }
   }
@@ -252,4 +635,15 @@ function advanceWorld(t, dt) {
     helm: !player.rail, warp: player.warp, warpLevel: warpLevelOf(player),
     // The stars streak by the ship's own velocity; the lens weight scales it
     streak: player.vel };
+}
+
+if (typeof window !== "undefined") {
+  window.wingmanController = wingmanController;
+  window.createWingmanController = createWingmanController;
+  window.pursuitController = pursuitController;
+  window.createPursuitController = createPursuitController;
+  window.patrolController = patrolController;
+  window.createPatrolController = createPatrolController;
+  window.resolveEntityCollisions = resolveEntityCollisions;
+  window.computeSteeringIntent = computeSteeringIntent;
 }

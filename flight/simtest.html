@@ -133,6 +133,143 @@ try {
   requestEngage();
   advanceWorld(2.1, 0.1);
   check("multi-entity: free flight steps both entities", world.entities.length === 2 && !world.player.rail && !!wingman.rail);
+
+  // Phase 5: Autonomous AI Steering & Flight Controllers
+  resetWorld();
+  const testShip = addEntity({ model: "galaxy", rail: null, pos: [0, 0, 0], quat: [0, 0, 0, 1] });
+  
+  // 1. Steering intent output shape & bounds
+  const aheadIntent = computeSteeringIntent(testShip, [0, 0, 10], null, null, 0.016);
+  check("ai-steering: ahead pitch near 0", Math.abs(aheadIntent.pitch) < 0.05, aheadIntent.pitch.toFixed(3));
+  check("ai-steering: ahead yaw near 0", Math.abs(aheadIntent.yaw) < 0.05, aheadIntent.yaw.toFixed(3));
+  check("ai-steering: ahead throttle full", aheadIntent.throttle > 0.9, aheadIntent.throttle.toFixed(2));
+
+  // 2. Directional responsiveness
+  const upIntent = computeSteeringIntent(testShip, [0, 10, 5], null, null, 0.016);
+  check("ai-steering: target above causes positive pitch (lifts nose)", upIntent.pitch > 0.3, upIntent.pitch.toFixed(3));
+
+  const downIntent = computeSteeringIntent(testShip, [0, -10, 5], null, null, 0.016);
+  check("ai-steering: target below causes negative pitch (dives)", downIntent.pitch < -0.3, downIntent.pitch.toFixed(3));
+
+  const rightIntent = computeSteeringIntent(testShip, [-10, 0, 5], null, null, 0.016);
+  check("ai-steering: target starboard causes positive yaw (turns right)", rightIntent.yaw > 0.3, rightIntent.yaw.toFixed(3));
+
+  const leftIntent = computeSteeringIntent(testShip, [10, 0, 5], null, null, 0.016);
+  check("ai-steering: target port causes negative yaw (turns left)", leftIntent.yaw < -0.3, leftIntent.yaw.toFixed(3));
+
+  // 3. Roll banking
+  check("ai-steering: turn causes coordinated bank roll", Math.abs(rightIntent.roll) > 0.05);
+
+  // 4. Pursuit controller closes distance
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  world.player.pos = [0, 0, 0];
+  world.player.vel = [0, 0, 0];
+  world.player.speed = 0;
+  helm.pitch = 0; helm.yaw = 0; helm.roll = 0; helm.lever = 0;
+  
+  const chaser = addEntity({
+    model: "galaxy",
+    rail: null,
+    controller: createPursuitController({ target: world.player, standoff: 1.5 }),
+    pos: [0, 0, -15],
+    quat: [0, 0, 0, 1]
+  });
+  const initDist = Math.hypot(...vsub(world.player.pos, chaser.pos));
+  for (let i = 0; i < 180; i++) advanceWorld(1.0 + (i + 1) * 0.02, 0.02);
+  const finalDist = Math.hypot(...vsub(world.player.pos, chaser.pos));
+  check("ai-pursuit: chaser closes distance to standoff", finalDist < initDist && finalDist >= 1.2 && finalDist < 5.0,
+    `init: ${initDist.toFixed(2)}, final: ${finalDist.toFixed(2)}`);
+
+  // 5. Wingman formation following
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  // Clear of planet (which is at origin, radius 2.4)
+  world.player.pos = [10, 0, 0];
+  world.player.vel = [0, 0, FLIGHT.impulse];
+  world.player.speed = FLIGHT.impulse;
+  world.player.quat = [0, 0, 0, 1];
+  helm.lever = 1.0; helm.pitch = 0; helm.yaw = 0; helm.roll = 0;
+
+  const escort = addEntity({
+    model: "galaxy",
+    rail: null,
+    role: "wingman",
+    controller: wingmanController,
+    pos: [10 - 3.2, 0.4, -4.5],
+    quat: [0, 0, 0, 1],
+    vel: [0, 0, FLIGHT.impulse],
+    speed: FLIGHT.impulse,
+    throttle: 1.0
+  });
+  for (let i = 0; i < 120; i++) advanceWorld(1.0 + (i + 1) * 0.02, 0.02);
+  const relSlot = vsub(escort.pos, world.player.pos);
+  check("ai-wingman: maintains formation offset behind and to port",
+    near(relSlot, [-3.2, 0.4, -4.5], 0.5), `actual rel: ${f(relSlot)}`);
+
+  // 6. Entity-to-entity collisions: head-on bounce and deflection
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  // Positioned clear of planet at x = 12
+  const shipA = addEntity({
+    model: "galaxy",
+    rail: null,
+    pos: [12, 0, 2.5],
+    vel: [0, 0, -FLIGHT.impulse],
+    speed: FLIGHT.impulse,
+    throttle: 1.0,
+    quat: [0, 1, 0, 0] // facing -Z
+  });
+  const shipB = addEntity({
+    model: "galaxy",
+    rail: null,
+    pos: [12, 0, -2.5],
+    vel: [0, 0, FLIGHT.impulse],
+    speed: FLIGHT.impulse,
+    throttle: 1.0,
+    quat: [0, 0, 0, 1] // facing +Z
+  });
+  let minShipDist = Infinity;
+  let bounced = false;
+  for (let i = 0; i < 120; i++) {
+    advanceWorld(1.0 + (i + 1) * 0.016, 0.016);
+    const d = Math.hypot(...vsub(shipA.pos, shipB.pos));
+    minShipDist = Math.min(minShipDist, d);
+    if (shipA.vel[2] > 0 && shipB.vel[2] < 0) bounced = true;
+  }
+  const minAllowed = (shipA.radius || FLIGHT.radius) + (shipB.radius || FLIGHT.radius);
+  check("entity-collision: ships do not pass through each other", minShipDist >= minAllowed - 0.05,
+    `min dist: ${minShipDist.toFixed(3)} vs allowed: ${minAllowed.toFixed(3)}`);
+  check("entity-collision: velocities reverse after bounce", bounced,
+    `A.vz=${shipA.vel[2].toFixed(2)}, B.vz=${shipB.vel[2].toFixed(2)}`);
+
+  // 7. Entity collision knocks warping ship out of warp
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  const warpShip = addEntity({
+    model: "galaxy",
+    rail: null,
+    pos: [12, 0, -1.0],
+    vel: [0, 0, FLIGHT.impulse],
+    speed: FLIGHT.impulse,
+    quat: [0, 0, 0, 1]
+  });
+  setWarp(warpShip, "on");
+  const blocker = addEntity({
+    model: "galaxy",
+    rail: null,
+    pos: [12, 0, 0],
+    vel: [0, 0, 0],
+    speed: 0,
+    quat: [0, 0, 0, 1]
+  });
+  check("entity-collision: warp was on", warpShip.warp.state === "on");
+  stepWorld(1.0, 0.016);
+  check("entity-collision: warp interrupted on impact", warpShip.warp.state === "off", warpShip.warp.state);
 } catch (err) { out.push("ERROR " + err.stack); }
 document.getElementById("out").textContent = out.join("\n");
 </script></body></html>

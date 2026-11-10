@@ -51,24 +51,24 @@ const easeShare = (dt, tau) => 1 - Math.exp(-dt / tau);
 // axis and turns the ship's +z to the direction of travel there, so one angle
 // gives position, attitude and velocity; rotateX(tilt) tips the whole plane.
 // ---------------------------------------------------------------------------
+const ORBIT_TILT_MAT = rotateX(ORBIT.tilt);
+
 function orbitPose(t) {
   const a = -ORBIT.speed * t;
-  const tilt = rotateX(ORBIT.tilt);
   return {
-    pos: transformPoint(tilt, [ORBIT.radius * Math.cos(a), 0, -ORBIT.radius * Math.sin(a)]),
-    quat: quatFromMatrix(multiply(tilt, rotateY(a))),
-    vel: transformVector(tilt, [ORBIT_SPEED * Math.sin(a), 0, ORBIT_SPEED * Math.cos(a)])
+    pos: transformPoint(ORBIT_TILT_MAT, [ORBIT.radius * Math.cos(a), 0, -ORBIT.radius * Math.sin(a)]),
+    quat: quatFromMatrix(multiply(ORBIT_TILT_MAT, rotateY(a))),
+    vel: transformVector(ORBIT_TILT_MAT, [ORBIT_SPEED * Math.sin(a), 0, ORBIT_SPEED * Math.cos(a)])
   };
 }
 
 function companionOrbitPose(offsetAngle = -Math.PI / 4) {
   return function(t) {
     const a = -ORBIT.speed * t + offsetAngle;
-    const tilt = rotateX(ORBIT.tilt);
     return {
-      pos: transformPoint(tilt, [ORBIT.radius * Math.cos(a), 0, -ORBIT.radius * Math.sin(a)]),
-      quat: quatFromMatrix(multiply(tilt, rotateY(a))),
-      vel: transformVector(tilt, [ORBIT_SPEED * Math.sin(a), 0, ORBIT_SPEED * Math.cos(a)])
+      pos: transformPoint(ORBIT_TILT_MAT, [ORBIT.radius * Math.cos(a), 0, -ORBIT.radius * Math.sin(a)]),
+      quat: quatFromMatrix(multiply(ORBIT_TILT_MAT, rotateY(a))),
+      vel: transformVector(ORBIT_TILT_MAT, [ORBIT_SPEED * Math.sin(a), 0, ORBIT_SPEED * Math.cos(a)])
     };
   };
 }
@@ -91,7 +91,7 @@ function addEntity({ model = "galaxy", rail = null, controller = null, pos = [0,
   e.vel = vel.slice();
   e.speed = speed;
   e.throttle = throttle;
-  if (engines) e.engines = { ...engines };
+  e.engines = engines ? { ...engines } : { impulse: 0.8, coils: 0.6, bussard: 0.8, scroll: 0 };
   world.entities.push(e);
   return e;
 }
@@ -192,7 +192,10 @@ function stepWorld(t, dt) {
   for (const e of world.entities) {
     e.prev = { pos: e.pos, quat: e.quat };
     if (e.rail) Object.assign(e, e.rail(t));
-    else fly(e, e.controller(e, dt, world), dt, bodies);
+    else {
+      const intent = e.controller ? e.controller(e, dt, world) : { pitch: 0, yaw: 0, roll: 0, throttle: e.throttle, toggleWarp: false };
+      fly(e, intent, dt, bodies);
+    }
   }
 }
 

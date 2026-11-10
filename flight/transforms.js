@@ -16,6 +16,10 @@ function identity() {
   return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 }
 
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
 function translate(x, y, z) {
   return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);
 }

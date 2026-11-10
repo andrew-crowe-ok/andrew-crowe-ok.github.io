@@ -381,6 +381,13 @@ Hit trace(vec3 o, vec3 d, float tmax) {
       for (int g = 0; g < MAX_GROUPS; g++) {
         if (g >= grpCount) break;
         int grpIdx = grpStart + g;
+        if (g > 0) {
+          int prevGrpEnd = uGroupRange[grpIdx - 1].y;
+          int currGrpStart = uGroupRange[grpIdx].x;
+          if (prevGrpEnd < currGrpStart) {
+            traceRange(prevGrpEnd, currGrpStart, inst, oModel, dModel, h);
+          }
+        }
         if (!groupVisible(grpIdx, oModel, dModel, EPS, h.t)) continue;
         traceRange(uGroupRange[grpIdx].x, uGroupRange[grpIdx].y, inst, oModel, dModel, h);
       }
@@ -442,6 +449,13 @@ vec3 transmittance(vec3 o, vec3 d, float dist) {
       for (int g = 0; g < MAX_GROUPS; g++) {
         if (g >= grpCount) break;
         int grpIdx = grpStart + g;
+        if (g > 0) {
+          int prevGrpEnd = uGroupRange[grpIdx - 1].y;
+          int currGrpStart = uGroupRange[grpIdx].x;
+          if (prevGrpEnd < currGrpStart) {
+            if (!transmitRange(prevGrpEnd, currGrpStart, inst, oModel, dModel, dist, tr)) return vec3(0.0);
+          }
+        }
         if (!groupVisible(grpIdx, oModel, dModel, EPS, dist)) continue;
         if (!transmitRange(uGroupRange[grpIdx].x, uGroupRange[grpIdx].y, inst, oModel, dModel, dist, tr)) return vec3(0.0);
       }
@@ -548,7 +562,7 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
 
   // A scrolling glow (the warp grilles) slides its texture along the part's
   // z axis, the same way on every face, so the flow runs aft on both sides
-  float scroll = (uMatE[i].z == 2.0) ? uInstParams[inst].w : uMatE[i].w;
+  float scroll = (uMatE[i].z == 2.0) ? uInstParams[inst].w : 0.0;
   vec3 slide = vec3(0.0, 0.0, scroll);
   vec2 uv = uvAt(info.x, h.part, po - slide, repeats);
   // Footprint across the ray, and along it, stretched by how obliquely it lands

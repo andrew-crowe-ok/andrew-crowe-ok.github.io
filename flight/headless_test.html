@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Headless WebGL Tests</title>
+</head>
+<body>
+  <canvas id="glcanvas" width="640" height="360"></canvas>
+  <div id="warpFlash" class="wash"></div>
+  <div id="fade" class="wash"></div>
+  <div id="error" role="alert" hidden></div>
+  <button id="engageButton">Engage</button>
+
+  <div id="helmHud" hidden>
+    <div id="stick" class="touch" role="slider" aria-label="Pitch and yaw"><div id="stickKnob"></div></div>
+    <div id="helmPanel">
+      <div id="helmReadout"><span id="helmMode">Impulse</span><span id="helmSpeed">0.0</span></div>
+      <input type="range" id="throttle" aria-label="Throttle" title="Throttle" min="0" max="1" step="0.01" value="0">
+      <div id="helmButtons">
+        <button id="rollLeft" class="touch" aria-label="Roll left">&#x27F2;</button>
+        <button id="warpButton" aria-pressed="false">Warp</button>
+        <button id="orbitButton">Orbit</button>
+        <button id="rollRight" class="touch" aria-label="Roll right">&#x27F3;</button>
+      </div>
+      <div id="helmKeys">W S pitch &middot; A D yaw &middot; Q E roll &middot; R F throttle &middot; Space warp &middot; Esc orbit</div>
+    </div>
+  </div>
+
+  <details id="controls" open>
+    <summary>Ray tracer</summary>
+    <label class="row">Resolution
+      <select id="resolution">
+        <option value="0" selected>Auto</option>
+        <option value="1440">1440p</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="540">540p</option>
+        <option value="360">360p</option>
+      </select></label>
+    <label class="row">FPS cap
+      <select id="fps">
+        <option value="0" selected>Unlimited</option>
+        <option value="120">120</option>
+        <option value="60">60</option>
+        <option value="30">30</option>
+        <option value="20">20</option>
+      </select></label>
+    <label class="row">Bounces <output for="bounces"></output>
+      <input type="range" id="bounces" min="0" max="6" step="1" value="3"></label>
+    <label class="row">Sun <output for="sun"></output>
+      <input type="range" id="sun" min="0" max="2" step="0.05" value="1"></label>
+    <label class="row">Fill light <output for="fill"></output>
+      <input type="range" id="fill" min="0" max="4" step="0.05" value="1"></label>
+    <label class="row">Nav light <output for="nav"></output>
+      <input type="range" id="nav" min="0" max="4" step="0.05" value="1"></label>
+    <label class="row">Shininess <output for="shininess"></output>
+      <input type="range" id="shininess" min="-2" max="2" step="0.1" value="0"></label>
+    <label class="row">Glass index of refraction <output for="ior"></output>
+      <input type="range" id="ior" min="1" max="2.4" step="0.01" value="1.5"></label>
+    <div class="checks">
+      <label><input type="checkbox" id="shadows" checked> Shadows</label>
+      <label><input type="checkbox" id="attenuation" checked> Attenuation</label>
+      <label><input type="checkbox" id="stats"> Stats</label>
+      <label><input type="checkbox" id="invert"> Invert pitch</label>
+    </div>
+  </details>
+
+  <div id="statsOverlay" hidden>
+    <div class="stats-header">
+      <span>Telemetry</span>
+      <div style="display: flex; align-items: center; gap: 0.3em;">
+        <span id="statsFlightPhase" class="stats-status">ORBIT</span>
+        <button id="statsClose" title="Hide stats (key: I)" aria-label="Close stats">&times;</button>
+      </div>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Frame Rate</span>
+      <span id="statFps" class="stat-val accent">-- FPS</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Latency / Frame</span>
+      <span id="statLatency" class="stat-val">-- ms</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">CPU Render</span>
+      <span id="statCpu" class="stat-val">-- ms</span>
+    </div>
+    <div id="statGpuRow" class="stat-row" hidden>
+      <span class="stat-label">GPU Render</span>
+      <span id="statGpu" class="stat-val">-- ms</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Resolution</span>
+      <span id="statRes" class="stat-val">--</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Viewport / Scale</span>
+      <span id="statScale" class="stat-val">--</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Primitives</span>
+      <span id="statPrims" class="stat-val">--</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Ray Bounces</span>
+      <span id="statBounces" class="stat-val">--</span>
+    </div>
+    <canvas id="statsGraph" class="stats-graph" width="200" height="28"></canvas>
+    <div id="statsGpuInfo" class="stats-gpu-info"></div>
+  </div>
+
+  <pre id="out"></pre>
+  <pre id="errors"></pre>
+
+  <script>
+  window.scriptErrors = [];
+  window.addEventListener('error', e => {
+    window.scriptErrors.push(e.message + ' at ' + e.filename + ':' + e.lineno + ':' + e.colno);
+    document.getElementById('errors').textContent = window.scriptErrors.join('\n');
+  });
+  </script>
+  <script src="transforms.js"></script>
+  <script src="textures.js"></script>
+  <script src="raytrace.js"></script>
+  <script src="ship.js"></script>
+  <script src="camera.js"></script>
+  <script src="scene.js"></script>
+  <script src="world.js"></script>
+  <script src="main.js"></script>
+  <script>
+  const out = [];
+  const check = (name, ok, detail = "") => out.push(`${ok ? "PASS" : "FAIL"} ${name} ${detail}`);
+  const near = (a, b, eps = 1e-4) => a.every((v, i) => Math.abs(v - b[i]) < eps);
+
+  async function runTests() {
+    try {
+      if (window.assetsReady && window.assetsReady.length > 0) {
+        await Promise.all(window.assetsReady);
+      }
+
+      // 1. Prototype models initialized
+      check("models: GALAXY_MODEL exists", !!window.GALAXY_MODEL && window.GALAXY_MODEL.primCount === 30);
+      check("models: PLANET_MODEL exists", !!window.PLANET_MODEL && window.PLANET_MODEL.primCount === 1);
+      check("models: MOON_MODEL exists", !!window.MOON_MODEL && window.MOON_MODEL.primCount === 1);
+      check("models: total prototype prims = 32", scene.count === 32);
+      check("models: total prototype groups = 4", scene.groupCount === 4);
+
+      // 2. Uniform buffer size and binding
+      const sceneBlockIdx = gl.getUniformBlockIndex(program, "Scene");
+      check("ubo: Scene block found", sceneBlockIdx !== gl.INVALID_INDEX);
+      const uboSize = gl.getActiveUniformBlockParameter(program, sceneBlockIdx, gl.UNIFORM_BLOCK_DATA_SIZE);
+      check("ubo: size is 5824 bytes", uboSize === 5824, `actual: ${uboSize}`);
+      check("ubo: sceneBytes matches uboSize", sceneBytes.byteLength === uboSize);
+
+      // 3. uInstCount uniform exists
+      const uInstLoc = gl.getUniformLocation(program, "uInstCount");
+      check("uniforms: uInstCount exists", uInstLoc !== null);
+
+      // 4. Instance adding and capping
+      scene.instCount = 0;
+      addInstance(PLANET_MODEL, identity());
+      addInstance(MOON_MODEL, identity());
+      addInstance(GALAXY_MODEL, identity());
+      check("instances: instCount is 3", scene.instCount === 3);
+
+      let threwMax = false;
+      try {
+        for (let i = scene.instCount; i < 20; i++) {
+          addInstance(GALAXY_MODEL, identity());
+        }
+      } catch (err) {
+        threwMax = true;
+      }
+      check("instances: throws on exceeding MAX_INSTANCES (8)", threwMax && scene.instCount === 8);
+
+      // 5. Test rendering frame
+      resetScene(0);
+      const frame0 = stepFrame(0.016, 0.016);
+      buildScene(frame0, false);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const err0 = gl.getError();
+      check("webgl: drawArrays NO_ERROR", err0 === gl.NO_ERROR, `err: ${err0}`);
+
+      const pixel = new Uint8Array(4);
+      gl.readPixels(320, 180, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      check("webgl: readPixels non-zero alpha", pixel[3] === 255, `rgba: ${Array.from(pixel).join(",")}`);
+
+      // 6. Test multi-ship scene rendering
+      resetWorld();
+      const w1 = addEntity({ model: "galaxy", rail: companionOrbitPose(-0.5) });
+      const w2 = addEntity({ model: "galaxy", rail: companionOrbitPose(0.5) });
+      check("world: 3 entities in world", world.entities.length === 3);
+      const frameMulti = stepFrame(1.0, 0.016);
+      buildScene(frameMulti, false);
+      check("scene: 5 instances added (planet, moon, 3 ships)", scene.instCount === 5, `actual: ${scene.instCount}`);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      check("webgl: multi-ship drawArrays NO_ERROR", gl.getError() === gl.NO_ERROR);
+
+      // 7. Test free flight with multi-entity
+      requestEngage();
+      const frameFly = stepFrame(1.1, 0.1);
+      buildScene(frameFly, false);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      check("webgl: free flight multi-ship drawArrays NO_ERROR", gl.getError() === gl.NO_ERROR);
+
+      // 8. Test entity without controller under free flight
+      const idleEntity = addEntity({ model: "galaxy", rail: null, controller: null, pos: [1, 2, 3] });
+      let idleSafe = true;
+      try {
+        stepFrame(1.2, 0.1);
+      } catch (e) {
+        idleSafe = false;
+        console.error(e);
+      }
+      check("robustness: entity without controller survives free flight step", idleSafe);
+
+    } catch (err) {
+      out.push("ERROR " + err.stack);
+    }
+    document.getElementById("out").textContent = out.join("\n");
+  }
+
+  window.addEventListener("DOMContentLoaded", runTests);
+  </script>
+</body>
+</html>

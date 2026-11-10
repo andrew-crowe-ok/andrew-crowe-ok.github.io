@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Benchmark Runner</title></head>
+<body>
+<iframe id="f" width="640" height="360" style="border:none;"></iframe>
+<script>
+const params = new URLSearchParams(location.search);
+const iframe = document.getElementById('f');
+iframe.src = 'index.html?' + params.toString();
+iframe.onload = () => {
+  const win = iframe.contentWindow;
+  const timer = setInterval(async () => {
+    try {
+      if (win && win.__BENCH_DONE && win.BENCH_RESULTS) {
+        clearInterval(timer);
+        await fetch('/benchmark-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(win.BENCH_RESULTS)
+        });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, 100);
+};
+</script>
+</body>
+</html>

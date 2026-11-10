@@ -82,6 +82,8 @@ function drawMoon(parent, t) {
 // Level 1: place the ship where the world has it. Its attitude is a
 // quaternion, so the frame is translate(pos) * rotation with no axis singled
 // out: pitch, yaw and roll all arrive the same way.
+const NAV_LIGHT_MODEL_OFFSET = [0, 0.12, 2.455];
+
 function drawShipAt(parent, { pos, quat }, engineParams = null, isPlayer = false) {
   const frame = multiply(parent, multiply(translate(...pos), matrixFromQuat(quat)));
   const s = ORBIT.shipScale;
@@ -89,7 +91,7 @@ function drawShipAt(parent, { pos, quat }, engineParams = null, isPlayer = false
   if (typeof addInstance === "function" && typeof GALAXY_MODEL !== "undefined" && GALAXY_MODEL) {
     addInstance(GALAXY_MODEL, modelView, engineParams || (typeof engines !== "undefined" ? engines : null));
     if (isPlayer && typeof setNavLight === "function") {
-      setNavLight(transformPoint(multiply(modelView, translate(...vsub([0, 0, 0], SHIP_CENTER))), NAV_LIGHT.pos));
+      setNavLight(transformPoint(modelView, NAV_LIGHT_MODEL_OFFSET));
     }
   } else if (typeof drawShip === "function") {
     drawShip(modelView);
@@ -105,14 +107,17 @@ function drawEntities(parent, t, playerShip) {
     for (let i = 0; i < world.entities.length; i++) {
       const e = world.entities[i];
       if (e === world.player) continue;
-      const pose = e.pose ?? (e.rail ? e.rail(t) : { pos: e.pos, quat: e.quat });
-      const eng = e.engines ?? {
-        impulse: e.throttle ? e.throttle * 1.5 : 0.8,
-        coils: 0.6,
-        bussard: 0.8,
-        scroll: (0.15 * t) % 2
-      };
-      drawShipAt(parent, pose, eng, false);
+      const pose = e.pose || (e.rail ? e.rail(t) : e);
+      if (!e.engines) {
+        e.engines = {
+          impulse: e.throttle ? e.throttle * 1.5 : 0.8,
+          coils: 0.6,
+          bussard: 0.8,
+          scroll: 0
+        };
+      }
+      e.engines.scroll = (0.15 * t) % 2;
+      drawShipAt(parent, pose, e.engines, false);
     }
   }
 }

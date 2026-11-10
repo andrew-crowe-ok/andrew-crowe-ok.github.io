@@ -45,6 +45,11 @@ const STREAK = { shutter: 0.45, max: 40, dim: 0.1 };
 // camera can frame; past `reach` from the eye they have faded into the
 // distant layer. A star `ref` away shines at its base level.
 const STAR_FIELD = { cell: 8, density: 0.06, disc: 30, clear: 36, reach: 160, ref: 60, steps: 40 };
+// At warp the near field fills in: every cell's chance of a star rises to
+// `density` times its usual (capped at `cap`) as the ship jumps, the new stars
+// fading in over `fadeIn` seconds -- several times the streaks for no extra
+// steps of the walk.
+const WARP_STARS = { density: 6, cap: 0.9, fadeIn: 0.5 };
 const glslFloat = x => Number.isInteger(x) ? x.toFixed(1) : String(x);
 
 const RAYTRACE_VS = `#version 300 es
@@ -127,6 +132,7 @@ uniform mat3 uSkyRot;         // the sky frame's axes in eye space
 uniform vec3 uStreak;        // the stars' velocity past the eye, eye space
 uniform float uShutter, uMaxStreak, uStreakDim;
 uniform float uStarScale;     // pixels rendered per CSS pixel
+uniform float uWarpStars;     // 0..1, how far the warp's extra stars have faded in
 
 out vec4 fragColor;
 
@@ -536,6 +542,8 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
 #define STAR_REACH ${glslFloat(STAR_FIELD.reach)}
 #define STAR_REF ${glslFloat(STAR_FIELD.ref)}
 #define STAR_STEPS ${STAR_FIELD.steps}
+#define WARP_STAR_DENSITY ${glslFloat(WARP_STARS.density)}
+#define WARP_STAR_CAP ${glslFloat(WARP_STARS.cap)}
 // Cell coordinates are offset before hashing, so negative ones don't lean on
 // how int converts to uint
 #define CELL_BIAS 32768
@@ -671,8 +679,11 @@ vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v) {
   uvec3 key = uvec3(c + CELL_BIAS);
   vec3 r1 = random3(key);
   vec3 mid = (vec3(c) + 0.5) * STAR_CELL;
-  float chance = STAR_DENSITY * (1.0 + 2.0 * exp(-mid.y * mid.y / (STAR_DISC * STAR_DISC)));
+  float base = STAR_DENSITY * (1.0 + 2.0 * exp(-mid.y * mid.y / (STAR_DISC * STAR_DISC)));
+  float chance = mix(base, min(base * WARP_STAR_DENSITY, WARP_STAR_CAP), uWarpStars);
   if (r1.x >= chance) return vec3(0.0);
+  // A star only the warp brings fades in with it
+  float fade = r1.x < base ? 1.0 : uWarpStars;
   vec3 r2 = random3(key + uvec3(0, 0, 7919));
   // Kept off the cell's walls, so a star's glow never spills into a cell the
   // walk doesn't look in
@@ -702,7 +713,7 @@ vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v) {
     streakPx = angle / uPixelAngle;
   }
   // The chance test above leaves r1.x uniform in [0, chance): the twinkle's phase
-  return starDot(level * starColor(r2.z), size, pixelsFrom(d, s0, s1), streakPx, r1.x / chance);
+  return starDot(fade * level * starColor(r2.z), size, pixelsFrom(d, s0, s1), streakPx, r1.x / chance);
 }
 
 // The near stars along ray o + t d: an Amanatides-Woo walk through the cells

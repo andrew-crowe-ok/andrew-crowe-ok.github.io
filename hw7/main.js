@@ -343,22 +343,30 @@ function bindTextures() {
 
 // Full-window canvas, kept framed as in HW6: vertical FOV 45 deg, widened on
 // windows narrower than 16:10 so the whole orbit stays in frame. Every pixel is
-// a ray tree, so the drawing buffer is capped at about 1080p's pixel count
-// (a quarter of that on phones) and the browser scales it up past that.
+// a ray tree, so the drawing buffer is capped at about 1440p's pixel count
+// (540p's on phones), or whatever the Resolution control picks, and the
+// browser scales it up past that.
 //
-// On phones the cap also adapts: every ADAPT.window seconds the mean frame time
+// On phones, with Resolution on Auto, the cap also adapts: every ADAPT.window seconds the mean frame time
 // is checked, and the pixel budget shrinks by ADAPT.step while frames run slower
 // than ADAPT.slow, or grows back toward the cap while they run faster than
 // ADAPT.fast, never below ADAPT.floor of it.
 const BASE_FOVY = Math.PI / 4, MIN_ASPECT = 1.6;
-const MAX_PIXELS = MOBILE ? 960 * 540 : 1920 * 1080;
+const AUTO_PIXELS = MOBILE ? 960 * 540 : 2560 * 1440;
 const ADAPT = { window: 1.0, slow: 45, fast: 24, step: 0.8, floor: 0.25 };
-let pixelBudget = 1;   // share of MAX_PIXELS in use
+let maxPixels = AUTO_PIXELS;
+let pixelBudget = 1;   // share of maxPixels in use
 let projection, renderScale = 1;
+// Resolution control: 0 is Auto, otherwise the cap is that many lines of 16:9
+function setResolution(lines) {
+  maxPixels = lines ? Math.round(lines * 16 / 9) * lines : AUTO_PIXELS;
+  pixelBudget = 1;
+  resize();
+}
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const css = canvas.clientWidth * canvas.clientHeight;
-  renderScale = Math.min(dpr, Math.sqrt(MAX_PIXELS * pixelBudget / Math.max(css, 1)));
+  renderScale = Math.min(dpr, Math.sqrt(maxPixels * pixelBudget / Math.max(css, 1)));
   canvas.width = Math.round(canvas.clientWidth * renderScale);
   canvas.height = Math.round(canvas.clientHeight * renderScale);
   gl.viewport(0, 0, canvas.width, canvas.height);
@@ -372,7 +380,7 @@ resize();
 
 const adapt = { t0: null, frames: 0, ms: 0 };
 function adaptResolution(now, frameMs) {
-  if (!MOBILE) return;
+  if (!MOBILE || controls.resolution) { adapt.t0 = null; adapt.frames = 0; adapt.ms = 0; return; }
   adapt.t0 ??= now;
   adapt.frames++; adapt.ms += frameMs;
   if (now - adapt.t0 < ADAPT.window) return;
@@ -601,7 +609,9 @@ const CONTROL_INPUTS = {
   ior:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
   shadows:     { read: el => el.checked },
   attenuation: { read: el => el.checked },
-  stats:       { read: el => el.checked }
+  stats:       { read: el => el.checked },
+  resolution:  { read: el => parseInt(el.value) || 0 },
+  fps:         { read: el => parseInt(el.value) || 0 }
 };
 // The panel starts folded on small screens, where it would cover the scene
 if (MOBILE || innerWidth < 560) document.getElementById("controls").open = false;
@@ -628,6 +638,7 @@ for (const [id, { read, show }] of Object.entries(CONTROL_INPUTS)) {
       try { localStorage.setItem("hw7_stats", controls.stats ? "1" : "0"); } catch {}
       setStatsVisible(controls.stats);
     }
+    if (id === "resolution") setResolution(controls.resolution);
   };
   input.addEventListener("input", update);
   update();
@@ -829,7 +840,7 @@ function resetScene(time) {
 resetScene(0);
 
 // Hand this frame's scene, lights, lens and controls to the shader
-function uploadScene(view, t) {
+function uploadScene(view, t, ship) {
   const u = uniforms;
   gl.uniform2f(u.uResolution, canvas.width, canvas.height);
   gl.uniform1f(u.uProj00, projection[0]);
@@ -866,11 +877,21 @@ function uploadScene(view, t) {
   gl.uniform1f(u.uMaxStreak, STREAK.max * renderScale * pixel);
   gl.uniform1f(u.uStreakDim, STREAK.dim);
   gl.uniform1f(u.uStarScale, renderScale);
+  const fade = ship.warpTau === null ? 0 : Math.min(1, ship.warpTau / WARP_STARS.fadeIn);
+  gl.uniform1f(u.uWarpStars, fade * fade * (3 - 2 * fade));
 }
 
-// Render loop
-let lastNow = 0;
+// Render loop. With an FPS cap, display refreshes that come too soon after the
+// last frame drawn are skipped. The schedule advances a whole interval per
+// frame drawn, so a cap that doesn't divide the refresh rate still averages
+// out to it, but never runs ahead of the clock or more than a frame behind.
+let lastNow = 0, lastDrawTime = 0;
 function render(time) {
+  if (controls.fps) {
+    const interval = 1000 / controls.fps, elapsed = time - lastDrawTime;
+    if (elapsed < interval - 1) { requestAnimationFrame(render); return; }
+    lastDrawTime = Math.min(time, Math.max(lastDrawTime + interval, time - interval));
+  }
   const frameStart = performance.now();
   const frameDelta = lastRafTime ? Math.min(time - lastRafTime, 200) : 16.67;
   lastRafTime = time;
@@ -901,7 +922,7 @@ function render(time) {
   plasma.setRate(engines.plasmaRate);
   plasma.update();
   bindTextures();
-  uploadScene(view, t);
+  uploadScene(view, t, ship);
 
   beginGpuTimer();
   gl.drawArrays(gl.TRIANGLES, 0, 3);

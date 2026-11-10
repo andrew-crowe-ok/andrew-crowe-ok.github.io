@@ -297,29 +297,93 @@ function setSky(frame, streak) {
 const ANISO = gl.getExtension("EXT_texture_filter_anisotropic");
 const MAX_ANISO = ANISO ? gl.getParameter(ANISO.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 1;
 
-// An image file: a 1x1 gray placeholder until it decodes, then the image with mipmaps
-function loadTexture(url) {
+// Antelope canyon thumbnail (64x48) as an immediate placeholder on frame 1
+const ANTELOPE_THUMB = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAsICAoIBwsKCQoNDAsNERwSEQ8PESIZGhQcKSQrKigkJyctMkA3LTA9MCcnOEw5PUNFSElIKzZPVU5GVEBHSEX/2wBDAQwNDREPESESEiFFLicuRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUX/wAARCAAwAEADASIAAhEBAxEB/8QAGgABAAMBAQEAAAAAAAAAAAAABAIDBQABBv/EADEQAAIBAwICBwYHAAAAAAAAAAECAwAEESExEmETQUJRcYGRIiOCkqHBBTIzQ3Ki0f/EABgBAQEBAQEAAAAAAAAAAAAAAAECAAME/8QAGREBAQEBAQEAAAAAAAAAAAAAAAERAmES/9oADAMBAAIRAxEAPwD5SEMdnpaJLjR1z4UGN4u/WlI8O3HXrlbDEjlxqwPw1PDDfHy1SvQndyPOrlWMaiQ+ANdNOPeKQbIPUiq3lfrTJ5NUmVcaufWqHiGvvG9a2ixXLcMN0/tRJJ8jUEedWTIg2kOfGgSrJn2SSOdRerBhUUdu26rTI7e2xqn1rCSNSci6xS40I/fIPXpXKdeLkbaW1sNejAFTMNrkDoyTyrKUpsbxge4jH2pCSxxKQLkBj14GlX9RWGvb247JB8aNNDbKNSQObUWRYiMteEcwKFJa25yReyZovXjYTJBatrxE93tUaQRKMK2B/Kiy2UWdLts8hRnhCb3JxzWud68TYUktsu5HoKvWeFiBG2vdpWdGsYP6KfLSozGv5Y08lFEpjRW4gA94VB8RXLcfh6niReJz2qIJFJx0YPLgH+VcJWAyIzywAPtVaogz2wOOIA+NRa4tsaajlVBmlHY+oqDyyYyQB8dOhOS5hGyMfKiyzq2iofE7VzTnY49dqO8y9pgam0Y//9k=";
+
+// An image file: immediate low-res placeholder, then the image with mipmaps once decoded off-thread
+function loadTexture(urls, thumbUrl) {
+  if (typeof urls === "string") urls = [urls];
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]));
-  // A mipmap filter on a texture with no mipmaps is incomplete and samples as black
+  // Default 1x1 base rock color of Antelope Canyon while the thumbnail parses
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([73, 61, 92, 255]));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 
-  const image = new Image();
-  image.onload = () => {
-    gl.activeTexture(gl.TEXTURE0);
+  let fullLoaded = false;
+  function upload(img, isFlipped = false) {
+    const unit = texture._unitIndex ?? 0;
+    gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);  // images start at the top row, texture coordinates at the bottom
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    if (!isFlipped) {
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);  // images start at the top row, texture coordinates at the bottom
+    } else {
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); // ImageBitmap with imageOrientation: 'flipY' is already flipped
+    }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT, MAX_ANISO);
-  };
-  image.src = url;
+  }
+
+  if (thumbUrl) {
+    const thumb = new Image();
+    thumb.src = thumbUrl;
+    if (thumb.decode) {
+      thumb.decode().then(() => { if (!fullLoaded) upload(thumb, false); }).catch(() => {});
+    } else {
+      thumb.onload = () => { if (!fullLoaded) upload(thumb, false); };
+    }
+  }
+
+  async function loadFullTexture(sources) {
+    for (const url of sources) {
+      if (fullLoaded) return;
+      // Try background fetch + createImageBitmap for true off-thread decode & Y-flip
+      try {
+        if (typeof createImageBitmap === "function" && typeof fetch === "function") {
+          const resp = await fetch(url);
+          if (resp.ok) {
+            const blob = await resp.blob();
+            const bmp = await createImageBitmap(blob, { imageOrientation: "flipY" });
+            if (!fullLoaded) {
+              fullLoaded = true;
+              upload(bmp, true);
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        // Fall through to Image() fallback
+      }
+
+      // Fallback: Image() with off-thread .decode()
+      const loaded = await new Promise(resolve => {
+        const image = new Image();
+        image.src = url;
+        if (image.decode) {
+          image.decode().then(() => resolve(image)).catch(() => resolve(null));
+        } else {
+          image.onload = () => resolve(image);
+          image.onerror = () => resolve(null);
+        }
+      });
+      if (loaded && !fullLoaded) {
+        fullLoaded = true;
+        upload(loaded, false);
+        return;
+      }
+    }
+  }
+  loadFullTexture(urls);
+
   return texture;
 }
 
-const planetTexture = loadTexture("textures/antelope.jpg");
+// Phones get half resolution (1024x766), desktops get 2048x1532; WebP with JPEG fallback
+const ANTELOPE_URLS = MOBILE
+  ? ["textures/antelope-mobile.webp", "textures/antelope-mobile.jpg"]
+  : ["textures/antelope.webp", "textures/antelope.jpg"];
+const planetTexture = loadTexture(ANTELOPE_URLS, ANTELOPE_THUMB);
 
 // Procedural ship skin, generated on the GPU (textures.js). Every part's
 // texture is sized to the surface it wraps -- the saucer's go around a

@@ -304,8 +304,8 @@ bool hitTorus(vec3 o, vec3 d, float r, float tmin, inout float t, out vec3 n) {
   return false;
 }
 
-bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
-  vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
+bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part, out vec3 oo, out vec3 dd) {
+  oo = toObject(i, o, 1.0); dd = toObject(i, d, 0.0);
   part = 0;
   int shape = uInfo[i].x;
   if (shape == SPHERE)   return hitSphere(oo, dd, tmin, t, n);
@@ -313,6 +313,11 @@ bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out
   if (shape == CONE)     return hitCone(oo, dd, tmin, t, n, part);
   if (shape == BOX)      return hitBox(oo, dd, tmin, t, n, part);
   return hitTorus(oo, dd, uMatC[i].w, tmin, t, n);
+}
+
+bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
+  vec3 oo, dd;
+  return intersect(i, o, d, tmin, t, n, part, oo, dd);
 }
 
 // Does the ray come within group g's box anywhere in (tmin, tmax)?
@@ -344,6 +349,8 @@ Hit trace(vec3 o, vec3 d, float tmax) {
     if (!groupVisible(g, o, d, EPS, h.t)) continue;
     traceRange(uGroupRange[g].x, uGroupRange[g].y, o, d, h);
   }
+  int postUngrouped = uGroupCount > 0 ? uGroupRange[uGroupCount - 1].y : uCount;
+  traceRange(postUngrouped, uCount, o, d, h);
   return h;
 }
 
@@ -359,12 +366,12 @@ float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
 bool transmitRange(int start, int end, vec3 o, vec3 d, float dist, inout vec3 tr) {
   for (int i = start; i < end; i++) {
     if (uInfo[i].w == EMISSIVE) continue;
-    float t = dist; vec3 n; int part;
-    if (intersect(i, o, d, EPS, t, n, part)) {
+    float t = dist; vec3 n; int part; vec3 oo, dd;
+    if (intersect(i, o, d, EPS, t, n, part, oo, dd)) {
       float kt = uMatB[i].y;
       if (kt <= 0.0) return false;
       float chord = uInfo[i].x == SPHERE
-        ? sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist) : 0.0;
+        ? sphereChord(oo, dd, EPS, dist) : 0.0;
       tr *= kt * exp(-uMatD[i].rgb * chord);
     }
   }
@@ -385,6 +392,8 @@ vec3 transmittance(vec3 o, vec3 d, float dist) {
     if (!groupVisible(g, o, d, EPS, dist)) continue;
     if (!transmitRange(uGroupRange[g].x, uGroupRange[g].y, o, d, dist, tr)) return vec3(0.0);
   }
+  int postUngrouped = uGroupCount > 0 ? uGroupRange[uGroupCount - 1].y : uCount;
+  if (!transmitRange(postUngrouped, uCount, o, d, dist, tr)) return vec3(0.0);
   return tr;
 }
 

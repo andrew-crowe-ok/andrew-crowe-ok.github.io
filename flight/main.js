@@ -115,7 +115,7 @@ const scene = {
   count: 0,
   groupCount: 0,
   nav: [0, 0, 0],
-  sky: { center: [0, 0, 0], rot: new Float32Array(9), streak: [0, 0, 0] }
+  sky: { center: new Float32Array(3), rot: new Float32Array(9), streak: new Float32Array(3) }
 };
 let blockAt = 0;
 for (const [name, vec4s] of Object.entries(SCENE_BLOCK)) {
@@ -141,14 +141,15 @@ function affineRows(m, out, at) {
 
 const unitOf = texture => texture ? TEXTURES.indexOf(texture) : -1;
 
-function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL, normalMap = null) {
+function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL,
+  normalMap = null) {
   if (scene.count >= MAX_PRIMS) throw new Error(`more than ${MAX_PRIMS} primitives`);
   const i = scene.count++;
   const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb = [0, 0, 0], glow = 0,
     power = 1, scroll = 0 } = material;
   // Every glass part takes its index of refraction from the slider
   const ior = kt > 0 ? controls.ior : 1;
-  affineRows(invertAffine(modelView), scene.inv, i * 12);
+  invertAffineRows(modelView, scene.inv, i * 12);
   const base = i * 4;
   scene.info[base]     = mesh.shape;
   scene.info[base + 1] = unitOf(texture);
@@ -200,18 +201,17 @@ function fitGroup(mesh, modelView) {
   const m = multiply(group.toFrame, modelView);
   const r = mesh.shape === TORUS ? 1 + mesh.tube : 1, h = mesh.shape === TORUS ? mesh.tube : 1;
   const gmin = group.min, gmax = group.max;
-  for (const x of [-r, r]) {
-    for (const y of [-h, h]) {
-      for (const z of [-r, r]) {
-        const w = m[3] * x + m[7] * y + m[11] * z + m[15];
-        const px = (m[0] * x + m[4] * y + m[8] * z + m[12]) / w;
-        const py = (m[1] * x + m[5] * y + m[9] * z + m[13]) / w;
-        const pz = (m[2] * x + m[6] * y + m[10] * z + m[14]) / w;
-        if (px < gmin[0]) gmin[0] = px; if (px > gmax[0]) gmax[0] = px;
-        if (py < gmin[1]) gmin[1] = py; if (py > gmax[1]) gmax[1] = py;
-        if (pz < gmin[2]) gmin[2] = pz; if (pz > gmax[2]) gmax[2] = pz;
-      }
-    }
+  for (let s = 0; s < 8; s++) {
+    const x = (s & 1) ? r : -r;
+    const y = (s & 2) ? h : -h;
+    const z = (s & 4) ? r : -r;
+    const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+    const px = (m[0] * x + m[4] * y + m[8] * z + m[12]) / w;
+    const py = (m[1] * x + m[5] * y + m[9] * z + m[13]) / w;
+    const pz = (m[2] * x + m[6] * y + m[10] * z + m[14]) / w;
+    if (px < gmin[0]) gmin[0] = px; if (px > gmax[0]) gmax[0] = px;
+    if (py < gmin[1]) gmin[1] = py; if (py > gmax[1]) gmax[1] = py;
+    if (pz < gmin[2]) gmin[2] = pz; if (pz > gmax[2]) gmax[2] = pz;
   }
 }
 // The box's matrix takes eye space to the box's own, centered on it
@@ -219,7 +219,12 @@ function endGroup() {
   const idx = group.index;
   const gmin = group.min, gmax = group.max;
   const cx = (gmin[0] + gmax[0]) * 0.5, cy = (gmin[1] + gmax[1]) * 0.5, cz = (gmin[2] + gmax[2]) * 0.5;
-  affineRows(multiply(translate(-cx, -cy, -cz), group.toFrame), scene.groupInv, 12 * idx);
+  const at = 12 * idx;
+  const T = group.toFrame;
+  const out = scene.groupInv;
+  out[at]      = T[0]; out[at + 1]  = T[4]; out[at + 2]  = T[8];  out[at + 3]  = T[12] - cx;
+  out[at + 4]  = T[1]; out[at + 5]  = T[5]; out[at + 6]  = T[9];  out[at + 7]  = T[13] - cy;
+  out[at + 8]  = T[2]; out[at + 9]  = T[6]; out[at + 10] = T[10]; out[at + 11] = T[14] - cz;
   const base = 4 * idx;
   scene.groupHalf[base]     = (gmax[0] - gmin[0]) * 0.5;
   scene.groupHalf[base + 1] = (gmax[1] - gmin[1]) * 0.5;
@@ -238,12 +243,12 @@ function setNavLight(pos) { scene.nav = pos; }
 // The sky's frame (scene.js): where its center is and how it is turned, in
 // eye space, and the stars' velocity past the eye at warp
 function setSky(frame, streak) {
-  scene.sky.center = transformPoint(frame, [0, 0, 0]);
+  scene.sky.center[0] = frame[12]; scene.sky.center[1] = frame[13]; scene.sky.center[2] = frame[14];
   const rot = scene.sky.rot;
   rot[0] = frame[0]; rot[1] = frame[1]; rot[2] = frame[2];
   rot[3] = frame[4]; rot[4] = frame[5]; rot[5] = frame[6];
   rot[6] = frame[8]; rot[7] = frame[9]; rot[8] = frame[10];
-  scene.sky.streak = streak;
+  scene.sky.streak[0] = streak[0]; scene.sky.streak[1] = streak[1]; scene.sky.streak[2] = streak[2];
 }
 
 // ---------------------------------------------------------------------------
@@ -1117,6 +1122,7 @@ function buildScene({ t, ship, view }, live) {
 // out to it, but never runs ahead of the clock or more than a frame behind.
 let lastNow = 0, lastDrawTime = 0;
 function render(time) {
+  if (window.benchRunning) return;
   if (controls.fps) {
     const interval = 1000 / controls.fps, elapsed = time - lastDrawTime;
     if (elapsed < interval - 1) { requestAnimationFrame(render); return; }
@@ -1154,7 +1160,10 @@ function render(time) {
 window.stepFrame = stepFrame;
 window.buildScene = buildScene;
 window.setDrawingSize = setDrawingSize;
+window.setResolution = setResolution;
 window.assetsReady = assetsReady;
+window.render = render;
+window.benchRunning = false;
 
 // ?bench runs the benchmark instead of the live loop (bench.js)
 if (!presets.has("bench")) requestAnimationFrame(render);

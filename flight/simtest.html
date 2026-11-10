@@ -18,6 +18,13 @@ try {
     transformVector(multiply(rotateX(0.4), rotateY(-1.1)), [0, 0, 1])));
   check("rotVec = rotateY", near(quatRotate(quatFromRotVec([0, 0.6, 0]), [0, 0, 1]), transformVector(rotateY(0.6), [0, 0, 1])));
 
+  // invertAffineRows matches affineRows(invertAffine(m))
+  const invA = invertAffine(m);
+  const rowsA = [invA[0], invA[4], invA[8], invA[12], invA[1], invA[5], invA[9], invA[13], invA[2], invA[6], invA[10], invA[14]];
+  const rowsB = new Float32Array(12);
+  invertAffineRows(m, rowsB, 0);
+  check("invertAffineRows = invertAffine", near(rowsA, Array.from(rowsB), 1e-5));
+
   // rail: nose along velocity, speed = orbital speed
   const p = orbitPose(3.7);
   check("rail nose along vel", near(vmul(quatRotate(p.quat, [0, 0, 1]), ORBIT_SPEED), p.vel), f(p.vel));

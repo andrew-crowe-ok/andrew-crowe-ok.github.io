@@ -42,9 +42,11 @@ function drawSystem(parent, t, ship) {
   // sky's frame is the system's own. They streak by the ship's warp speed
   // through them, turned into eye space; they move past the eye the opposite
   // way to the ship. The streaks draw out with the lens as it opens (camera.js).
-  const o = transformPoint(parent, [0, 0, 0]);
-  const streak = vmul(vsub(o, transformPoint(parent, ship.streak)), lensFisheye);
-  setSky(parent, streak);
+  const s = ship.streak;
+  const sx = -(parent[0] * s[0] + parent[4] * s[1] + parent[8] * s[2]) * lensFisheye;
+  const sy = -(parent[1] * s[0] + parent[5] * s[1] + parent[9] * s[2]) * lensFisheye;
+  const sz = -(parent[2] * s[0] + parent[6] * s[1] + parent[10] * s[2]) * lensFisheye;
+  setSky(parent, sx, sy, sz);
   drawPlanet(parent, t);
   drawMoon(parent, t);
   drawShipAt(parent, ship);

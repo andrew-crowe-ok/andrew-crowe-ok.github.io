@@ -53,8 +53,10 @@
       const statusEl = document.getElementById("benchStatus");
       const outEl = document.getElementById("benchOut");
 
-      const frames = opts.frames ?? Number(params.get("frames") || 30);
-      const warmup = opts.warmup ?? Number(params.get("warmup") || 5);
+      const rawFrames = opts.frames ?? Number(params.get("frames") || 30);
+      const frames = Math.max(1, isNaN(rawFrames) ? 30 : rawFrames);
+      const rawWarmup = opts.warmup ?? Number(params.get("warmup") || 5);
+      const warmup = Math.max(0, isNaN(rawWarmup) ? 5 : rawWarmup);
       const dt = 1 / 60;
 
       if (opts.resolution !== undefined && typeof window.setResolution === "function") {
@@ -154,7 +156,7 @@
         frames,
         warmup,
         viewport: `${w}x${h}`,
-        renderScale: typeof renderScale !== "undefined" ? renderScale : 1,
+        renderScale: typeof window.getRenderScale === "function" ? window.getRenderScale() : (typeof renderScale !== "undefined" ? renderScale : 1),
         fps: +fps.toFixed(1),
         meanTotalMs: +meanTotal.toFixed(3),
         minTotalMs: +minTotal.toFixed(3),

@@ -189,13 +189,20 @@ function focusOn(on, now, pan) {
 
 // Once a frame, before updateCamera: the free view. `now` is real time (the
 // slide doesn't care about resets), dt the frame's length.
-function freeView(now, dt, ship, moon, rotation, [panX, panY]) {
+function freeView(now, dt, ship, moon, rotation, panX, panY) {
+  const px = Array.isArray(panX) ? panX[0] : (panX || 0);
+  const py = Array.isArray(panX) ? panX[1] : (panY || 0);
   const s = smootherstep((now - camFocus.t0) / FOCUS.blend);
-  camFocus.pivot = vadd(camFocus.from, vmul(vsub(focusPoint(camFocus.on, ship, moon), camFocus.from), s));
-  camFocus.panLeft = vmul(camFocus.fromPan, 1 - s);
+  const fp = focusPoint(camFocus.on, ship, moon);
+  const from = camFocus.from;
+  camFocus.pivot[0] = from[0] + (fp[0] - from[0]) * s;
+  camFocus.pivot[1] = from[1] + (fp[1] - from[1]) * s;
+  camFocus.pivot[2] = from[2] + (fp[2] - from[2]) * s;
+  camFocus.panLeft[0] = camFocus.fromPan[0] * (1 - s);
+  camFocus.panLeft[1] = camFocus.fromPan[1] * (1 - s);
   zoom.dist *= (zoom.goal / zoom.dist) ** (1 - Math.exp(-dt / ZOOM.ease));
-  const eye = translate(panX + camFocus.panLeft[0], panY + camFocus.panLeft[1], -zoom.dist);
-  const view = multiply(multiply(eye, rotation), translate(...vmul(camFocus.pivot, -1)));
+  const eye = translate(px + camFocus.panLeft[0], py + camFocus.panLeft[1], -zoom.dist);
+  const view = multiply(multiply(eye, rotation), translate(-camFocus.pivot[0], -camFocus.pivot[1], -camFocus.pivot[2]));
 
   return clearOfPlanet(view);
 }
@@ -203,8 +210,13 @@ function freeView(now, dt, ship, moon, rotation, [panX, panY]) {
 // Keep the eye out of the planet: move it to `clear` with the rotation as
 // is, which is view * translate(eye - clear)
 function clearOfPlanet(view) {
-  const at = viewParts(view).eye, r = Math.hypot(...at), rClear = PLANET.radius + ZOOM.clearPlanet;
+  const x = view[12], y = view[13], z = view[14];
+  const ex = -(view[0] * x + view[1] * y + view[2] * z);
+  const ey = -(view[4] * x + view[5] * y + view[6] * z);
+  const ez = -(view[8] * x + view[9] * y + view[10] * z);
+  const r = Math.hypot(ex, ey, ez), rClear = PLANET.radius + ZOOM.clearPlanet;
   if (r >= rClear) return view;
+  const at = [ex, ey, ez];
   const clear = r > 1e-6 ? vmul(at, rClear / r) : untransformVector(view, [0, 0, rClear]);
   return multiply(view, translate(...vsub(at, clear)));
 }

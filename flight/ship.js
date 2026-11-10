@@ -81,8 +81,30 @@ const ENGINES = {
 };
 const engines = { impulse: 1, coils: 1, bussard: 1, scroll: 0, plasmaRate: 1 };
 
-const lerp = (a, b, k) => a + (b - a) * k;
-const lerpLevels = (a, b, k) => Object.fromEntries(Object.keys(a).map(key => [key, lerp(a[key], b[key], k)]));
+let impulseMat = null;
+let grilleMat = null;
+let bussardMat = null;
+
+function getImpulseMat(power) {
+  if (!impulseMat) impulseMat = { ...DEFAULT_MATERIAL, power: 1, scroll: 0 };
+  impulseMat.power = power;
+  return impulseMat;
+}
+
+function getGrilleMat(power, scroll) {
+  if (!grilleMat) grilleMat = { ...DEFAULT_MATERIAL, power: 1, scroll: 0 };
+  grilleMat.power = power;
+  grilleMat.scroll = scroll;
+  return grilleMat;
+}
+
+function getBussardMat(power) {
+  if (!bussardMat) bussardMat = { ...DEFAULT_MATERIAL, power: 1, scroll: 0 };
+  bussardMat.power = power;
+  return bussardMat;
+}
+
+const glowAt = (power, scroll = 0) => ({ ...DEFAULT_MATERIAL, power, scroll });
 
 // t is the scene clock, dt the frame's step (for the grilles' flow, whose
 // speed changes along the way), ship the player's ship this frame (world.js).
@@ -93,41 +115,48 @@ const lerpLevels = (a, b, k) => Object.fromEntries(Object.keys(a).map(key => [ke
 function updateEngines(t, dt, ship) {
   const { orbit, charge, warp } = ENGINES;
   const e = engageElapsed(t);   // world.js
-  let level = orbit;
+  let imp = orbit.impulse, coils = orbit.coils, buss = orbit.bussard, flow = orbit.flow;
+
   if (e !== null) {
-    const flown = { ...orbit, impulse: lerp(warp.impulse, charge.impulse, ship.throttle),
-      flow: lerp(0.05, charge.flow, ship.throttle) };
-    // Taking the helm eases the engines from their orbit levels to the throttle's
-    const base = lerpLevels(orbit, flown, smootherstep(e / ENGINES.spool));
+    const flownImpulse = lerp(warp.impulse, charge.impulse, ship.throttle);
+    const flownFlow = lerp(0.05, charge.flow, ship.throttle);
+    const kb = smootherstep(e / ENGINES.spool);
+    const baseImpulse = lerp(orbit.impulse, flownImpulse, kb);
+    const baseCoils = orbit.coils;
+    const baseBussard = orbit.bussard;
+    const baseFlow = lerp(orbit.flow, flownFlow, kb);
+
     const { state, tau } = ship.warp;
     if (state === "charge") {
-      // The coils charge slowly at first and fastest just before the jump
       const k = smootherstep(tau / FLIGHT.warpCharge) ** 2;
-      level = { ...lerpLevels(base, charge, k), impulse: base.impulse };
+      imp = baseImpulse;
+      coils = lerp(baseCoils, charge.coils, k);
+      buss = lerp(baseBussard, charge.bussard, k);
+      flow = lerp(baseFlow, charge.flow, k);
     } else if (state === "on") {
       const flare = Math.exp(-tau / ENGINES.settle);
-      level = { ...lerpLevels(charge, warp, 1 - flare),
-        coils: lerp(warp.coils, ENGINES.flare, flare),
-        bussard: lerp(warp.bussard, ENGINES.flare, flare),
-        impulse: lerp(base.impulse, warp.impulse, smootherstep(tau / ENGINES.spool)) };
+      imp = lerp(baseImpulse, warp.impulse, smootherstep(tau / ENGINES.spool));
+      coils = lerp(warp.coils, ENGINES.flare, flare);
+      buss = lerp(warp.bussard, ENGINES.flare, flare);
+      flow = lerp(charge.flow, warp.flow, 1 - flare);
     } else {
-      level = lerpLevels(base, warp, ship.warpLevel);
+      const w = ship.warpLevel;
+      imp = lerp(baseImpulse, warp.impulse, w);
+      coils = lerp(baseCoils, warp.coils, w);
+      buss = lerp(baseBussard, warp.bussard, w);
+      flow = lerp(baseFlow, warp.flow, w);
     }
   }
 
   const [depth, hz] = ENGINES.breathe;
   const breath = 1 + depth * Math.sin(2 * Math.PI * hz * t);
-  engines.impulse = level.impulse;
-  engines.coils = level.coils * breath;
-  engines.bussard = level.bussard * breath;
-  // Slide the grille texture toward -z (aft), kept in one period [0, 2)
-  engines.scroll = (((engines.scroll - level.flow * dt) % 2) + 2) % 2;
-  // The plasma spins faster with the Bussards' power, in quarter steps
-  const rate = Math.min(level.bussard / orbit.bussard, ENGINES.maxRate);
+  engines.impulse = imp;
+  engines.coils = coils * breath;
+  engines.bussard = buss * breath;
+  engines.scroll = (((engines.scroll - flow * dt) % 2) + 2) % 2;
+  const rate = Math.min(buss / orbit.bussard, ENGINES.maxRate);
   engines.plasmaRate = Math.round(rate * 4) / 4;
 }
-// An EMISSIVE part's material at power p (and texture scroll)
-const glowAt = (power, scroll = 0) => ({ ...DEFAULT_MATERIAL, power, scroll });
 
 const mirrorX = ([x, y, z], side) => [side * x, y, z];
 const vnorm = v => vmul(v, 1 / Math.hypot(...v));
@@ -226,7 +255,7 @@ function drawBridge(parent) {
 // The box's back face maps u across and v up, so the glow peaks along the middle.
 function drawImpulse(parent) {
   drawPrimitive(cubeMesh, impulseGlow, EMISSIVE, multiply(parent, scale(0.22, 0.035, 0.015)),
-    glowAt(engines.impulse));
+    getImpulseMat(engines.impulse));
 }
 
 // Level 2: engineering hull, an elliptical cylinder along z (tubeZ), boxed as
@@ -312,7 +341,7 @@ function drawNacelle(parent) {
   // map u along z and v up, so the slats cross the nacelle.
   drawPrimitive(cubeMesh, grilleGlow, EMISSIVE,
     multiply(parent, multiply(translate(0, 0.01, -0.08), scale(rx + 0.006, 0.07, l * 0.82))),
-    glowAt(engines.coils, engines.scroll));
+    getGrilleMat(engines.coils, engines.scroll));
 
   drawBussard(multiply(parent, translate(0, 0, l)));
 }
@@ -323,5 +352,5 @@ function drawNacelle(parent) {
 function drawBussard(parent) {
   const { radii: [rx, ry], bussard } = NACELLE;
   drawPrimitive(sphereMesh, plasma.texture, EMISSIVE, multiply(parent, podZ([rx * 0.97, ry * 0.97, bussard])),
-    glowAt(engines.bussard));
+    getBussardMat(engines.bussard));
 }

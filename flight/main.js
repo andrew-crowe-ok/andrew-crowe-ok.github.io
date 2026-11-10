@@ -132,20 +132,14 @@ if (gl.getActiveUniformBlockParameter(program, sceneBlock, gl.UNIFORM_BLOCK_DATA
 gl.uniformBlockBinding(program, sceneBlock, 0);
 gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, sceneBuffer);
 
-// The three rows of an affine matrix, which is all the shader needs of it
-function affineRows(m, out, at) {
-  out[at]      = m[0]; out[at + 1]  = m[4]; out[at + 2]  = m[8];  out[at + 3]  = m[12];
-  out[at + 4]  = m[1]; out[at + 5]  = m[5]; out[at + 6]  = m[9];  out[at + 7]  = m[13];
-  out[at + 8]  = m[2]; out[at + 9]  = m[6]; out[at + 10] = m[10]; out[at + 11] = m[14];
-}
-
 const unitOf = texture => texture ? TEXTURES.indexOf(texture) : -1;
+const ZERO3 = Object.freeze([0, 0, 0]);
 
 function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL,
   normalMap = null) {
   if (scene.count >= MAX_PRIMS) throw new Error(`more than ${MAX_PRIMS} primitives`);
   const i = scene.count++;
-  const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb = [0, 0, 0], glow = 0,
+  const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb, glow = 0,
     power = 1, scroll = 0 } = material;
   // Every glass part takes its index of refraction from the slider
   const ior = kt > 0 ? controls.ior : 1;
@@ -166,14 +160,16 @@ function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MAT
   scene.matB[base + 2] = ior;
   scene.matB[base + 3] = bumpScale;
 
-  scene.matC[base]     = atmosphere[0];
-  scene.matC[base + 1] = atmosphere[1];
-  scene.matC[base + 2] = atmosphere[2];
+  const atm = atmosphere || ZERO3;
+  scene.matC[base]     = atm[0];
+  scene.matC[base + 1] = atm[1];
+  scene.matC[base + 2] = atm[2];
   scene.matC[base + 3] = mesh.tube ?? 0;
 
-  scene.matD[base]     = absorb[0];
-  scene.matD[base + 1] = absorb[1];
-  scene.matD[base + 2] = absorb[2];
+  const abs = absorb || ZERO3;
+  scene.matD[base]     = abs[0];
+  scene.matD[base + 1] = abs[1];
+  scene.matD[base + 2] = abs[2];
   scene.matD[base + 3] = mesh.repeats;
 
   scene.matE[base]     = glow;
@@ -189,16 +185,29 @@ function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MAT
 // aligned with frame and fitted as they're drawn: each part's unit shape fits
 // in a box of its own (|p| <= 1, or the torus's ring plus tube), and that
 // box's corners, carried into frame's space, bound the part there.
+const groupPool = Array.from({ length: MAX_GROUPS }, (_, i) => ({
+  index: i,
+  toFrame: new Float32Array(16),
+  min: [Infinity, Infinity, Infinity],
+  max: [-Infinity, -Infinity, -Infinity],
+  start: 0
+}));
+const fitGroupScratch = new Float32Array(16);
 let group = null;
+
 function beginGroup(frame) {
   if (group) throw new Error("groups don't nest");
   if (scene.groupCount >= MAX_GROUPS) throw new Error(`more than ${MAX_GROUPS} groups`);
-  group = { index: scene.groupCount++, toFrame: invertAffine(frame),
-    min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity],
-    start: scene.count };
+  const g = groupPool[scene.groupCount++];
+  g.start = scene.count;
+  g.min[0] = Infinity;  g.min[1] = Infinity;  g.min[2] = Infinity;
+  g.max[0] = -Infinity; g.max[1] = -Infinity; g.max[2] = -Infinity;
+  invertAffineMat(frame, g.toFrame);
+  group = g;
 }
+
 function fitGroup(mesh, modelView) {
-  const m = multiply(group.toFrame, modelView);
+  const m = multiplyInto(group.toFrame, modelView, fitGroupScratch);
   const r = mesh.shape === TORUS ? 1 + mesh.tube : 1, h = mesh.shape === TORUS ? mesh.tube : 1;
   const gmin = group.min, gmax = group.max;
   for (let s = 0; s < 8; s++) {
@@ -214,6 +223,7 @@ function fitGroup(mesh, modelView) {
     if (pz < gmin[2]) gmin[2] = pz; if (pz > gmax[2]) gmax[2] = pz;
   }
 }
+
 // The box's matrix takes eye space to the box's own, centered on it
 function endGroup() {
   const idx = group.index;
@@ -242,13 +252,13 @@ function setNavLight(pos) { scene.nav = pos; }
 
 // The sky's frame (scene.js): where its center is and how it is turned, in
 // eye space, and the stars' velocity past the eye at warp
-function setSky(frame, streak) {
+function setSky(frame, sx, sy, sz) {
   scene.sky.center[0] = frame[12]; scene.sky.center[1] = frame[13]; scene.sky.center[2] = frame[14];
   const rot = scene.sky.rot;
   rot[0] = frame[0]; rot[1] = frame[1]; rot[2] = frame[2];
   rot[3] = frame[4]; rot[4] = frame[5]; rot[5] = frame[6];
   rot[6] = frame[8]; rot[7] = frame[9]; rot[8] = frame[10];
-  scene.sky.streak[0] = streak[0]; scene.sky.streak[1] = streak[1]; scene.sky.streak[2] = streak[2];
+  scene.sky.streak[0] = sx; scene.sky.streak[1] = sy; scene.sky.streak[2] = sz;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +436,9 @@ let projection, renderScale = 1;
 function setResolution(lines) {
   maxPixels = lines ? Math.round(lines * 16 / 9) * lines : AUTO_PIXELS;
   pixelBudget = 1;
+  controls.resolution = lines;
+  const resSelect = document.getElementById("resolution");
+  if (resSelect && resSelect.value !== String(lines)) resSelect.value = String(lines);
   resize();
 }
 // The drawing buffer's size in pixels, and how many of them go to a CSS pixel
@@ -1086,6 +1099,7 @@ function uploadScene(view, t, ship) {
 //                primitives and hands them, with the lights and the lens, to
 //                the shader; one gl.drawArrays then traces it. `live` also
 //                pulls the next frame of the plasma video.
+const dragAngles = { x: 0, y: 0 };
 function stepFrame(now, dt) {
   if (resetDue(now - sceneStart)) resetScene(now);
   const t = sceneT = now - sceneStart;   // scene clock
@@ -1097,8 +1111,9 @@ function stepFrame(now, dt) {
   readHelm();
   const ship = advanceWorld(t, dt);
   const moon = moonCenter(t);
-  const view = updateCamera(t, dt, ship, freeView(now, dt, ship, moon, rotation, [camX, camY]),
-    { x: dragRotX, y: dragRotY });
+  dragAngles.x = dragRotX; dragAngles.y = dragRotY;
+  const view = updateCamera(t, dt, ship, freeView(now, dt, ship, moon, rotation, camX, camY),
+    dragAngles);
   lastView = view; lastShip = ship; lastMoon = moon;
   updateEngines(t, dt, ship);
   return { t, ship, view };
@@ -1161,6 +1176,7 @@ window.stepFrame = stepFrame;
 window.buildScene = buildScene;
 window.setDrawingSize = setDrawingSize;
 window.setResolution = setResolution;
+window.getRenderScale = () => renderScale;
 window.assetsReady = assetsReady;
 window.render = render;
 window.benchRunning = false;

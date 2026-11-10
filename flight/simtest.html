@@ -25,6 +25,16 @@ try {
   invertAffineRows(m, rowsB, 0);
   check("invertAffineRows = invertAffine", near(rowsA, Array.from(rowsB), 1e-5));
 
+  // invertAffineMat matches invertAffine(m)
+  const matB = new Float32Array(16);
+  invertAffineMat(m, matB);
+  check("invertAffineMat = invertAffine", near(Array.from(invA), Array.from(matB), 1e-5));
+
+  // multiplyInto matches multiply
+  const multB = new Float32Array(16);
+  multiplyInto(rotateX(0.4), rotateY(-1.1), multB);
+  check("multiplyInto = multiply", near(Array.from(multiply(rotateX(0.4), rotateY(-1.1))), Array.from(multB), 1e-5));
+
   // rail: nose along velocity, speed = orbital speed
   const p = orbitPose(3.7);
   check("rail nose along vel", near(vmul(quatRotate(p.quat, [0, 0, 1]), ORBIT_SPEED), p.vel), f(p.vel));

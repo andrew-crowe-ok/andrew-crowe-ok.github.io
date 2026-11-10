@@ -203,88 +203,94 @@ function fly(e, intent, dt, bodies) {
 function resolveEntityCollisions(entities) {
   const count = entities.length;
   if (count < 2) return;
-  for (let i = 0; i < count - 1; i++) {
-    const a = entities[i];
-    const ra = a.radius || FLIGHT.radius;
-    for (let j = i + 1; j < count; j++) {
-      const b = entities[j];
-      const rb = b.radius || FLIGHT.radius;
-      const reach = ra + rb;
-      const dx = a.pos[0] - b.pos[0];
-      const dy = a.pos[1] - b.pos[1];
-      const dz = a.pos[2] - b.pos[2];
-      const distSq = dx * dx + dy * dy + dz * dz;
-      if (distSq >= reach * reach) continue;
+  const iterations = count > 2 ? 4 : 1;
 
-      const dist = Math.sqrt(distSq);
-      const invDist = dist > 1e-6 ? 1 / dist : 0;
-      const nx = dist > 1e-6 ? dx * invDist : 0;
-      const ny = dist > 1e-6 ? dy * invDist : 1;
-      const nz = dist > 1e-6 ? dz * invDist : 0;
-      const overlap = reach - dist;
+  for (let iter = 0; iter < iterations; iter++) {
+    for (let i = 0; i < count - 1; i++) {
+      const a = entities[i];
+      const ra = a.radius || FLIGHT.radius;
+      for (let j = i + 1; j < count; j++) {
+        const b = entities[j];
+        const rb = b.radius || FLIGHT.radius;
+        const reach = ra + rb;
+        const dx = a.pos[0] - b.pos[0];
+        const dy = a.pos[1] - b.pos[1];
+        const dz = a.pos[2] - b.pos[2];
+        const distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq >= reach * reach) continue;
 
-      const aRail = !!a.rail;
-      const bRail = !!b.rail;
+        const dist = Math.sqrt(distSq);
+        const invDist = dist > 1e-6 ? 1 / dist : 0;
+        const nx = dist > 1e-6 ? dx * invDist : 0;
+        const ny = dist > 1e-6 ? dy * invDist : 1;
+        const nz = dist > 1e-6 ? dz * invDist : 0;
+        const overlap = reach - dist;
 
-      if (aRail && bRail) {
-        continue;
-      } else if (aRail) {
-        b.pos[0] -= nx * overlap;
-        b.pos[1] -= ny * overlap;
-        b.pos[2] -= nz * overlap;
-      } else if (bRail) {
-        a.pos[0] += nx * overlap;
-        a.pos[1] += ny * overlap;
-        a.pos[2] += nz * overlap;
-      } else {
-        const half = overlap * 0.5;
-        a.pos[0] += nx * half;
-        a.pos[1] += ny * half;
-        a.pos[2] += nz * half;
-        b.pos[0] -= nx * half;
-        b.pos[1] -= ny * half;
-        b.pos[2] -= nz * half;
-      }
+        const aRail = !!a.rail;
+        const bRail = !!b.rail;
 
-      // Interrupt warp on any collision/overlap
-      if (!aRail && a.warp && a.warp.state !== "off") {
-        setWarp(a, "off");
-        a.speed = Math.min(Math.hypot(a.vel[0], a.vel[1], a.vel[2]), FLIGHT.impulse);
-      }
-      if (!bRail && b.warp && b.warp.state !== "off") {
-        setWarp(b, "off");
-        b.speed = Math.min(Math.hypot(b.vel[0], b.vel[1], b.vel[2]), FLIGHT.impulse);
-      }
-
-      // Relative velocity along collision normal
-      const rvx = a.vel[0] - b.vel[0];
-      const rvy = a.vel[1] - b.vel[1];
-      const rvz = a.vel[2] - b.vel[2];
-      const vn = rvx * nx + rvy * ny + rvz * nz;
-
-      if (vn < 0) {
-        const restitution = 0.5;
-        const imp = -(1 + restitution) * vn;
-        if (!aRail && !bRail) {
-          const halfImp = imp * 0.5;
-          a.vel[0] += nx * halfImp;
-          a.vel[1] += ny * halfImp;
-          a.vel[2] += nz * halfImp;
-          b.vel[0] -= nx * halfImp;
-          b.vel[1] -= ny * halfImp;
-          b.vel[2] -= nz * halfImp;
-        } else if (!aRail && bRail) {
-          a.vel[0] += nx * imp;
-          a.vel[1] += ny * imp;
-          a.vel[2] += nz * imp;
-        } else if (aRail && !bRail) {
-          b.vel[0] -= nx * imp;
-          b.vel[1] -= ny * imp;
-          b.vel[2] -= nz * imp;
+        if (aRail && bRail) {
+          continue;
+        } else if (aRail) {
+          b.pos[0] -= nx * overlap;
+          b.pos[1] -= ny * overlap;
+          b.pos[2] -= nz * overlap;
+        } else if (bRail) {
+          a.pos[0] += nx * overlap;
+          a.pos[1] += ny * overlap;
+          a.pos[2] += nz * overlap;
+        } else {
+          const half = overlap * 0.5;
+          a.pos[0] += nx * half;
+          a.pos[1] += ny * half;
+          a.pos[2] += nz * half;
+          b.pos[0] -= nx * half;
+          b.pos[1] -= ny * half;
+          b.pos[2] -= nz * half;
         }
 
-        if (!aRail) a.speed = Math.min(Math.hypot(a.vel[0], a.vel[1], a.vel[2]), FLIGHT.impulse);
-        if (!bRail) b.speed = Math.min(Math.hypot(b.vel[0], b.vel[1], b.vel[2]), FLIGHT.impulse);
+        // Interrupt warp and apply velocity reflection on first pass
+        if (iter === 0) {
+          if (!aRail && a.warp && a.warp.state !== "off") {
+            setWarp(a, "off");
+            a.speed = Math.min(Math.hypot(a.vel[0], a.vel[1], a.vel[2]), FLIGHT.impulse);
+          }
+          if (!bRail && b.warp && b.warp.state !== "off") {
+            setWarp(b, "off");
+            b.speed = Math.min(Math.hypot(b.vel[0], b.vel[1], b.vel[2]), FLIGHT.impulse);
+          }
+
+          // Relative velocity along collision normal
+          const rvx = a.vel[0] - b.vel[0];
+          const rvy = a.vel[1] - b.vel[1];
+          const rvz = a.vel[2] - b.vel[2];
+          const vn = rvx * nx + rvy * ny + rvz * nz;
+
+          if (vn < 0) {
+            const restitution = 0.5;
+            const imp = -(1 + restitution) * vn;
+            if (!aRail && !bRail) {
+              const halfImp = imp * 0.5;
+              a.vel[0] += nx * halfImp;
+              a.vel[1] += ny * halfImp;
+              a.vel[2] += nz * halfImp;
+              b.vel[0] -= nx * halfImp;
+              b.vel[1] -= ny * halfImp;
+              b.vel[2] -= nz * halfImp;
+            } else if (!aRail && bRail) {
+              a.vel[0] += nx * imp;
+              a.vel[1] += ny * imp;
+              a.vel[2] += nz * imp;
+            } else if (aRail && !bRail) {
+              b.vel[0] -= nx * imp;
+              b.vel[1] -= ny * imp;
+              b.vel[2] -= nz * imp;
+            }
+
+            if (!aRail) a.speed = Math.min(Math.hypot(a.vel[0], a.vel[1], a.vel[2]), FLIGHT.impulse);
+            if (!bRail) b.speed = Math.min(Math.hypot(b.vel[0], b.vel[1], b.vel[2]), FLIGHT.impulse);
+          }
+        }
       }
     }
   }
@@ -315,9 +321,27 @@ function computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, options 
   // Velocity leading: predict target motion to intercept/arrive smoothly
   const targetSpeed = targetVel ? Math.hypot(targetVel[0], targetVel[1], targetVel[2]) : 0;
   const leadTime = Math.min(1.2, dist / Math.max(e.speed, FLIGHT.impulse * 0.5));
-  const aimX = targetPos[0] + (targetVel ? targetVel[0] * leadTime * 0.4 : 0);
-  const aimY = targetPos[1] + (targetVel ? targetVel[1] * leadTime * 0.4 : 0);
-  const aimZ = targetPos[2] + (targetVel ? targetVel[2] * leadTime * 0.4 : 0);
+  let aimX = targetPos[0] + (targetVel ? targetVel[0] * leadTime * 0.4 : 0);
+  let aimY = targetPos[1] + (targetVel ? targetVel[1] * leadTime * 0.4 : 0);
+  let aimZ = targetPos[2] + (targetVel ? targetVel[2] * leadTime * 0.4 : 0);
+
+  // Deflect aim away from nearby celestial bodies (planet, moon)
+  if (typeof SYSTEM_BODIES !== "undefined") {
+    for (let b = 0; b < SYSTEM_BODIES.length; b++) {
+      const body = SYSTEM_BODIES[b];
+      const bx = e.pos[0] - body.center[0];
+      const by = e.pos[1] - body.center[1];
+      const bz = e.pos[2] - body.center[2];
+      const bDist = Math.hypot(bx, by, bz);
+      const bSafe = body.radius + (e.radius || FLIGHT.radius) + 1.2;
+      if (bDist < bSafe && bDist > 1e-4) {
+        const push = ((bSafe - bDist) / bSafe) * 6.0;
+        aimX += (bx / bDist) * push;
+        aimY += (by / bDist) * push;
+        aimZ += (bz / bDist) * push;
+      }
+    }
+  }
 
   const adx = aimX - e.pos[0];
   const ady = aimY - e.pos[1];
@@ -346,27 +370,33 @@ function computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, options 
   const yawAngle = Math.atan2(-lax, laz);
   const yaw = Math.max(-1, Math.min(1, yawAngle * 1.8));
 
-  // Roll: align ship's dorsal up with target's up or system up, banking into turns
+  // Roll: align ship's dorsal up with target's up or system up, banking into turns.
+  // In the ship's local coordinate frame (+x port, +y dorsal up, +z nose), positive roll
+  // about +z rotates +x towards +y (raising port, dropping starboard) and tilts dorsal +y
+  // towards starboard (-x). Therefore an error where desired up is towards starboard (localUp.x < 0)
+  // requires positive roll, which means rollAngle must be -atan2(localUp.x, localUp.y).
   if (targetQuat) {
     quatRotateInto(targetQuat, [0, 1, 0], AI_SCRATCH.worldUp);
   } else {
     AI_SCRATCH.worldUp[0] = 0; AI_SCRATCH.worldUp[1] = 1; AI_SCRATCH.worldUp[2] = 0;
   }
   quatRotateInto(AI_SCRATCH.conj, AI_SCRATCH.worldUp, AI_SCRATCH.localUp);
-  const rollAngle = Math.atan2(AI_SCRATCH.localUp[0], AI_SCRATCH.localUp[1]);
+  const rollAngle = -Math.atan2(AI_SCRATCH.localUp[0], AI_SCRATCH.localUp[1]);
   const roll = Math.max(-1, Math.min(1, rollAngle * 1.5 + yaw * 0.35));
 
   // Throttle
   const standoff = options.standoff || options.arrivalDist || 0;
-  const effectiveDist = Math.max(0, dist - standoff);
+  const brakeLead = Math.max(0, e.speed - targetSpeed) * 0.45;
+  const effectiveDist = Math.max(0, dist - standoff - brakeLead);
+  const maxSpd = options.maxSpeed || FLIGHT.impulse;
   let desiredSpeed;
-  if (effectiveDist > 8.0) {
-    desiredSpeed = FLIGHT.impulse;
+  if (effectiveDist > 6.0) {
+    desiredSpeed = maxSpd;
   } else {
-    desiredSpeed = targetSpeed + effectiveDist * 0.6;
+    desiredSpeed = Math.min(maxSpd, targetSpeed + effectiveDist * 0.6);
   }
   if (laz < 0.2) {
-    desiredSpeed = Math.min(desiredSpeed, FLIGHT.impulse * 0.35);
+    desiredSpeed = Math.min(desiredSpeed, maxSpd * 0.35);
   }
   const throttle = clamp01(desiredSpeed / FLIGHT.impulse);
 
@@ -374,9 +404,9 @@ function computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, options 
   let toggleWarp = false;
   if (options.allowWarp !== false) {
     const targetWarp = options.targetWarpState || (options.target && options.target.warp ? options.target.warp.state : "off");
-    if (targetWarp === "on" && e.warp.state === "off") {
+    if ((targetWarp === "on" || targetWarp === "charge") && e.warp.state === "off") {
       toggleWarp = true;
-    } else if (targetWarp === "off" && e.warp.state === "on") {
+    } else if (targetWarp === "off" && (e.warp.state === "on" || e.warp.state === "charge")) {
       toggleWarp = true;
     } else if (dist > 25 && e.warp.state === "off" && laz > 0.7) {
       toggleWarp = true;
@@ -406,6 +436,7 @@ function createWingmanController({ target = null, slotOffset = null, slotIndex =
   const targetPos = [0, 0, 0];
   const targetVel = [0, 0, 0];
   const targetQuat = [0, 0, 0, 1];
+  const options = { arrivalDist: 0.2, target: null, allowWarp: true };
 
   return function wingmanCtrl(e, dt, worldRef) {
     const lead = target || (worldRef ? worldRef.player : world.player);
@@ -413,11 +444,19 @@ function createWingmanController({ target = null, slotOffset = null, slotIndex =
       return { pitch: 0, yaw: 0, roll: 0, throttle: 0.5, toggleWarp: false };
     }
 
-    // Determine formation slot offset
+    // Determine formation slot offset without heap allocations
     let slot = defaultSlot;
     if (!slotOffset && worldRef && worldRef.entities) {
-      const idx = worldRef.entities.filter(ent => ent !== lead).indexOf(e);
-      if (idx >= 0) slot = WINGMAN_SLOTS[idx % WINGMAN_SLOTS.length];
+      let idx = 0;
+      for (let i = 0; i < worldRef.entities.length; i++) {
+        const ent = worldRef.entities[i];
+        if (ent === lead) continue;
+        if (ent === e) {
+          slot = WINGMAN_SLOTS[idx % WINGMAN_SLOTS.length];
+          break;
+        }
+        idx++;
+      }
     }
 
     // Calculate slot world position
@@ -432,12 +471,9 @@ function createWingmanController({ target = null, slotOffset = null, slotIndex =
     targetQuat[1] = lead.quat[1];
     targetQuat[2] = lead.quat[2];
     targetQuat[3] = lead.quat[3];
+    options.target = lead;
 
-    return computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, {
-      arrivalDist: 0.2,
-      target: lead,
-      allowWarp: true
-    }, e.intent);
+    return computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, options, e.intent);
   };
 }
 
@@ -447,14 +483,33 @@ function wingmanController(e, dt, worldRef) {
 }
 
 function createPursuitController({ target = null, standoff = 2.0 } = {}) {
+  const targetPos = [0, 0, 0];
+  const targetVel = [0, 0, 0];
+  const targetQuat = [0, 0, 0, 1];
+  const options = { arrivalDist: 0.2, target: null, allowWarp: true };
+
   return function pursuitCtrl(e, dt, worldRef) {
     const tgt = target || (worldRef ? worldRef.player : world.player);
     if (!tgt) return { pitch: 0, yaw: 0, roll: 0, throttle: 0, toggleWarp: false };
-    return computeSteeringIntent(e, tgt.pos, tgt.vel, tgt.quat, dt, {
-      standoff,
-      target: tgt,
-      allowWarp: true
-    }, e.intent);
+
+    // Offset target position along line from target to pursuer to maintain standoff
+    const dx = e.pos[0] - tgt.pos[0];
+    const dy = e.pos[1] - tgt.pos[1];
+    const dz = e.pos[2] - tgt.pos[2];
+    const d = Math.hypot(dx, dy, dz);
+    if (d > 1e-4 && standoff > 0) {
+      const invD = 1 / d;
+      targetPos[0] = tgt.pos[0] + dx * invD * standoff;
+      targetPos[1] = tgt.pos[1] + dy * invD * standoff;
+      targetPos[2] = tgt.pos[2] + dz * invD * standoff;
+    } else {
+      targetPos[0] = tgt.pos[0]; targetPos[1] = tgt.pos[1]; targetPos[2] = tgt.pos[2];
+    }
+    targetVel[0] = tgt.vel[0]; targetVel[1] = tgt.vel[1]; targetVel[2] = tgt.vel[2];
+    targetQuat[0] = tgt.quat[0]; targetQuat[1] = tgt.quat[1]; targetQuat[2] = tgt.quat[2]; targetQuat[3] = tgt.quat[3];
+    options.target = tgt;
+
+    return computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, options, e.intent);
   };
 }
 
@@ -471,16 +526,15 @@ function createPatrolController({ waypoints = null, radius = 5.0, speed = 0.5 } 
     [-radius, 0, 0],
     [0, -radius * 0.5, -radius]
   ];
+  const options = { standoff: 0.5, maxSpeed: speed * FLIGHT.impulse, allowWarp: false };
+
   return function patrolCtrl(e, dt) {
     const wp = pts[wpIndex];
     const dist = Math.hypot(wp[0] - e.pos[0], wp[1] - e.pos[1], wp[2] - e.pos[2]);
     if (dist < 1.5) {
       wpIndex = (wpIndex + 1) % pts.length;
     }
-    return computeSteeringIntent(e, pts[wpIndex], null, null, dt, {
-      standoff: 0.5,
-      allowWarp: false
-    }, e.intent);
+    return computeSteeringIntent(e, pts[wpIndex], null, null, dt, options, e.intent);
   };
 }
 
@@ -555,6 +609,8 @@ function stepWorld(t, dt) {
   resolveEntityCollisions(world.entities);
 }
 
+const ADVANCE_POSE = { pos: [0, 0, 0], quat: [0, 0, 0, 1] };
+
 // Once a frame: advance the world to scene time t (dt since the last frame)
 // and return the player's ship as the scene should draw it.
 function advanceWorld(t, dt) {
@@ -599,14 +655,11 @@ function advanceWorld(t, dt) {
       stepWorld(t - world.pending, FLIGHT.step);
     }
     const a = world.pending / FLIGHT.step, prev = player.prev ?? player;
-    pose = {
-      pos: [
-        prev.pos[0] + (player.pos[0] - prev.pos[0]) * a,
-        prev.pos[1] + (player.pos[1] - prev.pos[1]) * a,
-        prev.pos[2] + (player.pos[2] - prev.pos[2]) * a
-      ],
-      quat: slerp(prev.quat, player.quat, a)
-    };
+    ADVANCE_POSE.pos[0] = prev.pos[0] + (player.pos[0] - prev.pos[0]) * a;
+    ADVANCE_POSE.pos[1] = prev.pos[1] + (player.pos[1] - prev.pos[1]) * a;
+    ADVANCE_POSE.pos[2] = prev.pos[2] + (player.pos[2] - prev.pos[2]) * a;
+    slerpInto(prev.quat, player.quat, a, ADVANCE_POSE.quat);
+    pose = ADVANCE_POSE;
     for (let i = 0; i < world.entities.length; i++) {
       const e = world.entities[i];
       if (e === player) continue;
@@ -631,7 +684,7 @@ function advanceWorld(t, dt) {
     }
   }
 
-  return { ...pose, vel: player.vel, speed: Math.hypot(...player.vel), throttle: player.throttle,
+  return { ...pose, vel: player.vel, speed: Math.hypot(player.vel[0], player.vel[1], player.vel[2]), throttle: player.throttle,
     helm: !player.rail, warp: player.warp, warpLevel: warpLevelOf(player),
     // The stars streak by the ship's own velocity; the lens weight scales it
     streak: player.vel };

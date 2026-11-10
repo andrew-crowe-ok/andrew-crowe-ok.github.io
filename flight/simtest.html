@@ -157,10 +157,16 @@ try {
   const leftIntent = computeSteeringIntent(testShip, [10, 0, 5], null, null, 0.016);
   check("ai-steering: target port causes negative yaw (turns left)", leftIntent.yaw < -0.3, leftIntent.yaw.toFixed(3));
 
-  // 3. Roll banking
+  // 3. Roll banking and attitude alignment
   check("ai-steering: turn causes coordinated bank roll", Math.abs(rightIntent.roll) > 0.05);
+  const starboardTiltedQuat = quatFromRotVec([0, 0, 0.3]);
+  const rollAlignIntent = computeSteeringIntent(testShip, [0, 0, 10], null, starboardTiltedQuat, 0.016);
+  check("ai-steering: target tilted starboard causes positive roll (banks right to match)", rollAlignIntent.roll > 0.1, rollAlignIntent.roll.toFixed(3));
+  const portTiltedQuat = quatFromRotVec([0, 0, -0.3]);
+  const rollAlignPort = computeSteeringIntent(testShip, [0, 0, 10], null, portTiltedQuat, 0.016);
+  check("ai-steering: target tilted port causes negative roll (banks left to match)", rollAlignPort.roll < -0.1, rollAlignPort.roll.toFixed(3));
 
-  // 4. Pursuit controller closes distance
+  // 4. Pursuit controller closes distance and settles at standoff
   resetWorld();
   requestEngage();
   advanceWorld(1.0, 0.016);
@@ -172,17 +178,19 @@ try {
   const chaser = addEntity({
     model: "galaxy",
     rail: null,
-    controller: createPursuitController({ target: world.player, standoff: 1.5 }),
+    controller: createPursuitController({ target: world.player, standoff: 2.5 }),
     pos: [0, 0, -15],
     quat: [0, 0, 0, 1]
   });
   const initDist = Math.hypot(...vsub(world.player.pos, chaser.pos));
-  for (let i = 0; i < 180; i++) advanceWorld(1.0 + (i + 1) * 0.02, 0.02);
+  for (let i = 0; i < 300; i++) advanceWorld(1.0 + (i + 1) * 0.02, 0.02);
   const finalDist = Math.hypot(...vsub(world.player.pos, chaser.pos));
-  check("ai-pursuit: chaser closes distance to standoff", finalDist < initDist && finalDist >= 1.2 && finalDist < 5.0,
+  check("ai-pursuit: chaser closes distance to standoff", finalDist < initDist && finalDist >= 2.0 && finalDist <= 3.0,
     `init: ${initDist.toFixed(2)}, final: ${finalDist.toFixed(2)}`);
+  check("ai-pursuit: chaser did not collide with target", finalDist > (chaser.radius + world.player.radius),
+    `dist: ${finalDist.toFixed(2)} vs contact: ${(chaser.radius + world.player.radius).toFixed(2)}`);
 
-  // 5. Wingman formation following
+  // 5. Wingman formation following & warp charge synchronization
   resetWorld();
   requestEngage();
   advanceWorld(1.0, 0.016);
@@ -208,6 +216,15 @@ try {
   const relSlot = vsub(escort.pos, world.player.pos);
   check("ai-wingman: maintains formation offset behind and to port",
     near(relSlot, [-3.2, 0.4, -4.5], 0.5), `actual rel: ${f(relSlot)}`);
+
+  // Wingman warp charge synchronization
+  helm.toggleWarp = true;
+  advanceWorld(1.0 + 121 * 0.02, 0.02);
+  check("ai-wingman: leader enters warp charge", world.player.warp.state === "charge");
+  check("ai-wingman: escort synchronously enters warp charge", escort.warp.state === "charge");
+  for (let i = 0; i < 70; i++) advanceWorld(1.0 + (122 + i) * 0.02, 0.02);
+  check("ai-wingman: leader jumps to warp", world.player.warp.state === "on");
+  check("ai-wingman: escort jumps to warp simultaneously", escort.warp.state === "on");
 
   // 6. Entity-to-entity collisions: head-on bounce and deflection
   resetWorld();
@@ -245,6 +262,20 @@ try {
     `min dist: ${minShipDist.toFixed(3)} vs allowed: ${minAllowed.toFixed(3)}`);
   check("entity-collision: velocities reverse after bounce", bounced,
     `A.vz=${shipA.vel[2].toFixed(2)}, B.vz=${shipB.vel[2].toFixed(2)}`);
+
+  // 6b. Multi-body collision cluster (3 overlapping ships)
+  resetWorld();
+  const cA = addEntity({ model: "galaxy", rail: null, pos: [12.0, 0, 0], vel: [0, 0, 0], speed: 0 });
+  const cB = addEntity({ model: "galaxy", rail: null, pos: [12.3, 0, 0], vel: [0, 0, 0], speed: 0 });
+  const cC = addEntity({ model: "galaxy", rail: null, pos: [12.6, 0, 0], vel: [0, 0, 0], speed: 0 });
+  resolveEntityCollisions(world.entities);
+  const dAB = Math.hypot(...vsub(cA.pos, cB.pos));
+  const dBC = Math.hypot(...vsub(cB.pos, cC.pos));
+  const dAC = Math.hypot(...vsub(cA.pos, cC.pos));
+  const minClusterAllowed = 2 * FLIGHT.radius - 0.05;
+  check("entity-collision: multi-body 3-ship cluster separates dAB", dAB >= minClusterAllowed, dAB.toFixed(3));
+  check("entity-collision: multi-body 3-ship cluster separates dBC", dBC >= minClusterAllowed, dBC.toFixed(3));
+  check("entity-collision: multi-body 3-ship cluster separates dAC", dAC >= minClusterAllowed, dAC.toFixed(3));
 
   // 7. Entity collision knocks warping ship out of warp
   resetWorld();

@@ -129,6 +129,7 @@
   <script>
   window.scriptErrors = [];
   window.addEventListener('error', e => {
+    if (e.target && e.target !== window) return;
     window.scriptErrors.push(e.message + ' at ' + e.filename + ':' + e.lineno + ':' + e.colno);
     document.getElementById('errors').textContent = window.scriptErrors.join('\n');
   });
@@ -250,6 +251,10 @@
       updateHud(frameEngage.ship);
       check("hud: wingman button reflects active state", document.getElementById("wingmanButton").getAttribute("aria-pressed") === "true");
       check("hud: wingman target text rendered", document.getElementById("helmTarget").textContent.includes("TGT"));
+
+      // 12. Test companion persistence across orbit resets
+      resetScene(1.0);
+      check("resetScene: companion preserved in orbit when toggle active", world.entities.length === 2 && !!world.entities[1].rail);
     } catch (err) {
       out.push("ERROR " + err.stack);
     }

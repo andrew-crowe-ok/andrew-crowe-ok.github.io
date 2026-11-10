@@ -14,7 +14,10 @@ function showError(message) {
   el.textContent = message;
   el.hidden = false;
 }
-window.addEventListener("error", e => showError(`The ray tracer stopped: ${e.message}`));
+window.addEventListener("error", e => {
+  if (e.target && e.target !== window) return;
+  showError(`The ray tracer stopped: ${e.message}`);
+});
 canvas.addEventListener("webglcontextlost", () =>
   showError("The GPU dropped the WebGL context. Reload the page, or lower the bounces with ?bounces=1."));
 
@@ -416,7 +419,9 @@ function loadVideoTexture(sources) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
   const video = document.createElement("video");
-  Object.assign(video, { muted: true, loop: true, playsInline: true, autoplay: true, crossOrigin: "anonymous" });
+  Object.assign(video, { muted: true, loop: true, playsInline: true, autoplay: true });
+  if (location.protocol !== "file:") video.crossOrigin = "anonymous";
+  video.addEventListener("error", () => {}, { once: true });
   video.src = sources.find(src => video.canPlayType(src.endsWith(".webm") ? "video/webm" : "video/mp4")) ?? sources[0];
   assetsReady.push(new Promise(resolve => {
     if (video.readyState >= video.HAVE_CURRENT_DATA) return resolve();
@@ -1199,11 +1204,12 @@ function resetScene(time) {
   resetFreeCamera();
   sceneStart = time;
   resetWorld();
-  const shipCount = Math.max(1, Math.min(MAX_INSTANCES - 2, Number(presets.get("ships") || (presets.has("wingman") ? 2 : 1))));
+  const toggleEl = document.getElementById("wingmanToggle");
+  const wantsWingman = toggleEl ? toggleEl.checked : (presets.has("wingman") || Number(presets.get("ships")) > 1);
+  const shipCount = Math.max(1, Math.min(MAX_INSTANCES - 2, Number(presets.get("ships") || (wantsWingman ? 2 : 1))));
   for (let s = 1; s < shipCount; s++) {
     addEntity({ model: "galaxy", rail: companionOrbitPose(s * 0.45), role: "wingman" });
   }
-  const toggleEl = document.getElementById("wingmanToggle");
   if (toggleEl) toggleEl.checked = shipCount > 1;
   if (helmEls.wingmanButton) helmEls.wingmanButton.setAttribute("aria-pressed", shipCount > 1);
   held.clear();

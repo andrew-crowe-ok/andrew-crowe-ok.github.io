@@ -107,7 +107,7 @@ function drawEntities(parent, t, playerShip) {
     for (let i = 0; i < world.entities.length; i++) {
       const e = world.entities[i];
       if (e === world.player) continue;
-      const pose = e.pose || (e.rail ? e.rail(t) : e);
+      const pose = e.rail ? e : (e.pose || e);
       if (!e.engines) {
         e.engines = {
           impulse: e.throttle ? e.throttle * 1.5 : 0.8,

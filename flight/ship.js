@@ -86,25 +86,25 @@ let grilleMat = null;
 let bussardMat = null;
 
 function getImpulseMat(power) {
-  if (!impulseMat) impulseMat = { ...DEFAULT_MATERIAL, power: 1, scroll: 0 };
+  if (!impulseMat) impulseMat = { ...DEFAULT_MATERIAL, engineType: 1, power: 1, scroll: 0 };
   impulseMat.power = power;
   return impulseMat;
 }
 
 function getGrilleMat(power, scroll) {
-  if (!grilleMat) grilleMat = { ...DEFAULT_MATERIAL, power: 1, scroll: 0 };
+  if (!grilleMat) grilleMat = { ...DEFAULT_MATERIAL, engineType: 2, power: 1, scroll: 0 };
   grilleMat.power = power;
   grilleMat.scroll = scroll;
   return grilleMat;
 }
 
 function getBussardMat(power) {
-  if (!bussardMat) bussardMat = { ...DEFAULT_MATERIAL, power: 1, scroll: 0 };
+  if (!bussardMat) bussardMat = { ...DEFAULT_MATERIAL, engineType: 3, power: 1, scroll: 0 };
   bussardMat.power = power;
   return bussardMat;
 }
 
-const glowAt = (power, scroll = 0) => ({ ...DEFAULT_MATERIAL, power, scroll });
+const glowAt = (power, scroll = 0, engineType = 0) => ({ ...DEFAULT_MATERIAL, engineType, power, scroll });
 
 // t is the scene clock, dt the frame's step (for the grilles' flow, whose
 // speed changes along the way), ship the player's ship this frame (world.js).

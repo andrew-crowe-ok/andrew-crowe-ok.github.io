@@ -115,6 +115,20 @@ try {
   // reset
   requestReset(10, 0.45);
   check("reset pending then due", !resetDue(10.2) && resetDue(10.45));
+
+  // multiple entities / wingman support
+  resetWorld();
+  const wingman = addEntity({ model: "galaxy", rail: companionOrbitPose(-Math.PI / 4) });
+  check("multi-entity: world has 2 entities", world.entities.length === 2 && world.entities[1] === wingman);
+  advanceWorld(2, 0.016);
+  check("multi-entity: wingman has valid rail pose", wingman.pos && wingman.pos.length === 3 && Math.hypot(...wingman.pos) > 1);
+  const companionPose = companionOrbitPose(-Math.PI / 4)(2);
+  check("multi-entity: wingman follows companion rail", near(wingman.pos, companionPose.pos, 1e-4));
+
+  // free flight stepping with multiple entities
+  requestEngage();
+  advanceWorld(2.1, 0.1);
+  check("multi-entity: free flight steps both entities", world.entities.length === 2 && !world.player.rail && !!wingman.rail);
 } catch (err) { out.push("ERROR " + err.stack); }
 document.getElementById("out").textContent = out.join("\n");
 </script></body></html>

@@ -61,6 +61,18 @@ function orbitPose(t) {
   };
 }
 
+function companionOrbitPose(offsetAngle = -Math.PI / 4) {
+  return function(t) {
+    const a = -ORBIT.speed * t + offsetAngle;
+    const tilt = rotateX(ORBIT.tilt);
+    return {
+      pos: transformPoint(tilt, [ORBIT.radius * Math.cos(a), 0, -ORBIT.radius * Math.sin(a)]),
+      quat: quatFromMatrix(multiply(tilt, rotateY(a))),
+      vel: transformVector(tilt, [ORBIT_SPEED * Math.sin(a), 0, ORBIT_SPEED * Math.cos(a)])
+    };
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Entities
 // ---------------------------------------------------------------------------
@@ -70,6 +82,18 @@ function makeEntity({ model, rail = null, controller = null }) {
   return { model, rail, controller, pos: [0, 0, 0], quat: [0, 0, 0, 1], vel: [0, 0, 0],
     angVel: [0, 0, 0], speed: 0, throttle: 0, warp: { state: "off", tau: 0 }, warpRamp: 0,
     radius: FLIGHT.radius, prev: null };
+}
+
+function addEntity({ model = "galaxy", rail = null, controller = null, pos = [0, 0, 0], quat = [0, 0, 0, 1], vel = [0, 0, 0], speed = 0, throttle = 0, engines = null } = {}) {
+  const e = makeEntity({ model, rail, controller });
+  e.pos = pos.slice();
+  e.quat = quat.slice();
+  e.vel = vel.slice();
+  e.speed = speed;
+  e.throttle = throttle;
+  if (engines) e.engines = { ...engines };
+  world.entities.push(e);
+  return e;
 }
 
 // The lens weight for a ramp: out fast and settling on the way in, and the
@@ -207,6 +231,18 @@ function advanceWorld(t, dt) {
     }
     const a = world.pending / FLIGHT.step, prev = player.prev ?? player;
     pose = { pos: prev.pos.map((v, i) => v + (player.pos[i] - v) * a), quat: slerp(prev.quat, player.quat, a) };
+    for (const e of world.entities) {
+      if (e === player) continue;
+      if (e.rail) Object.assign(e, e.rail(t));
+      else if (e.prev) {
+        e.pose = {
+          pos: e.prev.pos.map((v, i) => v + (e.pos[i] - v) * a),
+          quat: slerp(e.prev.quat, e.quat, a)
+        };
+      } else {
+        e.pose = { pos: e.pos.slice(), quat: e.quat.slice() };
+      }
+    }
   }
 
   return { ...pose, vel: player.vel, speed: Math.hypot(...player.vel), throttle: player.throttle,

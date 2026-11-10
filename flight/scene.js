@@ -49,14 +49,18 @@ function drawSystem(parent, t, ship) {
   setSky(parent, sx, sy, sz);
   drawPlanet(parent, t);
   drawMoon(parent, t);
-  drawShipAt(parent, ship);
+  drawEntities(parent, t, ship);
 }
 
 // Planet: a fine sphere wearing the antelope photo, bump-mapped from its luminance
 function drawPlanet(parent, t) {
   const r = PLANET.radius;
-  drawPrimitive(planetMesh, planetTexture, BUMP_MAPPING,
-    multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r))), PLANET_MATERIAL);
+  const modelView = multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r)));
+  if (typeof addInstance === "function" && typeof PLANET_MODEL !== "undefined" && PLANET_MODEL) {
+    addInstance(PLANET_MODEL, modelView);
+  } else if (typeof drawPrimitive === "function") {
+    drawPrimitive(planetMesh, planetTexture, BUMP_MAPPING, modelView, PLANET_MATERIAL);
+  }
 }
 
 // The moon's frame at scene time t, and where that puts its center
@@ -67,16 +71,48 @@ const moonCenter = t => transformPoint(moonFrame(t), [0, 0, 0]);
 // Moon: one glass sphere, no texture -- what it shows is what's behind it
 function drawMoon(parent, t) {
   const r = MOON.radius;
-  drawPrimitive(sphereMesh, null, BUMP_MAPPING, multiply(parent, multiply(moonFrame(t), scale(r, r, r))),
-    MOON_MATERIAL);
+  const modelView = multiply(parent, multiply(moonFrame(t), scale(r, r, r)));
+  if (typeof addInstance === "function" && typeof MOON_MODEL !== "undefined" && MOON_MODEL) {
+    addInstance(MOON_MODEL, modelView);
+  } else if (typeof drawPrimitive === "function") {
+    drawPrimitive(sphereMesh, null, BUMP_MAPPING, modelView, MOON_MATERIAL);
+  }
 }
 
 // Level 1: place the ship where the world has it. Its attitude is a
 // quaternion, so the frame is translate(pos) * rotation with no axis singled
-// out: pitch, yaw and roll all arrive the same way. (The ship boxes its own
-// parts into groups for the ray tracer, ship.js.)
-function drawShipAt(parent, { pos, quat }) {
+// out: pitch, yaw and roll all arrive the same way.
+function drawShipAt(parent, { pos, quat }, engineParams = null, isPlayer = false) {
   const frame = multiply(parent, multiply(translate(...pos), matrixFromQuat(quat)));
   const s = ORBIT.shipScale;
-  drawShip(multiply(frame, scale(s, s, s)));
+  const modelView = multiply(frame, scale(s, s, s));
+  if (typeof addInstance === "function" && typeof GALAXY_MODEL !== "undefined" && GALAXY_MODEL) {
+    addInstance(GALAXY_MODEL, modelView, engineParams || (typeof engines !== "undefined" ? engines : null));
+    if (isPlayer && typeof setNavLight === "function") {
+      setNavLight(transformPoint(multiply(modelView, translate(...vsub([0, 0, 0], SHIP_CENTER))), NAV_LIGHT.pos));
+    }
+  } else if (typeof drawShip === "function") {
+    drawShip(modelView);
+  }
+}
+
+// Draw all entities in the world (player plus any AI/companion ships)
+function drawEntities(parent, t, playerShip) {
+  const playerEngines = typeof engines !== "undefined" ? engines : null;
+  drawShipAt(parent, playerShip, playerEngines, true);
+
+  if (typeof world !== "undefined" && world.entities && world.entities.length > 1) {
+    for (let i = 0; i < world.entities.length; i++) {
+      const e = world.entities[i];
+      if (e === world.player) continue;
+      const pose = e.pose ?? (e.rail ? e.rail(t) : { pos: e.pos, quat: e.quat });
+      const eng = e.engines ?? {
+        impulse: e.throttle ? e.throttle * 1.5 : 0.8,
+        coils: 0.6,
+        bussard: 0.8,
+        scroll: (0.15 * t) % 2
+      };
+      drawShipAt(parent, pose, eng, false);
+    }
+  }
 }

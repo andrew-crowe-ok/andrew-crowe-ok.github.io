@@ -107,19 +107,25 @@ const DEFAULT_MATERIAL = { ka: 0.2, kd: 0.8, ks: 0.5, shininess: 32, bumpScale: 
 // The per-primitive arrays live in one ArrayBuffer laid out as raytrace.js's
 // Scene block (std140, one vec4 per element, in this order), so a frame's
 // upload is a single call. Each entry: its length in vec4s.
-const SCENE_BLOCK = { inv: 3 * MAX_PRIMS, info: MAX_PRIMS, matA: MAX_PRIMS, matB: MAX_PRIMS,
-  matC: MAX_PRIMS, matD: MAX_PRIMS, matE: MAX_PRIMS, groupInv: 3 * MAX_GROUPS, groupHalf: MAX_GROUPS, groupRange: MAX_GROUPS };
+const SCENE_BLOCK = {
+  primInv: 3 * MAX_PRIMS, info: MAX_PRIMS, matA: MAX_PRIMS, matB: MAX_PRIMS,
+  matC: MAX_PRIMS, matD: MAX_PRIMS, matE: MAX_PRIMS,
+  groupInv: 3 * MAX_GROUPS, groupHalf: MAX_GROUPS, groupRange: MAX_GROUPS,
+  instInv: 3 * MAX_INSTANCES, instBoxCenter: MAX_INSTANCES, instBoxHalf: MAX_INSTANCES,
+  instInfo: MAX_INSTANCES, instParams: MAX_INSTANCES
+};
 const sceneBytes = new ArrayBuffer(16 * Object.values(SCENE_BLOCK).reduce((a, n) => a + n, 0));
 
 const scene = {
   count: 0,
   groupCount: 0,
+  instCount: 0,
   nav: [0, 0, 0],
   sky: { center: new Float32Array(3), rot: new Float32Array(9), streak: new Float32Array(3) }
 };
 let blockAt = 0;
 for (const [name, vec4s] of Object.entries(SCENE_BLOCK)) {
-  scene[name] = new (name === "info" || name === "groupRange" ? Int32Array : Float32Array)(sceneBytes, 16 * blockAt, 4 * vec4s);
+  scene[name] = new (name === "info" || name === "groupRange" || name === "instInfo" ? Int32Array : Float32Array)(sceneBytes, 16 * blockAt, 4 * vec4s);
   blockAt += vec4s;
 }
 
@@ -140,10 +146,10 @@ function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MAT
   if (scene.count >= MAX_PRIMS) throw new Error(`more than ${MAX_PRIMS} primitives`);
   const i = scene.count++;
   const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb, glow = 0,
-    power = 1, scroll = 0 } = material;
-  // Every glass part takes its index of refraction from the slider
-  const ior = kt > 0 ? controls.ior : 1;
-  invertAffineRows(modelView, scene.inv, i * 12);
+    power = 1 } = material;
+  // Every glass part takes its index of refraction from the slider (updated in uploadScene)
+  const ior = kt > 0 ? (material.ior ?? 1.5) : 1;
+  invertAffineRows(modelView, scene.primInv, i * 12);
   const base = i * 4;
   scene.info[base]     = mesh.shape;
   scene.info[base + 1] = unitOf(texture);
@@ -174,11 +180,46 @@ function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MAT
 
   scene.matE[base]     = glow;
   scene.matE[base + 1] = group ? group.index : -1;
-  scene.matE[base + 2] = power;
-  scene.matE[base + 3] = scroll;
+  scene.matE[base + 2] = material.engineType || 0;
+  scene.matE[base + 3] = material.engineType ? 1.0 : (material.power ?? 1.0);
 
   if (group) fitGroup(mesh, modelView);
 }
+
+function addInstance(model, modelView, params = null) {
+  if (scene.instCount >= MAX_INSTANCES) throw new Error(`more than ${MAX_INSTANCES} instances`);
+  const inst = scene.instCount++;
+  invertAffineRows(modelView, scene.instInv, inst * 12);
+  const base = inst * 4;
+  const c = model.boxCenter, h = model.boxHalf;
+  scene.instBoxCenter[base]     = c[0];
+  scene.instBoxCenter[base + 1] = c[1];
+  scene.instBoxCenter[base + 2] = c[2];
+  scene.instBoxCenter[base + 3] = 0;
+
+  scene.instBoxHalf[base]     = h[0];
+  scene.instBoxHalf[base + 1] = h[1];
+  scene.instBoxHalf[base + 2] = h[2];
+  scene.instBoxHalf[base + 3] = 0;
+
+  scene.instInfo[base]     = model.primStart;
+  scene.instInfo[base + 1] = model.primStart + model.primCount;
+  scene.instInfo[base + 2] = model.groupStart;
+  scene.instInfo[base + 3] = model.groupCount;
+
+  if (params) {
+    scene.instParams[base]     = params.impulse ?? 1;
+    scene.instParams[base + 1] = params.coils ?? 1;
+    scene.instParams[base + 2] = params.bussard ?? 1;
+    scene.instParams[base + 3] = params.scroll ?? 0;
+  } else {
+    scene.instParams[base]     = 1;
+    scene.instParams[base + 1] = 1;
+    scene.instParams[base + 2] = 1;
+    scene.instParams[base + 3] = 0;
+  }
+}
+window.addInstance = addInstance;
 
 // The parts drawn between beginGroup(frame) and endGroup() are boxed together,
 // so the shader can skip them all for a ray that misses the box. The box is
@@ -411,6 +452,52 @@ function bindTextures() {
     gl.bindTexture(gl.TEXTURE_2D, texture);
   });
 }
+
+let GALAXY_MODEL = null, PLANET_MODEL = null, MOON_MODEL = null;
+function initModels() {
+  scene.count = 0;
+  scene.groupCount = 0;
+
+  const shipStart = scene.count, shipGrpStart = scene.groupCount;
+  drawShip(identity());
+  GALAXY_MODEL = {
+    id: 0,
+    primStart: shipStart,
+    primCount: scene.count - shipStart,
+    groupStart: shipGrpStart,
+    groupCount: scene.groupCount - shipGrpStart,
+    boxCenter: [0, 0, 0],
+    boxHalf: [2.35, 0.75, 3.20]
+  };
+
+  const planetStart = scene.count, planetGrpStart = scene.groupCount;
+  drawPrimitive(planetMesh, planetTexture, BUMP_MAPPING, identity(), PLANET_MATERIAL);
+  PLANET_MODEL = {
+    id: 1,
+    primStart: planetStart,
+    primCount: scene.count - planetStart,
+    groupStart: planetGrpStart,
+    groupCount: scene.groupCount - planetGrpStart,
+    boxCenter: [0, 0, 0],
+    boxHalf: [1.05, 1.05, 1.05]
+  };
+
+  const moonStart = scene.count, moonGrpStart = scene.groupCount;
+  drawPrimitive(sphereMesh, null, BUMP_MAPPING, identity(), MOON_MATERIAL);
+  MOON_MODEL = {
+    id: 2,
+    primStart: moonStart,
+    primCount: scene.count - moonStart,
+    groupStart: moonGrpStart,
+    groupCount: scene.groupCount - moonGrpStart,
+    boxCenter: [0, 0, 0],
+    boxHalf: [1.05, 1.05, 1.05]
+  };
+}
+initModels();
+window.GALAXY_MODEL = GALAXY_MODEL;
+window.PLANET_MODEL = PLANET_MODEL;
+window.MOON_MODEL = MOON_MODEL;
 
 // ---------------------------------------------------------------------------
 // Canvas and lens
@@ -660,7 +747,7 @@ function updateStats(nowMs, frameDelta, cpuMs, ship) {
       statEls.scale.textContent = `${pct}% @ ${dpr}× DPR`;
     }
     if (statEls.prims) {
-      statEls.prims.textContent = `${scene.count} (${scene.groupCount} grp)`;
+      statEls.prims.textContent = `${scene.count} prims, ${scene.instCount} insts (${scene.groupCount} grp)`;
     }
     if (statEls.bounces) {
       const sh = controls.shadows ? "+shd" : "";
@@ -1025,6 +1112,10 @@ function resetScene(time) {
   resetFreeCamera();
   sceneStart = time;
   resetWorld();
+  const shipCount = Math.max(1, Math.min(MAX_INSTANCES - 2, Number(presets.get("ships") || (presets.has("wingman") ? 2 : 1))));
+  for (let s = 1; s < shipCount; s++) {
+    addEntity({ model: "galaxy", rail: companionOrbitPose(s * 0.45) });
+  }
   held.clear();
   dropStick();
   rollHeld = 0;
@@ -1049,6 +1140,13 @@ function uploadScene(view, t, ship) {
   const pixel = pixelAngle();
   gl.uniform1f(u.uPixelAngle, pixel);
 
+  for (let i = 0; i < scene.count; i++) {
+    if (scene.matB[i * 4 + 1] > 0) {
+      scene.matB[i * 4 + 2] = controls.ior;
+    }
+  }
+
+  gl.uniform1i(u.uInstCount, scene.instCount);
   gl.uniform1i(u.uCount, scene.count);
   gl.uniform1i(u.uGroupCount, scene.groupCount);
   gl.bindBuffer(gl.UNIFORM_BUFFER, sceneBuffer);
@@ -1120,8 +1218,7 @@ function stepFrame(now, dt) {
 }
 
 function buildScene({ t, ship, view }, live) {
-  scene.count = 0;
-  scene.groupCount = 0;
+  scene.instCount = 0;
   drawSystem(view, t, ship);
   if (live) {
     plasma.setRate(engines.plasmaRate);

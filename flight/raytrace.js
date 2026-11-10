@@ -22,6 +22,7 @@
 
 const MAX_PRIMS = 32;      // the scene has 32: 30 ship parts, the planet, the moon
 const MAX_GROUPS = 4;      // the ship uses 4: saucer, hull, and each pylon with its nacelle
+const MAX_INSTANCES = 8;   // supports multiple ships + planet + moon
 const MAX_SEGMENTS = 12;   // ray segments traced per pixel, across all branches
 const STACK_SIZE = 4;      // glass branches waiting their turn
 const NUM_LIGHTS = 3;
@@ -70,6 +71,7 @@ precision highp int;
 
 #define MAX_PRIMS ${MAX_PRIMS}
 #define MAX_GROUPS ${MAX_GROUPS}
+#define MAX_INSTANCES ${MAX_INSTANCES}
 #define MAX_SEGMENTS ${MAX_SEGMENTS}
 #define STACK_SIZE ${STACK_SIZE}
 #define NUM_LIGHTS ${NUM_LIGHTS}
@@ -96,22 +98,25 @@ uniform float uFishHalfX, uFishStretch, uFishPivot;
 uniform float uPixelAngle;        // radians across one pixel, mid-frame
 
 // ---- scene -----------------------------------------------------------------
-// The primitives, in a uniform buffer (main.js fills it in this order, std140:
-// every array element one vec4). Plain uniforms run out at a couple of dozen
-// primitives on some GPUs; a block holds far more.
+// The prototype primitives and scene instances in a uniform buffer (std140).
 layout(std140) uniform Scene {
-  vec4 uInv[3 * MAX_PRIMS];       // rows of each primitive's eye-to-object matrix
-  ivec4 uInfo[MAX_PRIMS];         // shape, texture unit, normal map unit (-1 = none), mapping
-  vec4 uMatA[MAX_PRIMS];          // ka, kd, ks, shininess
-  vec4 uMatB[MAX_PRIMS];          // kr (mirror), kt (glass), index of refraction, bump scale
-  vec4 uMatC[MAX_PRIMS];          // atmosphere color, torus tube radius
-  vec4 uMatD[MAX_PRIMS];          // glass absorption per unit length, texture repeats around u
-  vec4 uMatE[MAX_PRIMS];          // glow (emission's strength), group (-1 = none),
-                                  //   an EMISSIVE part's power, and how far its texture slides along z
-  vec4 uGroupInv[3 * MAX_GROUPS]; // rows of each group box's eye-to-box matrix
-  vec4 uGroupHalf[MAX_GROUPS];    // each box's half-size
-  ivec4 uGroupRange[MAX_GROUPS];  // start primitive index, end primitive index
+  vec4 uPrimInv[3 * MAX_PRIMS];       // rows of each prototype primitive's model-to-prim matrix
+  ivec4 uInfo[MAX_PRIMS];             // shape, texture unit, normal map unit (-1 = none), mapping
+  vec4 uMatA[MAX_PRIMS];              // ka, kd, ks, shininess
+  vec4 uMatB[MAX_PRIMS];              // kr (mirror), kt (glass), index of refraction, bump scale
+  vec4 uMatC[MAX_PRIMS];              // atmosphere color, torus tube radius
+  vec4 uMatD[MAX_PRIMS];              // glass absorption per unit length, texture repeats around u
+  vec4 uMatE[MAX_PRIMS];              // glow, group (-1 = none), engine type (0=static, 1=impulse, 2=coils, 3=bussard), base power
+  vec4 uGroupInv[3 * MAX_GROUPS];     // rows of each group box's model-to-box matrix
+  vec4 uGroupHalf[MAX_GROUPS];        // each box's half-size in model space
+  ivec4 uGroupRange[MAX_GROUPS];      // start primitive index, end primitive index
+  vec4 uInstInv[3 * MAX_INSTANCES];   // rows of each instance's eye-to-model matrix
+  vec4 uInstBoxCenter[MAX_INSTANCES]; // instance bounding box center in model space
+  vec4 uInstBoxHalf[MAX_INSTANCES];   // instance bounding box half-size in model space
+  ivec4 uInstInfo[MAX_INSTANCES];     // primStart, primEnd, groupStart, groupCount
+  vec4 uInstParams[MAX_INSTANCES];    // impulse, coils, bussard, scroll
 };
+uniform int uInstCount;
 uniform int uCount, uGroupCount;
 
 uniform vec3 uLightPos[NUM_LIGHTS];     // eye space
@@ -159,9 +164,14 @@ ${textureSwitch(s => `vec2(textureSize(${s}, 0))`)}
 // replaces it only with a nearer hit beyond tmin. n is the outward normal
 // (unnormalized), part says which face was hit, for texturing.
 // ============================================================================
-vec3 toObject(int i, vec3 p, float w) {
+vec3 toModel(int inst, vec3 p, float w) {
   vec4 q = vec4(p, w);
-  return vec3(dot(uInv[3 * i], q), dot(uInv[3 * i + 1], q), dot(uInv[3 * i + 2], q));
+  return vec3(dot(uInstInv[3 * inst], q), dot(uInstInv[3 * inst + 1], q), dot(uInstInv[3 * inst + 2], q));
+}
+
+vec3 toObject(int i, vec3 pModel, float w) {
+  vec4 q = vec4(pModel, w);
+  return vec3(dot(uPrimInv[3 * i], q), dot(uPrimInv[3 * i + 1], q), dot(uPrimInv[3 * i + 2], q));
 }
 
 bool hitSphere(vec3 o, vec3 d, float tmin, inout float t, out vec3 n) {
@@ -304,8 +314,8 @@ bool hitTorus(vec3 o, vec3 d, float r, float tmin, inout float t, out vec3 n) {
   return false;
 }
 
-bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part, out vec3 oo, out vec3 dd) {
-  oo = toObject(i, o, 1.0); dd = toObject(i, d, 0.0);
+bool intersect(int i, vec3 oModel, vec3 dModel, float tmin, inout float t, out vec3 n, out int part, out vec3 oo, out vec3 dd) {
+  oo = toObject(i, oModel, 1.0); dd = toObject(i, dModel, 0.0);
   part = 0;
   int shape = uInfo[i].x;
   if (shape == SPHERE)   return hitSphere(oo, dd, tmin, t, n);
@@ -315,42 +325,73 @@ bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out
   return hitTorus(oo, dd, uMatC[i].w, tmin, t, n);
 }
 
-bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
+bool intersect(int i, vec3 oModel, vec3 dModel, float tmin, inout float t, out vec3 n, out int part) {
   vec3 oo, dd;
-  return intersect(i, o, d, tmin, t, n, part, oo, dd);
+  return intersect(i, oModel, dModel, tmin, t, n, part, oo, dd);
 }
 
-// Does the ray come within group g's box anywhere in (tmin, tmax)?
-bool groupVisible(int g, vec3 o, vec3 d, float tmin, float tmax) {
-  vec4 q = vec4(o, 1.0), v = vec4(d, 0.0);
+// Does the ray come within group g's box in model space anywhere in (tmin, tmax)?
+bool groupVisible(int g, vec3 oModel, vec3 dModel, float tmin, float tmax) {
+  vec4 q = vec4(oModel, 1.0), v = vec4(dModel, 0.0);
   vec3 go = vec3(dot(uGroupInv[3 * g], q), dot(uGroupInv[3 * g + 1], q), dot(uGroupInv[3 * g + 2], q));
   vec3 gd = vec3(dot(uGroupInv[3 * g], v), dot(uGroupInv[3 * g + 1], v), dot(uGroupInv[3 * g + 2], v));
   vec2 span = boxSpan(go, gd, uGroupHalf[g].xyz);
   return span.x <= span.y && span.y > tmin && span.x < tmax;
 }
 
-struct Hit { float t; int id; int part; vec3 n; };
+// Does the ray come within instance inst's bounding box in model space anywhere in (tmin, tmax)?
+bool instanceVisible(int inst, vec3 oModel, vec3 dModel, float tmin, float tmax) {
+  vec3 bo = oModel - uInstBoxCenter[inst].xyz;
+  vec2 span = boxSpan(bo, dModel, uInstBoxHalf[inst].xyz);
+  return span.x <= span.y && span.y > tmin && span.x < tmax;
+}
 
-void traceRange(int start, int end, vec3 o, vec3 d, inout Hit h) {
+struct Hit { float t; int id; int inst; int part; vec3 n; };
+
+void traceRange(int start, int end, int inst, vec3 oModel, vec3 dModel, inout Hit h) {
   for (int i = start; i < end; i++) {
     vec3 n; int part;
-    if (intersect(i, o, d, EPS, h.t, n, part)) { h.id = i; h.n = n; h.part = part; }
+    if (intersect(i, oModel, dModel, EPS, h.t, n, part)) {
+      h.id = i; h.inst = inst; h.n = n; h.part = part;
+    }
   }
 }
 
-// The nearest hit along o + t d, t in (EPS, tmax)
+// The nearest hit along o + t d in eye space
 Hit trace(vec3 o, vec3 d, float tmax) {
   Hit h;
-  h.t = tmax; h.id = -1; h.part = 0; h.n = vec3(0.0, 1.0, 0.0);
-  int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
-  traceRange(0, ungrouped, o, d, h);
-  for (int g = 0; g < MAX_GROUPS; g++) {
-    if (g >= uGroupCount) break;
-    if (!groupVisible(g, o, d, EPS, h.t)) continue;
-    traceRange(uGroupRange[g].x, uGroupRange[g].y, o, d, h);
+  h.t = tmax; h.id = -1; h.inst = -1; h.part = 0; h.n = vec3(0.0, 1.0, 0.0);
+  for (int inst = 0; inst < MAX_INSTANCES; inst++) {
+    if (inst >= uInstCount) break;
+    vec3 oModel = toModel(inst, o, 1.0);
+    vec3 dModel = toModel(inst, d, 0.0);
+    if (!instanceVisible(inst, oModel, dModel, EPS, h.t)) continue;
+
+    ivec4 info = uInstInfo[inst];
+    int primStart = info.x;
+    int primEnd = info.y;
+    int grpStart = info.z;
+    int grpCount = info.w;
+
+    if (grpCount > 0) {
+      int firstGrpPrim = uGroupRange[grpStart].x;
+      if (primStart < firstGrpPrim) {
+        traceRange(primStart, firstGrpPrim, inst, oModel, dModel, h);
+      }
+      for (int g = 0; g < MAX_GROUPS; g++) {
+        if (g >= grpCount) break;
+        int grpIdx = grpStart + g;
+        if (!groupVisible(grpIdx, oModel, dModel, EPS, h.t)) continue;
+        traceRange(uGroupRange[grpIdx].x, uGroupRange[grpIdx].y, inst, oModel, dModel, h);
+      }
+      int lastGrpPrim = uGroupRange[grpStart + grpCount - 1].y;
+      if (lastGrpPrim < primEnd) {
+        traceRange(lastGrpPrim, primEnd, inst, oModel, dModel, h);
+      }
+    } else {
+      traceRange(primStart, primEnd, inst, oModel, dModel, h);
+    }
   }
-  int postUngrouped = uGroupCount > 0 ? uGroupRange[uGroupCount - 1].y : uCount;
-  traceRange(postUngrouped, uCount, o, d, h);
   return h;
 }
 
@@ -363,11 +404,11 @@ float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
   return max(min((-b + s) / a, tmax) - max((-b - s) / a, tmin), 0.0);
 }
 
-bool transmitRange(int start, int end, vec3 o, vec3 d, float dist, inout vec3 tr) {
+bool transmitRange(int start, int end, int inst, vec3 oModel, vec3 dModel, float dist, inout vec3 tr) {
   for (int i = start; i < end; i++) {
     if (uInfo[i].w == EMISSIVE) continue;
     float t = dist; vec3 n; int part; vec3 oo, dd;
-    if (intersect(i, o, d, EPS, t, n, part, oo, dd)) {
+    if (intersect(i, oModel, dModel, EPS, t, n, part, oo, dd)) {
       float kt = uMatB[i].y;
       if (kt <= 0.0) return false;
       float chord = uInfo[i].x == SPHERE
@@ -378,22 +419,40 @@ bool transmitRange(int start, int end, vec3 o, vec3 d, float dist, inout vec3 tr
   return true;
 }
 
-// Shadow ray: how much light gets from o to dist along d. An opaque part
-// blocks it; glass lets through its transmittance, less what it absorbs over
-// the chord the ray cuts through it (Beer-Lambert), so glass casts a pale
-// colored shadow instead of a black one. Glowing parts are light sources
-// themselves and cast none. (The glass parts are all spheres.)
+// Shadow ray: how much light gets from o to dist along d in eye space.
 vec3 transmittance(vec3 o, vec3 d, float dist) {
   vec3 tr = vec3(1.0);
-  int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
-  if (!transmitRange(0, ungrouped, o, d, dist, tr)) return vec3(0.0);
-  for (int g = 0; g < MAX_GROUPS; g++) {
-    if (g >= uGroupCount) break;
-    if (!groupVisible(g, o, d, EPS, dist)) continue;
-    if (!transmitRange(uGroupRange[g].x, uGroupRange[g].y, o, d, dist, tr)) return vec3(0.0);
+  for (int inst = 0; inst < MAX_INSTANCES; inst++) {
+    if (inst >= uInstCount) break;
+    vec3 oModel = toModel(inst, o, 1.0);
+    vec3 dModel = toModel(inst, d, 0.0);
+    if (!instanceVisible(inst, oModel, dModel, EPS, dist)) continue;
+
+    ivec4 info = uInstInfo[inst];
+    int primStart = info.x;
+    int primEnd = info.y;
+    int grpStart = info.z;
+    int grpCount = info.w;
+
+    if (grpCount > 0) {
+      int firstGrpPrim = uGroupRange[grpStart].x;
+      if (primStart < firstGrpPrim) {
+        if (!transmitRange(primStart, firstGrpPrim, inst, oModel, dModel, dist, tr)) return vec3(0.0);
+      }
+      for (int g = 0; g < MAX_GROUPS; g++) {
+        if (g >= grpCount) break;
+        int grpIdx = grpStart + g;
+        if (!groupVisible(grpIdx, oModel, dModel, EPS, dist)) continue;
+        if (!transmitRange(uGroupRange[grpIdx].x, uGroupRange[grpIdx].y, inst, oModel, dModel, dist, tr)) return vec3(0.0);
+      }
+      int lastGrpPrim = uGroupRange[grpStart + grpCount - 1].y;
+      if (lastGrpPrim < primEnd) {
+        if (!transmitRange(lastGrpPrim, primEnd, inst, oModel, dModel, dist, tr)) return vec3(0.0);
+      }
+    } else {
+      if (!transmitRange(primStart, primEnd, inst, oModel, dModel, dist, tr)) return vec3(0.0);
+    }
   }
-  int postUngrouped = uGroupCount > 0 ? uGroupRange[uGroupCount - 1].y : uCount;
-  if (!transmitRange(postUngrouped, uCount, o, d, dist, tr)) return vec3(0.0);
   return tr;
 }
 
@@ -465,13 +524,18 @@ float height(int unit, vec2 uv, vec2 gx, vec2 gy) {
 // far apart they land in the texture.
 Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   int i = h.id;
+  int inst = h.inst;
   ivec4 info = uInfo[i];
   float repeats = uMatD[i].w;
   Surface s;
   s.p = o + d * h.t;
-  vec3 po = toObject(i, s.p, 1.0);
-  // The inverse's transpose takes normals out; its inverse takes tangents
-  mat3 normalToEye = mat3(uInv[3 * i].xyz, uInv[3 * i + 1].xyz, uInv[3 * i + 2].xyz);
+  vec3 pModel = toModel(inst, s.p, 1.0);
+  vec3 po = toObject(i, pModel, 1.0);
+
+  mat3 normToModel = mat3(uPrimInv[3 * i].xyz, uPrimInv[3 * i + 1].xyz, uPrimInv[3 * i + 2].xyz);
+  mat3 modelToEye = mat3(uInstInv[3 * inst].xyz, uInstInv[3 * inst + 1].xyz, uInstInv[3 * inst + 2].xyz);
+  mat3 normalToEye = modelToEye * normToModel;
+
   s.ng = normalize(normalToEye * h.n);
   vec3 T = inverse(transpose(normalToEye)) * tangentAt(info.x, h.part, po);
   T = normalize(T - dot(T, s.ng) * s.ng);
@@ -484,14 +548,17 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
 
   // A scrolling glow (the warp grilles) slides its texture along the part's
   // z axis, the same way on every face, so the flow runs aft on both sides
-  vec3 slide = vec3(0.0, 0.0, uMatE[i].w);
+  float scroll = (uMatE[i].z == 2.0) ? uInstParams[inst].w : uMatE[i].w;
+  vec3 slide = vec3(0.0, 0.0, scroll);
   vec2 uv = uvAt(info.x, h.part, po - slide, repeats);
   // Footprint across the ray, and along it, stretched by how obliquely it lands
   vec3 e1 = cross(d, s.ng);
   e1 = dot(e1, e1) > 1e-8 ? normalize(e1) : T;
   vec3 e2 = cross(s.ng, e1) / max(abs(dot(d, s.ng)), 0.15);
-  vec2 d1 = uvAt(info.x, h.part, toObject(i, s.p + e1 * footprint, 1.0) - slide, repeats) - uv;
-  vec2 d2 = uvAt(info.x, h.part, toObject(i, s.p + e2 * footprint, 1.0) - slide, repeats) - uv;
+  vec3 p1 = toObject(i, toModel(inst, s.p + e1 * footprint, 1.0), 1.0);
+  vec3 p2 = toObject(i, toModel(inst, s.p + e2 * footprint, 1.0), 1.0);
+  vec2 d1 = uvAt(info.x, h.part, p1 - slide, repeats) - uv;
+  vec2 d2 = uvAt(info.x, h.part, p2 - slide, repeats) - uv;
   d1 -= round(d1); d2 -= round(d2);     // across a seam, the short way round
 
   vec4 tex = sampleTex(info.y, uv, d1, d2);
@@ -879,7 +946,11 @@ void main() {
     p.travelled += h.t;
     Surface s = surfaceAt(p.o, p.d, h, p.travelled * uPixelAngle);
     if (s.emissive) {
-      color += p.weight * s.base * uMatE[h.id].z;   // its power (the engines' levels, ship.js)
+      float power = uMatE[h.id].w;
+      if (uMatE[h.id].z == 1.0) power = uInstParams[h.inst].x;      // impulse
+      else if (uMatE[h.id].z == 2.0) power = uInstParams[h.inst].y; // coils
+      else if (uMatE[h.id].z == 3.0) power = uInstParams[h.inst].z; // bussards
+      color += p.weight * s.base * power;
       live = false;
       continue;
     }

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html><body><pre id="out"></pre>
+<script src="transforms.js"></script>
+<script src="scene.js"></script>
+<script src="world.js"></script>
+<script>
+const out = [];
+const check = (name, ok, detail = "") => out.push(`${ok ? "PASS" : "FAIL"} ${name} ${detail}`);
+const near = (a, b, eps = 1e-4) => a.every((v, i) => Math.abs(v - b[i]) < eps);
+const f = v => v.map(x => x.toFixed(4)).join(",");
+try {
+  // quaternion helpers agree with the matrices
+  const m = multiply(rotateX(0.4), multiply(rotateY(-1.1), rotateZ(0.7)));
+  const q = quatFromMatrix(m);
+  check("quatRotate = matrix", near(quatRotate(q, [0.3, -0.5, 0.8]), transformVector(m, [0.3, -0.5, 0.8])));
+  check("quatMul = matrix product", near(
+    quatRotate(quatMul(quatFromMatrix(rotateX(0.4)), quatFromMatrix(rotateY(-1.1))), [0, 0, 1]),
+    transformVector(multiply(rotateX(0.4), rotateY(-1.1)), [0, 0, 1])));
+  check("rotVec = rotateY", near(quatRotate(quatFromRotVec([0, 0.6, 0]), [0, 0, 1]), transformVector(rotateY(0.6), [0, 0, 1])));
+
+  // rail: nose along velocity, speed = orbital speed
+  const p = orbitPose(3.7);
+  check("rail nose along vel", near(vmul(quatRotate(p.quat, [0, 0, 1]), ORBIT_SPEED), p.vel), f(p.vel));
+  const p2 = orbitPose(3.701);
+  check("rail vel = d pos/dt", near(vmul(vsub(p2.pos, p.pos), 1000), p.vel, 2e-3));
+
+  // orbit, then take the helm: pose and velocity carry over
+  resetWorld();
+  let s0 = advanceWorld(5, 1 / 60);
+  check("orbit: no helm", !s0.helm && !offOrbit());
+  requestEngage();
+  let s1 = advanceWorld(5 + 1 / 60, 1 / 60);
+  const railNow = orbitPose(5 + 1 / 60);
+  check("handover continuous pos", near(s1.pos, railNow.pos, 2e-2), f(s1.pos) + " vs " + f(railNow.pos));
+  check("handover helm", s1.helm && offOrbit() && engageElapsed(5 + 1 / 60) === 0);
+  check("handover speed", Math.abs(s1.speed - ORBIT_SPEED) < 1e-2, s1.speed.toFixed(4));
+
+  // hands off: flies straight at orbital speed
+  let t = 5 + 1 / 60, s;
+  const run = (secs, set = {}) => { Object.assign(helm, { pitch: 0, yaw: 0, roll: 0, leverRate: 0 }, set);
+    for (let i = 0; i < secs * 60; i++) { t += 1 / 60; s = advanceWorld(t, 1 / 60); } return s; };
+  const nose = st => quatRotate(st.quat, [0, 0, 1]);
+  const n0 = nose(s1);
+  run(1);
+  check("straight: nose unchanged", near(nose(s), n0, 1e-3));
+  check("straight: speed held", Math.abs(s.speed - ORBIT_SPEED) < 0.02, s.speed.toFixed(4));
+
+  // each axis turns the way the helm says, about the ship's own axes
+  const up0 = quatRotate(s.quat, [0, 1, 0]), port0 = quatRotate(s.quat, [1, 0, 0]);
+  run(0.5, { pitch: 1 });
+  check("pitch +1 lifts the nose", vdot(nose(s), up0) > 0.1, vdot(nose(s), up0).toFixed(3));
+  run(2);
+  const up1 = quatRotate(s.quat, [0, 1, 0]), port1 = quatRotate(s.quat, [1, 0, 0]);
+  run(0.5, { yaw: 1 });
+  check("yaw +1 swings the nose to starboard", vdot(nose(s), port1) < -0.05, vdot(nose(s), port1).toFixed(3));
+  run(2);
+  const up2 = quatRotate(s.quat, [0, 1, 0]), port2 = quatRotate(s.quat, [1, 0, 0]), n2 = nose(s);
+  run(0.5, { roll: 1 });
+  check("roll +1 drops the starboard side", vdot(quatRotate(s.quat, [1, 0, 0]), up2) > 0.1,
+    vdot(quatRotate(s.quat, [1, 0, 0]), up2).toFixed(3));
+  check("roll leaves the nose alone", near(nose(s), n2, 1e-3));
+  run(3);
+  check("quat stays unit", Math.abs(Math.hypot(...s.quat) - 1) < 1e-6);
+  check("turning stops when released", Math.hypot(...world.player.angVel) < 1e-3);
+
+  // throttle
+  run(4, { leverRate: 1 });
+  check("full throttle = impulse", Math.abs(s.speed - FLIGHT.impulse) < 0.1, s.speed.toFixed(3));
+  run(6, { leverRate: -1 });
+  check("zero throttle stops", s.speed < 0.05, s.speed.toFixed(3));
+
+  // warp: charge, jump, drop out
+  helm.toggleWarp = true; run(0.5);
+  check("warp charging", s.warp.state === "charge" && s.warpLevel === 0);
+  run(1.5);
+  check("warp on", s.warp.state === "on" && s.warpLevel > 0.99 && Math.abs(s.speed - FLIGHT.warp) < 0.2,
+    `${s.warp.state} level ${s.warpLevel.toFixed(3)} speed ${s.speed.toFixed(2)}`);
+  helm.toggleWarp = true; run(0.2);
+  check("warp level falls smoothly", s.warp.state === "off" && s.warpLevel > 0.2 && s.warpLevel < 1, s.warpLevel.toFixed(3));
+  run(2);
+  check("warp off", s.warpLevel === 0 && s.speed < 1.0, `${s.warpLevel} ${s.speed.toFixed(3)}`);
+
+  // collision: aim at the planet from outside and fly in at full throttle
+  const e = world.player;
+  e.pos = [0, 0, -8]; e.quat = [0, 0, 0, 1]; e.vel = [0, 0, 0]; e.prev = null; helm.lever = 1;
+  let minR = Infinity;
+  for (let i = 0; i < 600; i++) { t += 1 / 60; s = advanceWorld(t, 1 / 60); minR = Math.min(minR, Math.hypot(...world.player.pos)); }
+  check("planet is solid", minR >= PLANET.radius + FLIGHT.radius - 1e-6, minR.toFixed(4));
+
+  // a long frame steps the same as short ones (fixed step)
+  resetWorld(); requestEngage(); advanceWorld(1, 0.016);
+  for (let i = 0; i < 100; i++) { helm.pitch = 0.5; helm.roll = 0.3; advanceWorld(1 + (i + 1) * 0.02, 0.02); }
+  const a = world.player.pos.slice();
+  resetWorld(); requestEngage(); advanceWorld(1, 0.016);
+  for (let i = 0; i < 20; i++) { helm.pitch = 0.5; helm.roll = 0.3; advanceWorld(1 + (i + 1) * 0.1, 0.1); }
+  check("frame-rate independent", near(a, world.player.pos, 2e-3), f(a) + " vs " + f(world.player.pos));
+
+  // reset
+  requestReset(10, 0.45);
+  check("reset pending then due", !resetDue(10.2) && resetDue(10.45));
+} catch (err) { out.push("ERROR " + err.stack); }
+document.getElementById("out").textContent = out.join("\n");
+</script></body></html>

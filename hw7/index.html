@@ -119,6 +119,12 @@
       #controls .checks input { width: 20px; height: 20px; }
       #statsOverlay button#statsClose { font-size: 20px; padding: 0.1em 0.4em; }
     }
+    #controls .row select {
+      font: inherit; color: var(--ink); cursor: pointer;
+      background: rgba(4, 12, 24, 0.85); border: 1px solid rgba(var(--glow), 0.45);
+      border-radius: 6px; padding: 0.1em 0.3em; accent-color: rgb(var(--glow));
+    }
+    #controls .row select option { background: #06101e; }
     #controls output { font-variant-numeric: tabular-nums; opacity: 0.8; }
     #controls .checks { display: flex; flex-wrap: wrap; gap: 0.5em 1.1em; margin-top: 0.7em; }
     #controls .checks label { display: flex; align-items: center; gap: 0.4em; cursor: pointer; }
@@ -213,6 +219,23 @@
 
   <details id="controls" open>
     <summary>Ray tracer</summary>
+    <label class="row">Resolution
+      <select id="resolution">
+        <option value="0" selected>Auto</option>
+        <option value="1440">1440p</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="540">540p</option>
+        <option value="360">360p</option>
+      </select></label>
+    <label class="row">FPS cap
+      <select id="fps">
+        <option value="0" selected>Unlimited</option>
+        <option value="120">120</option>
+        <option value="60">60</option>
+        <option value="30">30</option>
+        <option value="20">20</option>
+      </select></label>
     <label class="row">Bounces <output for="bounces"></output>
       <input type="range" id="bounces" min="0" max="6" step="1" value="3"></label>
     <label class="row">Sun <output for="sun"></output>
@@ -278,13 +301,13 @@
 
   <!-- ?v= changes with each deploy, so a browser never runs a cached script
        from the last one alongside new ones -->
-  <script src="transforms.js?v=7"></script>
-  <script src="raytrace.js?v=7"></script>
-  <script src="textures.js?v=7"></script>
-  <script src="ship.js?v=7"></script>
-  <script src="camera.js?v=7"></script>
-  <script src="scene.js?v=7"></script>
-  <script src="main.js?v=7"></script>
+  <script src="transforms.js?v=8"></script>
+  <script src="raytrace.js?v=8"></script>
+  <script src="textures.js?v=8"></script>
+  <script src="ship.js?v=8"></script>
+  <script src="camera.js?v=8"></script>
+  <script src="scene.js?v=8"></script>
+  <script src="main.js?v=8"></script>
 </body>
 
 </html>

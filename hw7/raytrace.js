@@ -38,6 +38,14 @@ const TEXTURE_UNITS = 16;
 // its light is spread along that path
 const STREAK = { shutter: 0.45, max: 40, dim: 0.1 };
 
+// At warp a second, finer star layer fades in over the first: a grid `grid`
+// cells to a cube face's side, each `density` times as likely to hold a star
+// as a base cell (capped at 0.9), drawn at `level` of the base stars'
+// brightness so the base streaks still stand out in front. The sky goes from
+// about 3000 stars to about 20000. It fades in over `fadeIn` seconds from the
+// jump.
+const WARP_STARS = { grid: 128, density: 1.5, level: 0.8, fadeIn: 0.5 };
+
 const RAYTRACE_VS = `#version 300 es
 // One triangle that covers the screen: (-1,-1), (3,-1), (-1,3)
 void main() {
@@ -119,6 +127,7 @@ uniform float uSkyRadius;
 uniform vec3 uStreak;         // the stars' velocity past the eye, eye space
 uniform float uShutter, uMaxStreak, uStreakDim;
 uniform float uStarScale;     // pixels rendered per CSS pixel
+uniform float uWarpStars;     // 0..1, how far the warp star layer has faded in
 
 out vec4 fragColor;
 
@@ -510,6 +519,9 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
 // through orange, each twinkling on its own phase.
 // ============================================================================
 #define STAR_GRID 64.0
+#define WARP_STAR_GRID ${WARP_STARS.grid.toFixed(1)}
+#define WARP_STAR_DENSITY ${WARP_STARS.density.toFixed(2)}
+#define WARP_STAR_LEVEL ${WARP_STARS.level.toFixed(2)}
 
 uvec3 pcg3d(uvec3 v) {
   v = v * 1664525u + 1013904223u;
@@ -534,23 +546,24 @@ vec3 cubeDir(int face, vec2 uv) {
 
 // The star in the cell under direction s (sky frame), lit for a pixel whose
 // streak runs from s0 back to s1: 0 if the cell is empty or the star is off
-// the streak
-vec3 starLight(vec3 s, vec3 s0, vec3 s1, float streakPx) {
+// the streak. grid and density pick the layer (base or warp), seed
+// keeps the layers' stars apart.
+vec3 starLight(vec3 s, vec3 s0, vec3 s1, float streakPx, float grid, float density, uint seed) {
   vec2 uv;
   int face = cubeFace(s, uv);
-  vec2 cell = floor((uv * 0.5 + 0.5) * STAR_GRID);
-  vec2 mid = (cell + 0.5) / STAR_GRID * 2.0 - 1.0;
-  vec3 r1 = random3(uvec3(uvec2(cell), uint(face) + 7u));
-  vec3 r2 = random3(uvec3(uvec2(cell), uint(face) + 101u));
+  vec2 cell = floor((uv * 0.5 + 0.5) * grid);
+  vec2 mid = (cell + 0.5) / grid * 2.0 - 1.0;
+  vec3 r1 = random3(uvec3(uvec2(cell), uint(face) + 7u + seed));
+  vec3 r2 = random3(uvec3(uvec2(cell), uint(face) + 101u + seed));
   // Cells near a face's corners cover less of the sky, so they hold a star
   // less often, keeping the density even; the band packs more in near the
   // sky's equator. Together: about 3000 stars, as in HW6.
   vec3 centerDir = normalize(cubeDir(face, mid));
   float area = pow(1.0 + dot(mid, mid), -1.5);
   float band = 1.0 + 2.28 * exp(-centerDir.y * centerDir.y / (2.0 * 0.175 * 0.175));
-  if (r1.x > 0.155 * area * band) return vec3(0.0);
+  if (r1.x > min(0.9, 0.155 * area * band * density)) return vec3(0.0);
 
-  vec3 star = normalize(cubeDir(face, (cell + 0.15 + 0.7 * r1.yz) / STAR_GRID * 2.0 - 1.0));
+  vec3 star = normalize(cubeDir(face, (cell + 0.15 + 0.7 * r1.yz) / grid * 2.0 - 1.0));
   float mag = r2.x * r2.x * r2.x;
   float temp = r2.y;
   float level = 0.45 + 0.55 * mag;
@@ -581,7 +594,7 @@ vec3 sky(vec3 o, vec3 d) {
   float t = disc > 0.0 ? -b + sqrt(disc) : -1.0;
   vec3 p = t > 0.0 ? oc + d * t : d;
   vec3 s0 = normalize(p * uSkyRot);           // into the sky's own frame
-  if (dot(uStreak, uStreak) == 0.0) return starLight(s0, s0, s0, 0.0);
+  if (dot(uStreak, uStreak) == 0.0) return starLight(s0, s0, s0, 0.0, STAR_GRID, 1.0, 0u);
 
   // At warp a pixel sees every star that passed through it during the
   // shutter: the ones that were, shutter seconds ago, back along the streak
@@ -593,13 +606,18 @@ vec3 sky(vec3 o, vec3 d) {
   }
   float streakPx = angle / uPixelAngle;
   // Look in every cell the streak crosses, a half cell apart, for the
-  // brightest star on it
-  int taps = int(clamp(ceil(angle * STAR_GRID * 4.0 / PI) + 1.0, 1.0, 16.0));
+  // brightest star on it; once the warp layer is in, its finer cells set the
+  // spacing for both
+  bool dense = uWarpStars > 0.0;
+  float grid = dense ? WARP_STAR_GRID : STAR_GRID;
+  int taps = int(clamp(ceil(angle * grid * 4.0 / PI) + 1.0, 1.0, 16.0));
   vec3 best = vec3(0.0);
   for (int k = 0; k < 16; k++) {
     if (k >= taps) break;
     vec3 s = normalize(mix(s0, s1, taps == 1 ? 0.0 : float(k) / float(taps - 1)));
-    best = max(best, starLight(s, s0, s1, streakPx));
+    best = max(best, starLight(s, s0, s1, streakPx, STAR_GRID, 1.0, 0u));
+    if (dense) best = max(best, uWarpStars * WARP_STAR_LEVEL *
+      starLight(s, s0, s1, streakPx, WARP_STAR_GRID, WARP_STAR_DENSITY, 1000u));
   }
   return best;
 }

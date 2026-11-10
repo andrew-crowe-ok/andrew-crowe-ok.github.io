@@ -83,17 +83,50 @@ function drawMoon(parent, t) {
 // quaternion, so the frame is translate(pos) * rotation with no axis singled
 // out: pitch, yaw and roll all arrive the same way.
 const NAV_LIGHT_MODEL_OFFSET = [0, 0.12, 2.455];
+const SHIP_LOCAL_MAT = new Float32Array(16);
+const SHIP_MV_MAT = new Float32Array(16);
 
 function drawShipAt(parent, { pos, quat }, engineParams = null, isPlayer = false) {
-  const frame = multiply(parent, multiply(translate(...pos), matrixFromQuat(quat)));
-  const s = ORBIT.shipScale;
-  const modelView = multiply(frame, scale(s, s, s));
   if (typeof addInstance === "function" && typeof GALAXY_MODEL !== "undefined" && GALAXY_MODEL) {
-    addInstance(GALAXY_MODEL, modelView, engineParams || (typeof engines !== "undefined" ? engines : null));
+    const s = ORBIT.shipScale;
+    const x = quat[0], y = quat[1], z = quat[2], w = quat[3];
+    const px = pos[0], py = pos[1], pz = pos[2];
+
+    SHIP_LOCAL_MAT[0]  = (1 - 2 * (y * y + z * z)) * s;
+    SHIP_LOCAL_MAT[1]  = (2 * (x * y + z * w)) * s;
+    SHIP_LOCAL_MAT[2]  = (2 * (x * z - y * w)) * s;
+    SHIP_LOCAL_MAT[3]  = 0;
+
+    SHIP_LOCAL_MAT[4]  = (2 * (x * y - z * w)) * s;
+    SHIP_LOCAL_MAT[5]  = (1 - 2 * (x * x + z * z)) * s;
+    SHIP_LOCAL_MAT[6]  = (2 * (y * z + x * w)) * s;
+    SHIP_LOCAL_MAT[7]  = 0;
+
+    SHIP_LOCAL_MAT[8]  = (2 * (x * z + y * w)) * s;
+    SHIP_LOCAL_MAT[9]  = (2 * (y * z - x * w)) * s;
+    SHIP_LOCAL_MAT[10] = (1 - 2 * (x * x + y * y)) * s;
+    SHIP_LOCAL_MAT[11] = 0;
+
+    SHIP_LOCAL_MAT[12] = px;
+    SHIP_LOCAL_MAT[13] = py;
+    SHIP_LOCAL_MAT[14] = pz;
+    SHIP_LOCAL_MAT[15] = 1;
+
+    multiplyInto(parent, SHIP_LOCAL_MAT, SHIP_MV_MAT);
+    addInstance(GALAXY_MODEL, SHIP_MV_MAT, engineParams || (typeof engines !== "undefined" ? engines : null));
     if (isPlayer && typeof setNavLight === "function") {
-      setNavLight(transformPoint(modelView, NAV_LIGHT_MODEL_OFFSET));
+      const lx = NAV_LIGHT_MODEL_OFFSET[0], ly = NAV_LIGHT_MODEL_OFFSET[1], lz = NAV_LIGHT_MODEL_OFFSET[2];
+      const m = SHIP_MV_MAT;
+      setNavLight(
+        m[0] * lx + m[4] * ly + m[8] * lz + m[12],
+        m[1] * lx + m[5] * ly + m[9] * lz + m[13],
+        m[2] * lx + m[6] * ly + m[10] * lz + m[14]
+      );
     }
   } else if (typeof drawShip === "function") {
+    const frame = multiply(parent, multiply(translate(...pos), matrixFromQuat(quat)));
+    const s = ORBIT.shipScale;
+    const modelView = multiply(frame, scale(s, s, s));
     drawShip(modelView);
   }
 }
@@ -105,6 +138,7 @@ function drawEntities(parent, t, playerShip) {
 
   if (typeof world !== "undefined" && world.entities && world.entities.length > 1) {
     for (let i = 0; i < world.entities.length; i++) {
+      if (typeof scene !== "undefined" && typeof MAX_INSTANCES !== "undefined" && scene.instCount >= MAX_INSTANCES) break;
       const e = world.entities[i];
       if (e === world.player) continue;
       const pose = e.rail ? e : (e.pose || e);

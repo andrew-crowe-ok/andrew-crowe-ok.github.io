@@ -292,7 +292,13 @@ function endGroup() {
 }
 
 // The ship's own light, in eye space (ship.js)
-function setNavLight(pos) { scene.nav = pos; }
+function setNavLight(x, y, z) {
+  if (typeof y === "number") {
+    scene.nav[0] = x; scene.nav[1] = y; scene.nav[2] = z;
+  } else {
+    scene.nav[0] = x[0]; scene.nav[1] = x[1]; scene.nav[2] = x[2];
+  }
+}
 
 // The sky's frame (scene.js): where its center is and how it is turned, in
 // eye space, and the stars' velocity past the eye at warp

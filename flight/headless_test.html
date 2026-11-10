@@ -255,6 +255,36 @@
       // 12. Test companion persistence across orbit resets
       resetScene(1.0);
       check("resetScene: companion preserved in orbit when toggle active", world.entities.length === 2 && !!world.entities[1].rail);
+
+      // 13. Test Patrol Controller AI rendering in WebGL scene
+      resetWorld();
+      requestEngage();
+      const pShip = addEntity({
+        model: "galaxy",
+        rail: null,
+        controller: createPatrolController({ waypoints: [[12, 0, 0], [0, 12, 0]], speed: 0.7 }),
+        pos: [12, 0, -4],
+        quat: [0, 0, 0, 1]
+      });
+      const framePatrol = stepFrame(0.5, 0.016);
+      buildScene(framePatrol, false);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      check("webgl: patrol AI drawArrays NO_ERROR", gl.getError() === gl.NO_ERROR);
+
+      // 14. Robustness: instance capping in drawEntities prevents MAX_INSTANCES throw
+      for (let i = 0; i < 10; i++) {
+        addEntity({ model: "galaxy", rail: null, pos: [15 + i * 2, 0, 0] });
+      }
+      let overflowSafe = true;
+      try {
+        const frameOverflow = stepFrame(0.6, 0.016);
+        buildScene(frameOverflow, false);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      } catch (e) {
+        overflowSafe = false;
+      }
+      check("robustness: excess entities capped at MAX_INSTANCES without crash", overflowSafe && scene.instCount === 8);
+      check("webgl: capped drawArrays NO_ERROR", gl.getError() === gl.NO_ERROR);
     } catch (err) {
       out.push("ERROR " + err.stack);
     }

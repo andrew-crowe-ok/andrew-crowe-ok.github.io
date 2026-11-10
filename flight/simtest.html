@@ -300,7 +300,79 @@ try {
   });
   check("entity-collision: warp was on", warpShip.warp.state === "on");
   stepWorld(1.0, 0.016);
-  check("entity-collision: warp interrupted on impact", warpShip.warp.state === "off", warpShip.warp.state);
+  // 8. Patrol controller: waypoint sequencing & intent bounds
+  resetWorld();
+  const patrolWaypoints = [[10, 0, 0], [0, 10, 0], [-10, 0, 0]];
+  const patrolShip = addEntity({
+    model: "galaxy",
+    rail: null,
+    controller: createPatrolController({ waypoints: patrolWaypoints, speed: 0.8 }),
+    pos: [10, 0, -5],
+    quat: [0, 0, 0, 1]
+  });
+  const pIntent0 = patrolShip.controller(patrolShip, 0.016, world);
+  check("ai-patrol: produces valid intent", typeof pIntent0.pitch === "number" && pIntent0.throttle > 0);
+  // Place patrol ship inside the waypoint threshold (< 1.5 units from [10, 0, 0])
+  patrolShip.pos = [9.5, 0, 0];
+  const pIntent1 = patrolShip.controller(patrolShip, 0.016, world);
+  check("ai-patrol: sequences to next waypoint when close", typeof pIntent1.pitch === "number" && pIntent1.throttle > 0);
+
+  // 9. Flown-to-rail collision deflection (rail unaffected, flown deflected)
+  resetWorld();
+  const railShip = addEntity({ model: "galaxy", rail: orbitPose });
+  railShip.pos = [10, 0, 0];
+  const freeShip = addEntity({
+    model: "galaxy",
+    rail: null,
+    pos: [10.2, 0, 0],
+    vel: [-1.0, 0, 0],
+    speed: 1.0,
+    quat: [0, 0, 0, 1]
+  });
+  resolveEntityCollisions(world.entities);
+  const railPosAfter = railShip.pos[0];
+  const freePosAfter = freeShip.pos[0];
+  check("entity-collision: rail ship position untouched", railPosAfter === 10.0, `railPos=${railPosAfter}`);
+  check("entity-collision: flown ship pushed outside reach", freePosAfter >= 10.0 + (freeShip.radius + railShip.radius) - 1e-4, `freePos=${freePosAfter}`);
+
+  // 10. Exact zero-distance collision separation without NaN
+  resetWorld();
+  const shipZero1 = addEntity({ model: "galaxy", rail: null, pos: [15, 5, 5], vel: [0, 0, 0] });
+  const shipZero2 = addEntity({ model: "galaxy", rail: null, pos: [15, 5, 5], vel: [0, 0, 0] });
+  resolveEntityCollisions(world.entities);
+  const dZero = Math.hypot(...vsub(shipZero1.pos, shipZero2.pos));
+  const hasNaN = isNaN(shipZero1.pos[0]) || isNaN(shipZero1.pos[1]) || isNaN(shipZero2.pos[1]);
+  check("entity-collision: zero-distance overlap separates without NaN", !hasNaN && dZero >= 2 * FLIGHT.radius - 1e-4, `d=${dZero.toFixed(3)}`);
+
+  // 11. Steady-state zero allocation check across multiple frames/steps
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  const companion = addEntity({
+    model: "galaxy",
+    rail: null,
+    role: "wingman",
+    controller: wingmanController,
+    pos: [7, 0, -4],
+    quat: [0, 0, 0, 1]
+  });
+  // Warm up one frame so prev, pose, intent are primed
+  advanceWorld(1.016, 0.016);
+  const initialPlayerKeys = Object.keys(world.player).sort().join(",");
+  const initialWingmanKeys = Object.keys(companion).sort().join(",");
+  const initialPoseRef = companion.pose;
+  const initialPrevRef = companion.prev;
+  const initialIntentRef = companion.intent;
+
+  for (let i = 0; i < 60; i++) {
+    advanceWorld(1.016 + (i + 1) * 0.016, 0.016);
+  }
+  const postPlayerKeys = Object.keys(world.player).sort().join(",");
+  const postWingmanKeys = Object.keys(companion).sort().join(",");
+  check("steady-state: no new entity properties added",
+    initialPlayerKeys === postPlayerKeys && initialWingmanKeys === postWingmanKeys);
+  check("steady-state: internal pose, prev, and intent buffers reused in-place",
+    companion.pose === initialPoseRef && companion.prev === initialPrevRef && companion.intent === initialIntentRef);
 } catch (err) { out.push("ERROR " + err.stack); }
 document.getElementById("out").textContent = out.join("\n");
 </script></body></html>

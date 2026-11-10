@@ -134,7 +134,9 @@ gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, sceneBuffer);
 
 // The three rows of an affine matrix, which is all the shader needs of it
 function affineRows(m, out, at) {
-  for (let i = 0; i < 3; i++) out.set([m[i], m[4 + i], m[8 + i], m[12 + i]], at + 4 * i);
+  out[at]      = m[0]; out[at + 1]  = m[4]; out[at + 2]  = m[8];  out[at + 3]  = m[12];
+  out[at + 4]  = m[1]; out[at + 5]  = m[5]; out[at + 6]  = m[9];  out[at + 7]  = m[13];
+  out[at + 8]  = m[2]; out[at + 9]  = m[6]; out[at + 10] = m[10]; out[at + 11] = m[14];
 }
 
 const unitOf = texture => texture ? TEXTURES.indexOf(texture) : -1;
@@ -147,12 +149,37 @@ function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MAT
   // Every glass part takes its index of refraction from the slider
   const ior = kt > 0 ? controls.ior : 1;
   affineRows(invertAffine(modelView), scene.inv, i * 12);
-  scene.info.set([mesh.shape, unitOf(texture), unitOf(normalMap), mapping], i * 4);
-  scene.matA.set([ka, kd, ks, shininess], i * 4);
-  scene.matB.set([kr, kt, ior, bumpScale], i * 4);
-  scene.matC.set([...atmosphere, mesh.tube ?? 0], i * 4);
-  scene.matD.set([...absorb, mesh.repeats], i * 4);
-  scene.matE.set([glow, group ? group.index : -1, power, scroll], i * 4);
+  const base = i * 4;
+  scene.info[base]     = mesh.shape;
+  scene.info[base + 1] = unitOf(texture);
+  scene.info[base + 2] = unitOf(normalMap);
+  scene.info[base + 3] = mapping;
+
+  scene.matA[base]     = ka;
+  scene.matA[base + 1] = kd;
+  scene.matA[base + 2] = ks;
+  scene.matA[base + 3] = shininess;
+
+  scene.matB[base]     = kr;
+  scene.matB[base + 1] = kt;
+  scene.matB[base + 2] = ior;
+  scene.matB[base + 3] = bumpScale;
+
+  scene.matC[base]     = atmosphere[0];
+  scene.matC[base + 1] = atmosphere[1];
+  scene.matC[base + 2] = atmosphere[2];
+  scene.matC[base + 3] = mesh.tube ?? 0;
+
+  scene.matD[base]     = absorb[0];
+  scene.matD[base + 1] = absorb[1];
+  scene.matD[base + 2] = absorb[2];
+  scene.matD[base + 3] = mesh.repeats;
+
+  scene.matE[base]     = glow;
+  scene.matE[base + 1] = group ? group.index : -1;
+  scene.matE[base + 2] = power;
+  scene.matE[base + 3] = scroll;
+
   if (group) fitGroup(mesh, modelView);
 }
 
@@ -170,20 +197,38 @@ function beginGroup(frame) {
     start: scene.count };
 }
 function fitGroup(mesh, modelView) {
-  const toFrame = multiply(group.toFrame, modelView);
+  const m = multiply(group.toFrame, modelView);
   const r = mesh.shape === TORUS ? 1 + mesh.tube : 1, h = mesh.shape === TORUS ? mesh.tube : 1;
-  for (const x of [-r, r]) for (const y of [-h, h]) for (const z of [-r, r]) {
-    const p = transformPoint(toFrame, [x, y, z]);
-    group.min = group.min.map((m, k) => Math.min(m, p[k]));
-    group.max = group.max.map((m, k) => Math.max(m, p[k]));
+  const gmin = group.min, gmax = group.max;
+  for (const x of [-r, r]) {
+    for (const y of [-h, h]) {
+      for (const z of [-r, r]) {
+        const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+        const px = (m[0] * x + m[4] * y + m[8] * z + m[12]) / w;
+        const py = (m[1] * x + m[5] * y + m[9] * z + m[13]) / w;
+        const pz = (m[2] * x + m[6] * y + m[10] * z + m[14]) / w;
+        if (px < gmin[0]) gmin[0] = px; if (px > gmax[0]) gmax[0] = px;
+        if (py < gmin[1]) gmin[1] = py; if (py > gmax[1]) gmax[1] = py;
+        if (pz < gmin[2]) gmin[2] = pz; if (pz > gmax[2]) gmax[2] = pz;
+      }
+    }
   }
 }
 // The box's matrix takes eye space to the box's own, centered on it
 function endGroup() {
-  const center = vmul(vadd(group.min, group.max), 0.5);
-  affineRows(multiply(translate(...vmul(center, -1)), group.toFrame), scene.groupInv, 12 * group.index);
-  scene.groupHalf.set([...vmul(vsub(group.max, group.min), 0.5), 0], 4 * group.index);
-  scene.groupRange.set([group.start, scene.count, 0, 0], 4 * group.index);
+  const idx = group.index;
+  const gmin = group.min, gmax = group.max;
+  const cx = (gmin[0] + gmax[0]) * 0.5, cy = (gmin[1] + gmax[1]) * 0.5, cz = (gmin[2] + gmax[2]) * 0.5;
+  affineRows(multiply(translate(-cx, -cy, -cz), group.toFrame), scene.groupInv, 12 * idx);
+  const base = 4 * idx;
+  scene.groupHalf[base]     = (gmax[0] - gmin[0]) * 0.5;
+  scene.groupHalf[base + 1] = (gmax[1] - gmin[1]) * 0.5;
+  scene.groupHalf[base + 2] = (gmax[2] - gmin[2]) * 0.5;
+  scene.groupHalf[base + 3] = 0;
+  scene.groupRange[base]     = group.start;
+  scene.groupRange[base + 1] = scene.count;
+  scene.groupRange[base + 2] = 0;
+  scene.groupRange[base + 3] = 0;
   group = null;
 }
 
@@ -194,7 +239,10 @@ function setNavLight(pos) { scene.nav = pos; }
 // eye space, and the stars' velocity past the eye at warp
 function setSky(frame, streak) {
   scene.sky.center = transformPoint(frame, [0, 0, 0]);
-  scene.sky.rot.set([frame[0], frame[1], frame[2], frame[4], frame[5], frame[6], frame[8], frame[9], frame[10]]);
+  const rot = scene.sky.rot;
+  rot[0] = frame[0]; rot[1] = frame[1]; rot[2] = frame[2];
+  rot[3] = frame[4]; rot[4] = frame[5]; rot[5] = frame[6];
+  rot[6] = frame[8]; rot[7] = frame[9]; rot[8] = frame[10];
   scene.sky.streak = streak;
 }
 
@@ -207,6 +255,9 @@ function setSky(frame, streak) {
 const ANISO = gl.getExtension("EXT_texture_filter_anisotropic");
 const MAX_ANISO = ANISO ? gl.getParameter(ANISO.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 1;
 
+// Resolves once every image file has loaded (bench.js waits on it)
+const assetsReady = [];
+
 // An image file: a 1x1 gray placeholder until it decodes, then the image with mipmaps
 function loadTexture(url) {
   const texture = gl.createTexture();
@@ -216,6 +267,10 @@ function loadTexture(url) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 
   const image = new Image();
+  assetsReady.push(new Promise((resolve, reject) => {
+    image.addEventListener("load", resolve);
+    image.addEventListener("error", () => reject(new Error(`could not load ${url}`)));
+  }));
   image.onload = () => {
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);  // images start at the top row, texture coordinates at the bottom
@@ -307,6 +362,11 @@ function loadVideoTexture(sources) {
   const video = document.createElement("video");
   Object.assign(video, { muted: true, loop: true, playsInline: true, autoplay: true, crossOrigin: "anonymous" });
   video.src = sources.find(src => video.canPlayType(src.endsWith(".webm") ? "video/webm" : "video/mp4")) ?? sources[0];
+  assetsReady.push(new Promise(resolve => {
+    if (video.readyState >= video.HAVE_CURRENT_DATA) return resolve();
+    video.addEventListener("loadeddata", () => resolve(), { once: true });
+    setTimeout(resolve, 800);
+  }));
   video.play().catch(() => {});  // autoplay of muted video is allowed; ignore if blocked
 
   function update() {
@@ -363,17 +423,22 @@ function setResolution(lines) {
   pixelBudget = 1;
   resize();
 }
-function resize() {
-  const dpr = window.devicePixelRatio || 1;
-  const css = canvas.clientWidth * canvas.clientHeight;
-  renderScale = Math.min(dpr, Math.sqrt(maxPixels * pixelBudget / Math.max(css, 1)));
-  canvas.width = Math.round(canvas.clientWidth * renderScale);
-  canvas.height = Math.round(canvas.clientHeight * renderScale);
+// The drawing buffer's size in pixels, and how many of them go to a CSS pixel
+function setDrawingSize(width, height, scale) {
+  renderScale = scale;
+  canvas.width = width;
+  canvas.height = height;
   gl.viewport(0, 0, canvas.width, canvas.height);
   const aspect = canvas.width / canvas.height;
   const fovy = aspect >= MIN_ASPECT ? BASE_FOVY
     : 2 * Math.atan(Math.tan(BASE_FOVY / 2) * MIN_ASPECT / aspect);
   projection = perspective(fovy, aspect, 0.1, 150);   // only its x and y scales matter now
+}
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const css = canvas.clientWidth * canvas.clientHeight;
+  const scale = Math.min(dpr, Math.sqrt(maxPixels * pixelBudget / Math.max(css, 1)));
+  setDrawingSize(Math.round(canvas.clientWidth * scale), Math.round(canvas.clientHeight * scale), scale);
 }
 window.addEventListener("resize", resize);
 resize();
@@ -949,6 +1014,10 @@ function resetScene(time) {
 }
 resetScene(0);
 
+const lightPosBuf = new Float32Array(9);
+const lightColBuf = new Float32Array(9);
+const lightRngBuf = new Float32Array(6);
+
 // Hand this frame's scene, lights, lens and controls to the shader
 function uploadScene(view, t, ship) {
   const u = uniforms;
@@ -969,10 +1038,22 @@ function uploadScene(view, t, ship) {
 
   // The fixed lights ride whatever the view is now; the nav light was placed
   // in eye space by the ship itself
-  gl.uniform3fv(u.uLightPos, [...transformPoint(view, SUN.pos), ...transformPoint(view, FILL.pos), ...scene.nav]);
-  gl.uniform3fv(u.uLightColor, [...vmul(SUN.color, controls.sun), ...vmul(FILL.color, controls.fill),
-    ...vmul(NAV.color, controls.nav)]);
-  gl.uniform2fv(u.uLightRange, [SUN, FILL, NAV].flatMap(l => [l.ref, l.reach]));
+  const sunEye = transformPoint(view, SUN.pos);
+  const fillEye = transformPoint(view, FILL.pos);
+  lightPosBuf[0] = sunEye[0]; lightPosBuf[1] = sunEye[1]; lightPosBuf[2] = sunEye[2];
+  lightPosBuf[3] = fillEye[0]; lightPosBuf[4] = fillEye[1]; lightPosBuf[5] = fillEye[2];
+  lightPosBuf[6] = scene.nav[0]; lightPosBuf[7] = scene.nav[1]; lightPosBuf[8] = scene.nav[2];
+  gl.uniform3fv(u.uLightPos, lightPosBuf);
+
+  lightColBuf[0] = SUN.color[0] * controls.sun; lightColBuf[1] = SUN.color[1] * controls.sun; lightColBuf[2] = SUN.color[2] * controls.sun;
+  lightColBuf[3] = FILL.color[0] * controls.fill; lightColBuf[4] = FILL.color[1] * controls.fill; lightColBuf[5] = FILL.color[2] * controls.fill;
+  lightColBuf[6] = NAV.color[0] * controls.nav; lightColBuf[7] = NAV.color[1] * controls.nav; lightColBuf[8] = NAV.color[2] * controls.nav;
+  gl.uniform3fv(u.uLightColor, lightColBuf);
+
+  lightRngBuf[0] = SUN.ref; lightRngBuf[1] = SUN.reach;
+  lightRngBuf[2] = FILL.ref; lightRngBuf[3] = FILL.reach;
+  lightRngBuf[4] = NAV.ref; lightRngBuf[5] = NAV.reach;
+  gl.uniform2fv(u.uLightRange, lightRngBuf);
 
   gl.uniform1i(u.uBounces, controls.bounces);
   gl.uniform1i(u.uShadows, controls.shadows);
@@ -989,6 +1070,45 @@ function uploadScene(view, t, ship) {
   gl.uniform1f(u.uStarScale, renderScale);
   const fade = ship.warpLevel;
   gl.uniform1f(u.uWarpStars, fade * fade * (3 - 2 * fade));
+}
+
+// A frame comes in two halves, so each can be run and timed alone (bench.js):
+//
+//   stepFrame    everything that moves: the world, the camera, the engines.
+//                `now` is real time in seconds, dt the time since the last
+//                step. Returns what the frame is of.
+//   buildScene   walks the hierarchy for that state to collect the frame's
+//                primitives and hands them, with the lights and the lens, to
+//                the shader; one gl.drawArrays then traces it. `live` also
+//                pulls the next frame of the plasma video.
+function stepFrame(now, dt) {
+  if (resetDue(now - sceneStart)) resetScene(now);
+  const t = sceneT = now - sceneStart;   // scene clock
+
+  const rotation = multiply(rotateY(dragRotY), rotateX(dragRotX));
+
+  // The world is advanced first, because the camera needs to know where the
+  // ship is before anything is drawn.
+  readHelm();
+  const ship = advanceWorld(t, dt);
+  const moon = moonCenter(t);
+  const view = updateCamera(t, dt, ship, freeView(now, dt, ship, moon, rotation, [camX, camY]),
+    { x: dragRotX, y: dragRotY });
+  lastView = view; lastShip = ship; lastMoon = moon;
+  updateEngines(t, dt, ship);
+  return { t, ship, view };
+}
+
+function buildScene({ t, ship, view }, live) {
+  scene.count = 0;
+  scene.groupCount = 0;
+  drawSystem(view, t, ship);
+  if (live) {
+    plasma.setRate(engines.plasmaRate);
+    plasma.update();
+  }
+  bindTextures();
+  uploadScene(view, t, ship);
 }
 
 // Render loop. With an FPS cap, display refreshes that come too soon after the
@@ -1011,29 +1131,9 @@ function render(time) {
   const now = time / 1000;
   const dt = Math.min(now - lastNow, 0.1);   // capped, so a stalled tab doesn't lurch
   lastNow = now;
-  if (resetDue(now - sceneStart)) resetScene(now);
-  const t = sceneT = now - sceneStart;   // scene clock
-
-  const rotation = multiply(rotateY(dragRotY), rotateX(dragRotX));
-
-  // The world is advanced once, here, because the camera needs to know
-  // where the ship is before anything is drawn.
-  readHelm();
-  const ship = advanceWorld(t, dt);
-  const moon = moonCenter(t);
-  const view = updateCamera(t, dt, ship, freeView(now, dt, ship, moon, rotation, [camX, camY]),
-    { x: dragRotX, y: dragRotY });
-  lastView = view; lastShip = ship; lastMoon = moon;
-
-  // Walk the hierarchy to collect this frame's primitives, then trace them all
-  scene.count = 0;
-  scene.groupCount = 0;
-  updateEngines(t, dt, ship);
-  drawSystem(view, t, ship);
-  plasma.setRate(engines.plasmaRate);
-  plasma.update();
-  bindTextures();
-  uploadScene(view, t, ship);
+  const frame = stepFrame(now, dt);
+  const { t, ship } = frame;
+  buildScene(frame, true);
 
   beginGpuTimer();
   gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -1050,4 +1150,11 @@ function render(time) {
 
   requestAnimationFrame(render);
 }
-requestAnimationFrame(render);
+
+window.stepFrame = stepFrame;
+window.buildScene = buildScene;
+window.setDrawingSize = setDrawingSize;
+window.assetsReady = assetsReady;
+
+// ?bench runs the benchmark instead of the live loop (bench.js)
+if (!presets.has("bench")) requestAnimationFrame(render);

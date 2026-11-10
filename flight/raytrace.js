@@ -326,22 +326,23 @@ bool groupVisible(int g, vec3 o, vec3 d, float tmin, float tmax) {
 
 struct Hit { float t; int id; int part; vec3 n; };
 
+void traceRange(int start, int end, vec3 o, vec3 d, inout Hit h) {
+  for (int i = start; i < end; i++) {
+    vec3 n; int part;
+    if (intersect(i, o, d, EPS, h.t, n, part)) { h.id = i; h.n = n; h.part = part; }
+  }
+}
+
 // The nearest hit along o + t d, t in (EPS, tmax)
 Hit trace(vec3 o, vec3 d, float tmax) {
   Hit h;
   h.t = tmax; h.id = -1; h.part = 0; h.n = vec3(0.0, 1.0, 0.0);
   int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
-  for (int i = 0; i < ungrouped; i++) {
-    vec3 n; int part;
-    if (intersect(i, o, d, EPS, h.t, n, part)) { h.id = i; h.n = n; h.part = part; }
-  }
+  traceRange(0, ungrouped, o, d, h);
   for (int g = 0; g < MAX_GROUPS; g++) {
     if (g >= uGroupCount) break;
     if (!groupVisible(g, o, d, EPS, h.t)) continue;
-    for (int i = uGroupRange[g].x; i < uGroupRange[g].y; i++) {
-      vec3 n; int part;
-      if (intersect(i, o, d, EPS, h.t, n, part)) { h.id = i; h.n = n; h.part = part; }
-    }
+    traceRange(uGroupRange[g].x, uGroupRange[g].y, o, d, h);
   }
   return h;
 }
@@ -355,6 +356,21 @@ float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
   return max(min((-b + s) / a, tmax) - max((-b - s) / a, tmin), 0.0);
 }
 
+bool transmitRange(int start, int end, vec3 o, vec3 d, float dist, inout vec3 tr) {
+  for (int i = start; i < end; i++) {
+    if (uInfo[i].w == EMISSIVE) continue;
+    float t = dist; vec3 n; int part;
+    if (intersect(i, o, d, EPS, t, n, part)) {
+      float kt = uMatB[i].y;
+      if (kt <= 0.0) return false;
+      float chord = uInfo[i].x == SPHERE
+        ? sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist) : 0.0;
+      tr *= kt * exp(-uMatD[i].rgb * chord);
+    }
+  }
+  return true;
+}
+
 // Shadow ray: how much light gets from o to dist along d. An opaque part
 // blocks it; glass lets through its transmittance, less what it absorbs over
 // the chord the ray cuts through it (Beer-Lambert), so glass casts a pale
@@ -363,31 +379,11 @@ float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
 vec3 transmittance(vec3 o, vec3 d, float dist) {
   vec3 tr = vec3(1.0);
   int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
-  for (int i = 0; i < ungrouped; i++) {
-    if (uInfo[i].w == EMISSIVE) continue;
-    float t = dist; vec3 n; int part;
-    if (intersect(i, o, d, EPS, t, n, part)) {
-      float kt = uMatB[i].y;
-      if (kt <= 0.0) return vec3(0.0);
-      float chord = uInfo[i].x == SPHERE
-        ? sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist) : 0.0;
-      tr *= kt * exp(-uMatD[i].rgb * chord);
-    }
-  }
+  if (!transmitRange(0, ungrouped, o, d, dist, tr)) return vec3(0.0);
   for (int g = 0; g < MAX_GROUPS; g++) {
     if (g >= uGroupCount) break;
     if (!groupVisible(g, o, d, EPS, dist)) continue;
-    for (int i = uGroupRange[g].x; i < uGroupRange[g].y; i++) {
-      if (uInfo[i].w == EMISSIVE) continue;
-      float t = dist; vec3 n; int part;
-      if (intersect(i, o, d, EPS, t, n, part)) {
-        float kt = uMatB[i].y;
-        if (kt <= 0.0) return vec3(0.0);
-        float chord = uInfo[i].x == SPHERE
-          ? sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist) : 0.0;
-        tr *= kt * exp(-uMatD[i].rgb * chord);
-      }
-    }
+    if (!transmitRange(uGroupRange[g].x, uGroupRange[g].y, o, d, dist, tr)) return vec3(0.0);
   }
   return tr;
 }

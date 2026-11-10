@@ -134,10 +134,12 @@ gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, sceneBuffer);
 
 // The three rows of an affine matrix, which is all the shader needs of it
 function affineRows(m, out, at) {
-  for (let i = 0; i < 3; i++) out.set([m[i], m[4 + i], m[8 + i], m[12 + i]], at + 4 * i);
+  out[at]     = m[0]; out[at + 1] = m[4]; out[at + 2] = m[8];  out[at + 3] = m[12];
+  out[at + 4] = m[1]; out[at + 5] = m[5]; out[at + 6] = m[9];  out[at + 7] = m[13];
+  out[at + 8] = m[2]; out[at + 9] = m[6]; out[at + 10] = m[10]; out[at + 11] = m[14];
 }
 
-const unitOf = texture => texture ? TEXTURES.indexOf(texture) : -1;
+const unitOf = texture => texture ? (texture._unitIndex ?? -1) : -1;
 
 function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL, normalMap = null) {
   if (scene.count >= MAX_PRIMS) throw new Error(`more than ${MAX_PRIMS} primitives`);
@@ -146,13 +148,39 @@ function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MAT
     power = 1, scroll = 0 } = material;
   // Every glass part takes its index of refraction from the slider
   const ior = kt > 0 ? controls.ior : 1;
-  affineRows(invertAffine(modelView), scene.inv, i * 12);
-  scene.info.set([mesh.shape, unitOf(texture), unitOf(normalMap), mapping], i * 4);
-  scene.matA.set([ka, kd, ks, shininess], i * 4);
-  scene.matB.set([kr, kt, ior, bumpScale], i * 4);
-  scene.matC.set([...atmosphere, mesh.tube ?? 0], i * 4);
-  scene.matD.set([...absorb, mesh.repeats], i * 4);
-  scene.matE.set([glow, group ? group.index : -1, power, scroll], i * 4);
+  invertAffineToRows(modelView, scene.inv, i * 12);
+
+  const i4 = i * 4;
+  scene.info[i4]     = mesh.shape;
+  scene.info[i4 + 1] = unitOf(texture);
+  scene.info[i4 + 2] = unitOf(normalMap);
+  scene.info[i4 + 3] = mapping;
+
+  scene.matA[i4]     = ka;
+  scene.matA[i4 + 1] = kd;
+  scene.matA[i4 + 2] = ks;
+  scene.matA[i4 + 3] = shininess;
+
+  scene.matB[i4]     = kr;
+  scene.matB[i4 + 1] = kt;
+  scene.matB[i4 + 2] = ior;
+  scene.matB[i4 + 3] = bumpScale;
+
+  scene.matC[i4]     = atmosphere[0];
+  scene.matC[i4 + 1] = atmosphere[1];
+  scene.matC[i4 + 2] = atmosphere[2];
+  scene.matC[i4 + 3] = mesh.tube ?? 0;
+
+  scene.matD[i4]     = absorb[0];
+  scene.matD[i4 + 1] = absorb[1];
+  scene.matD[i4 + 2] = absorb[2];
+  scene.matD[i4 + 3] = mesh.repeats;
+
+  scene.matE[i4]     = glow;
+  scene.matE[i4 + 1] = group ? group.index : -1;
+  scene.matE[i4 + 2] = power;
+  scene.matE[i4 + 3] = scroll;
+
   if (group) fitGroup(mesh, modelView);
 }
 
@@ -170,20 +198,82 @@ function beginGroup(frame) {
     start: scene.count };
 }
 function fitGroup(mesh, modelView) {
-  const toFrame = multiply(group.toFrame, modelView);
-  const r = mesh.shape === TORUS ? 1 + mesh.tube : 1, h = mesh.shape === TORUS ? mesh.tube : 1;
-  for (const x of [-r, r]) for (const y of [-h, h]) for (const z of [-r, r]) {
-    const p = transformPoint(toFrame, [x, y, z]);
-    group.min = group.min.map((m, k) => Math.min(m, p[k]));
-    group.max = group.max.map((m, k) => Math.max(m, p[k]));
-  }
+  // Compute toFrame = multiply(group.toFrame, modelView) without allocating
+  const a = group.toFrame, b = modelView;
+  const a0 = a[0], a1 = a[1], a2 = a[2];
+  const a4 = a[4], a5 = a[5], a6 = a[6];
+  const a8 = a[8], a9 = a[9], a10 = a[10];
+  const a12 = a[12], a13 = a[13], a14 = a[14];
+
+  const b0 = b[0], b1 = b[1], b2 = b[2];
+  const b4 = b[4], b5 = b[5], b6 = b[6];
+  const b8 = b[8], b9 = b[9], b10 = b[10];
+  const b12 = b[12], b13 = b[13], b14 = b[14];
+
+  const m0 = a0 * b0 + a4 * b1 + a8 * b2;
+  const m1 = a1 * b0 + a5 * b1 + a9 * b2;
+  const m2 = a2 * b0 + a6 * b1 + a10 * b2;
+
+  const m4 = a0 * b4 + a4 * b5 + a8 * b6;
+  const m5 = a1 * b4 + a5 * b5 + a9 * b6;
+  const m6 = a2 * b4 + a6 * b5 + a10 * b6;
+
+  const m8 = a0 * b8 + a4 * b9 + a8 * b10;
+  const m9 = a1 * b8 + a5 * b9 + a9 * b10;
+  const m10 = a2 * b8 + a6 * b9 + a10 * b10;
+
+  const cx = a0 * b12 + a4 * b13 + a8 * b14 + a12;
+  const cy = a1 * b12 + a5 * b13 + a9 * b14 + a13;
+  const cz = a2 * b12 + a6 * b13 + a10 * b14 + a14;
+
+  const r = mesh.shape === TORUS ? 1 + mesh.tube : 1;
+  const h = mesh.shape === TORUS ? mesh.tube : 1;
+
+  // Arvo's transformed AABB extents along x, y, z
+  const ex = Math.abs(m0) * r + Math.abs(m4) * h + Math.abs(m8) * r;
+  const ey = Math.abs(m1) * r + Math.abs(m5) * h + Math.abs(m9) * r;
+  const ez = Math.abs(m2) * r + Math.abs(m6) * h + Math.abs(m10) * r;
+
+  const min = group.min, max = group.max;
+  const minX = cx - ex, maxX = cx + ex;
+  const minY = cy - ey, maxY = cy + ey;
+  const minZ = cz - ez, maxZ = cz + ez;
+
+  if (minX < min[0]) min[0] = minX;
+  if (maxX > max[0]) max[0] = maxX;
+  if (minY < min[1]) min[1] = minY;
+  if (maxY > max[1]) max[1] = maxY;
+  if (minZ < min[2]) min[2] = minZ;
+  if (maxZ > max[2]) max[2] = maxZ;
 }
 // The box's matrix takes eye space to the box's own, centered on it
 function endGroup() {
-  const center = vmul(vadd(group.min, group.max), 0.5);
-  affineRows(multiply(translate(...vmul(center, -1)), group.toFrame), scene.groupInv, 12 * group.index);
-  scene.groupHalf.set([...vmul(vsub(group.max, group.min), 0.5), 0], 4 * group.index);
-  scene.groupRange.set([group.start, scene.count, 0, 0], 4 * group.index);
+  const gIdx = group.index;
+  const min = group.min, max = group.max;
+  const cx = (min[0] + max[0]) * 0.5;
+  const cy = (min[1] + max[1]) * 0.5;
+  const cz = (min[2] + max[2]) * 0.5;
+  const hx = (max[0] - min[0]) * 0.5;
+  const hy = (max[1] - min[1]) * 0.5;
+  const hz = (max[2] - min[2]) * 0.5;
+
+  const at = 12 * gIdx;
+  const F = group.toFrame;
+  const out = scene.groupInv;
+  out[at]     = F[0]; out[at + 1] = F[4]; out[at + 2] = F[8];  out[at + 3] = F[12] - cx;
+  out[at + 4] = F[1]; out[at + 5] = F[5]; out[at + 6] = F[9];  out[at + 7] = F[13] - cy;
+  out[at + 8] = F[2]; out[at + 9] = F[6]; out[at + 10] = F[10]; out[at + 11] = F[14] - cz;
+
+  const h4 = 4 * gIdx;
+  scene.groupHalf[h4]     = hx;
+  scene.groupHalf[h4 + 1] = hy;
+  scene.groupHalf[h4 + 2] = hz;
+  scene.groupHalf[h4 + 3] = 0;
+
+  scene.groupRange[h4]     = group.start;
+  scene.groupRange[h4 + 1] = scene.count;
+  scene.groupRange[h4 + 2] = 0;
+  scene.groupRange[h4 + 3] = 0;
   group = null;
 }
 
@@ -217,6 +307,7 @@ function loadTexture(url) {
 
   const image = new Image();
   image.onload = () => {
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);  // images start at the top row, texture coordinates at the bottom
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
@@ -311,6 +402,7 @@ function loadVideoTexture(sources) {
 
   function update() {
     if (video.readyState < video.HAVE_CURRENT_DATA) return;
+    gl.activeTexture(gl.TEXTURE0 + 14);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
@@ -330,12 +422,14 @@ const TEXTURES = [planetTexture, saucerTexture, saucerNormalMap, deckTexture, de
   rimTexture, rimNormalMap, hullTexture, hullNormalMap, nacelleTexture, nacelleNormalMap,
   deflectorGlow, grilleGlow, impulseGlow, plasma.texture, beaconTexture];
 if (TEXTURES.length !== TEXTURE_UNITS) throw new Error("TEXTURE_UNITS is out of date");
+TEXTURES.forEach((texture, i) => { if (texture) texture._unitIndex = i; });
 function bindTextures() {
   TEXTURES.forEach((texture, i) => {
     gl.activeTexture(gl.TEXTURE0 + i);
     gl.bindTexture(gl.TEXTURE_2D, texture);
   });
 }
+bindTextures();
 
 // ---------------------------------------------------------------------------
 // Canvas and lens
@@ -839,6 +933,14 @@ function resetScene(time) {
 }
 resetScene(0);
 
+const lightPosBuf = new Float32Array(9);
+const lightColorBuf = new Float32Array(9);
+const lightRangeBuf = new Float32Array([
+  SUN.ref, SUN.reach,
+  FILL.ref, FILL.reach,
+  NAV.ref, NAV.reach
+]);
+
 // Hand this frame's scene, lights, lens and controls to the shader
 function uploadScene(view, t, ship) {
   const u = uniforms;
@@ -859,10 +961,28 @@ function uploadScene(view, t, ship) {
 
   // The fixed lights ride whatever the view is now; the nav light was placed
   // in eye space by the ship itself
-  gl.uniform3fv(u.uLightPos, [...transformPoint(view, SUN.pos), ...transformPoint(view, FILL.pos), ...scene.nav]);
-  gl.uniform3fv(u.uLightColor, [...vmul(SUN.color, controls.sun), ...vmul(FILL.color, controls.fill),
-    ...vmul(NAV.color, controls.nav)]);
-  gl.uniform2fv(u.uLightRange, [SUN, FILL, NAV].flatMap(l => [l.ref, l.reach]));
+  const sx = SUN.pos[0], sy = SUN.pos[1], sz = SUN.pos[2];
+  lightPosBuf[0] = view[0] * sx + view[4] * sy + view[8] * sz + view[12];
+  lightPosBuf[1] = view[1] * sx + view[5] * sy + view[9] * sz + view[13];
+  lightPosBuf[2] = view[2] * sx + view[6] * sy + view[10] * sz + view[14];
+
+  const fx = FILL.pos[0], fy = FILL.pos[1], fz = FILL.pos[2];
+  lightPosBuf[3] = view[0] * fx + view[4] * fy + view[8] * fz + view[12];
+  lightPosBuf[4] = view[1] * fx + view[5] * fy + view[9] * fz + view[13];
+  lightPosBuf[5] = view[2] * fx + view[6] * fy + view[10] * fz + view[14];
+
+  lightPosBuf[6] = scene.nav[0];
+  lightPosBuf[7] = scene.nav[1];
+  lightPosBuf[8] = scene.nav[2];
+
+  const cs = controls.sun, cf = controls.fill, cn = controls.nav;
+  lightColorBuf[0] = SUN.color[0] * cs; lightColorBuf[1] = SUN.color[1] * cs; lightColorBuf[2] = SUN.color[2] * cs;
+  lightColorBuf[3] = FILL.color[0] * cf; lightColorBuf[4] = FILL.color[1] * cf; lightColorBuf[5] = FILL.color[2] * cf;
+  lightColorBuf[6] = NAV.color[0] * cn; lightColorBuf[7] = NAV.color[1] * cn; lightColorBuf[8] = NAV.color[2] * cn;
+
+  gl.uniform3fv(u.uLightPos, lightPosBuf);
+  gl.uniform3fv(u.uLightColor, lightColorBuf);
+  gl.uniform2fv(u.uLightRange, lightRangeBuf);
 
   gl.uniform1i(u.uBounces, controls.bounces);
   gl.uniform1i(u.uShadows, controls.shadows);

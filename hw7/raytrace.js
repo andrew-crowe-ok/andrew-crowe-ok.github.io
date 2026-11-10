@@ -165,12 +165,16 @@ vec3 toObject(int i, vec3 p, float w) {
 }
 
 bool hitSphere(vec3 o, vec3 d, float tmin, inout float t, out vec3 n) {
-  float a = dot(d, d), b = dot(o, d), c = dot(o, o) - 1.0;
+  float c = dot(o, o) - 1.0;
+  float b = dot(o, d);
+  if (b > 0.0 && c > 0.0) return false;
+  float a = dot(d, d);
   float disc = b * b - a * c;
   if (disc < 0.0) return false;
   float s = sqrt(disc);
-  float th = (-b - s) / a;
-  if (th <= tmin) th = (-b + s) / a;     // starting inside: the far side
+  float invA = 1.0 / a;
+  float th = (-b - s) * invA;
+  if (th <= tmin) th = (-b + s) * invA;     // starting inside: the far side
   if (th <= tmin || th >= t) return false;
   t = th;
   n = o + d * th;
@@ -179,27 +183,46 @@ bool hitSphere(vec3 o, vec3 d, float tmin, inout float t, out vec3 n) {
 
 // Side: x^2 + z^2 = 1 for |y| <= 1 (part 0); caps at y = 1 (part 1), y = -1 (part 2)
 bool hitCylinder(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
+  float c = dot(o.xz, o.xz) - 1.0;
+  float b = dot(o.xz, d.xz);
+  if (b > 0.0 && c > 0.0) return false;
   bool found = false;
-  float a = dot(d.xz, d.xz), b = dot(o.xz, d.xz), c = dot(o.xz, o.xz) - 1.0;
+  float a = dot(d.xz, d.xz);
   float disc = b * b - a * c;
   if (a > 1e-12 && disc >= 0.0) {
+    float invA = 1.0 / a;
     float s = sqrt(disc);
-    for (int k = 0; k < 2; k++) {
-      float th = (-b + (k == 0 ? -s : s)) / a;
-      vec3 p = o + d * th;
-      if (th > tmin && th < t && abs(p.y) <= 1.0) {
-        t = th; n = vec3(p.x, 0.0, p.z); part = 0; found = true;
-        break;
+    float th0 = (-b - s) * invA;
+    if (th0 > tmin && th0 < t) {
+      vec3 p = o + d * th0;
+      if (abs(p.y) <= 1.0) {
+        t = th0; n = vec3(p.x, 0.0, p.z); part = 0; found = true;
+      }
+    }
+    if (!found) {
+      float th1 = (-b + s) * invA;
+      if (th1 > tmin && th1 < t) {
+        vec3 p = o + d * th1;
+        if (abs(p.y) <= 1.0) {
+          t = th1; n = vec3(p.x, 0.0, p.z); part = 0; found = true;
+        }
       }
     }
   }
   if (abs(d.y) > 1e-12) {
-    for (int k = 0; k < 2; k++) {
-      float y = k == 0 ? 1.0 : -1.0;
-      float th = (y - o.y) / d.y;
-      vec3 p = o + d * th;
-      if (th > tmin && th < t && dot(p.xz, p.xz) <= 1.0) {
-        t = th; n = vec3(0.0, y, 0.0); part = 1 + k; found = true;
+    float invDy = 1.0 / d.y;
+    float thTop = (1.0 - o.y) * invDy;
+    if (thTop > tmin && thTop < t) {
+      vec3 p = o + d * thTop;
+      if (dot(p.xz, p.xz) <= 1.0) {
+        t = thTop; n = vec3(0.0, 1.0, 0.0); part = 1; found = true;
+      }
+    }
+    float thBot = (-1.0 - o.y) * invDy;
+    if (thBot > tmin && thBot < t) {
+      vec3 p = o + d * thBot;
+      if (dot(p.xz, p.xz) <= 1.0) {
+        t = thBot; n = vec3(0.0, -1.0, 0.0); part = 2; found = true;
       }
     }
   }
@@ -209,6 +232,7 @@ bool hitCylinder(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int 
 // Side: radius (1 - y) / 2, so x^2 + z^2 = k (1 - y)^2 with k = 1/4, for
 // |y| <= 1 (part 0); base cap at y = -1 (part 1)
 bool hitCone(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
+  if ((d.y > 0.0 && o.y > 1.0) || (d.y < 0.0 && o.y < -1.0)) return false;
   const float k = 0.25;
   bool found = false;
   float h = 1.0 - o.y;
@@ -221,24 +245,31 @@ bool hitCone(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part
   } else {
     float disc = b * b - a * c;
     if (disc >= 0.0) {
+      float invA = 1.0 / a;
       float s = sqrt(disc);
-      t0 = (-b - s) / a; t1 = (-b + s) / a;
+      t0 = (-b - s) * invA; t1 = (-b + s) * invA;
       if (t0 > t1) { float tmp = t0; t0 = t1; t1 = tmp; }
     }
   }
-  for (int i = 0; i < 2; i++) {
-    float th = i == 0 ? t0 : t1;
-    vec3 p = o + d * th;
-    if (th > tmin && th < t && abs(p.y) <= 1.0) {
-      t = th; n = vec3(p.x, k * (1.0 - p.y), p.z); part = 0; found = true;
-      break;
+  if (t0 > tmin && t0 < t) {
+    vec3 p = o + d * t0;
+    if (abs(p.y) <= 1.0) {
+      t = t0; n = vec3(p.x, k * (1.0 - p.y), p.z); part = 0; found = true;
+    }
+  }
+  if (!found && t1 > tmin && t1 < t) {
+    vec3 p = o + d * t1;
+    if (abs(p.y) <= 1.0) {
+      t = t1; n = vec3(p.x, k * (1.0 - p.y), p.z); part = 0; found = true;
     }
   }
   if (abs(d.y) > 1e-12) {
     float th = (-1.0 - o.y) / d.y;
-    vec3 p = o + d * th;
-    if (th > tmin && th < t && dot(p.xz, p.xz) <= 1.0) {
-      t = th; n = vec3(0.0, -1.0, 0.0); part = 1; found = true;
+    if (th > tmin && th < t) {
+      vec3 p = o + d * th;
+      if (dot(p.xz, p.xz) <= 1.0) {
+        t = th; n = vec3(0.0, -1.0, 0.0); part = 1; found = true;
+      }
     }
   }
   return found;
@@ -289,9 +320,9 @@ bool hitTorus(vec3 o, vec3 d, float r, float tmin, inout float t, out vec3 n) {
   x0 = max(x0, tmin * len); x1 = min(x1, t * len);
   if (x0 >= x1) return false;
   float x = x0;
-  for (int i = 0; i < 64; i++) {
+  for (int i = 0; i < 32; i++) {
     float h = torusDistance(o + u * x, r);
-    if (h < 2e-5) {
+    if (h < 1e-4) {
       vec3 p = o + u * x;
       vec2 q = normalize(p.xz);
       n = p - vec3(q.x, 0.0, q.y);        // from the tube's center line
@@ -313,6 +344,125 @@ bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out
   if (shape == CONE)     return hitCone(oo, dd, tmin, t, n, part);
   if (shape == BOX)      return hitBox(oo, dd, tmin, t, n, part);
   return hitTorus(oo, dd, uMatC[i].w, tmin, t, n);
+}
+
+// Fast boolean shadow occlusion tests without computing normals or face parts
+bool shadowSphere(vec3 o, vec3 d, float tmin, float tmax) {
+  float c = dot(o, o) - 1.0;
+  float b = dot(o, d);
+  if (b > 0.0 && c > 0.0) return false;
+  float a = dot(d, d);
+  float disc = b * b - a * c;
+  if (disc < 0.0) return false;
+  float s = sqrt(disc);
+  float invA = 1.0 / a;
+  float th = (-b - s) * invA;
+  if (th <= tmin) th = (-b + s) * invA;
+  return th > tmin && th < tmax;
+}
+
+bool shadowCylinder(vec3 o, vec3 d, float tmin, float tmax) {
+  float c = dot(o.xz, o.xz) - 1.0;
+  float b = dot(o.xz, d.xz);
+  if (b > 0.0 && c > 0.0) return false;
+  float a = dot(d.xz, d.xz);
+  float disc = b * b - a * c;
+  if (a > 1e-12 && disc >= 0.0) {
+    float invA = 1.0 / a;
+    float s = sqrt(disc);
+    float th0 = (-b - s) * invA;
+    if (th0 > tmin && th0 < tmax && abs(o.y + d.y * th0) <= 1.0) return true;
+    float th1 = (-b + s) * invA;
+    if (th1 > tmin && th1 < tmax && abs(o.y + d.y * th1) <= 1.0) return true;
+  }
+  if (abs(d.y) > 1e-12) {
+    float invDy = 1.0 / d.y;
+    float thTop = (1.0 - o.y) * invDy;
+    if (thTop > tmin && thTop < tmax) {
+      vec2 p = o.xz + d.xz * thTop;
+      if (dot(p, p) <= 1.0) return true;
+    }
+    float thBot = (-1.0 - o.y) * invDy;
+    if (thBot > tmin && thBot < tmax) {
+      vec2 p = o.xz + d.xz * thBot;
+      if (dot(p, p) <= 1.0) return true;
+    }
+  }
+  return false;
+}
+
+bool shadowCone(vec3 o, vec3 d, float tmin, float tmax) {
+  if ((d.y > 0.0 && o.y > 1.0) || (d.y < 0.0 && o.y < -1.0)) return false;
+  const float k = 0.25;
+  float h = 1.0 - o.y;
+  float a = dot(d.xz, d.xz) - k * d.y * d.y;
+  float b = dot(o.xz, d.xz) + k * h * d.y;
+  float c = dot(o.xz, o.xz) - k * h * h;
+  if (abs(a) < 1e-9) {
+    if (abs(b) > 1e-12) {
+      float th = -c / (2.0 * b);
+      if (th > tmin && th < tmax && abs(o.y + d.y * th) <= 1.0) return true;
+    }
+  } else {
+    float disc = b * b - a * c;
+    if (disc >= 0.0) {
+      float invA = 1.0 / a;
+      float s = sqrt(disc);
+      float th0 = (-b - s) * invA;
+      if (th0 > tmin && th0 < tmax && abs(o.y + d.y * th0) <= 1.0) return true;
+      float th1 = (-b + s) * invA;
+      if (th1 > tmin && th1 < tmax && abs(o.y + d.y * th1) <= 1.0) return true;
+    }
+  }
+  if (abs(d.y) > 1e-12) {
+    float th = (-1.0 - o.y) / d.y;
+    if (th > tmin && th < tmax) {
+      vec2 p = o.xz + d.xz * th;
+      if (dot(p, p) <= 1.0) return true;
+    }
+  }
+  return false;
+}
+
+bool shadowBox(vec3 o, vec3 d, float tmin, float tmax) {
+  vec2 span = boxSpan(o, d, vec3(1.0));
+  if (span.x > span.y) return false;
+  float th = span.x > tmin ? span.x : span.y;
+  return th > tmin && th < tmax;
+}
+
+bool shadowTorus(vec3 o, vec3 d, float r, float tmin, float tmax) {
+  float len = length(d);
+  vec3 u = d / len;
+  float b = dot(o, u), c = dot(o, o) - (1.0 + r) * (1.0 + r);
+  float disc = b * b - c;
+  if (disc < 0.0) return false;
+  float s = sqrt(disc);
+  float x0 = -b - s, x1 = -b + s;
+  if (abs(u.y) > 1e-6) {
+    float ya = (-r - o.y) / u.y, yb = (r - o.y) / u.y;
+    x0 = max(x0, min(ya, yb)); x1 = min(x1, max(ya, yb));
+  } else if (abs(o.y) > r) return false;
+  x0 = max(x0, tmin * len); x1 = min(x1, tmax * len);
+  if (x0 >= x1) return false;
+  float x = x0;
+  for (int k = 0; k < 20; k++) {
+    float h = torusDistance(o + u * x, r);
+    if (h < 1.5e-4) return true;
+    x += h;
+    if (x > x1) return false;
+  }
+  return false;
+}
+
+bool shadowHit(int i, vec3 o, vec3 d, float tmin, float tmax) {
+  vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
+  int shape = uInfo[i].x;
+  if (shape == BOX)      return shadowBox(oo, dd, tmin, tmax);
+  if (shape == SPHERE)   return shadowSphere(oo, dd, tmin, tmax);
+  if (shape == CYLINDER) return shadowCylinder(oo, dd, tmin, tmax);
+  if (shape == CONE)     return shadowCone(oo, dd, tmin, tmax);
+  return shadowTorus(oo, dd, uMatC[i].w, tmin, tmax);
 }
 
 // Does the ray come within group g's box anywhere in (tmin, tmax)?
@@ -348,11 +498,15 @@ Hit trace(vec3 o, vec3 d, float tmax) {
 
 // How much of (tmin, tmax) the ray spends inside the unit sphere
 float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
-  float a = dot(d, d), b = dot(o, d), c = dot(o, o) - 1.0;
+  float c = dot(o, o) - 1.0;
+  float b = dot(o, d);
+  if (b > 0.0 && c > 0.0) return 0.0;
+  float a = dot(d, d);
   float disc = b * b - a * c;
   if (disc < 0.0) return 0.0;
+  float invA = 1.0 / a;
   float s = sqrt(disc);
-  return max(min((-b + s) / a, tmax) - max((-b - s) / a, tmin), 0.0);
+  return max(min((-b + s) * invA, tmax) - max((-b - s) * invA, tmin), 0.0);
 }
 
 // Shadow ray: how much light gets from o to dist along d. An opaque part
@@ -365,13 +519,12 @@ vec3 transmittance(vec3 o, vec3 d, float dist) {
   int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
   for (int i = 0; i < ungrouped; i++) {
     if (uInfo[i].w == EMISSIVE) continue;
-    float t = dist; vec3 n; int part;
-    if (intersect(i, o, d, EPS, t, n, part)) {
-      float kt = uMatB[i].y;
-      if (kt <= 0.0) return vec3(0.0);
-      float chord = uInfo[i].x == SPHERE
-        ? sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist) : 0.0;
-      tr *= kt * exp(-uMatD[i].rgb * chord);
+    float kt = uMatB[i].y;
+    if (kt <= 0.0) {
+      if (shadowHit(i, o, d, EPS, dist)) return vec3(0.0);
+    } else {
+      float chord = sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist);
+      if (chord > 0.0) tr *= kt * exp(-uMatD[i].rgb * chord);
     }
   }
   for (int g = 0; g < MAX_GROUPS; g++) {
@@ -379,13 +532,12 @@ vec3 transmittance(vec3 o, vec3 d, float dist) {
     if (!groupVisible(g, o, d, EPS, dist)) continue;
     for (int i = uGroupRange[g].x; i < uGroupRange[g].y; i++) {
       if (uInfo[i].w == EMISSIVE) continue;
-      float t = dist; vec3 n; int part;
-      if (intersect(i, o, d, EPS, t, n, part)) {
-        float kt = uMatB[i].y;
-        if (kt <= 0.0) return vec3(0.0);
-        float chord = uInfo[i].x == SPHERE
-          ? sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist) : 0.0;
-        tr *= kt * exp(-uMatD[i].rgb * chord);
+      float kt = uMatB[i].y;
+      if (kt <= 0.0) {
+        if (shadowHit(i, o, d, EPS, dist)) return vec3(0.0);
+      } else {
+        float chord = sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist);
+        if (chord > 0.0) tr *= kt * exp(-uMatD[i].rgb * chord);
       }
     }
   }
@@ -464,26 +616,23 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   float repeats = uMatD[i].w;
   Surface s;
   s.p = o + d * h.t;
-  vec3 po = toObject(i, s.p, 1.0);
-  // The inverse's transpose takes normals out; its inverse takes tangents
+  // The inverse's transpose takes normals out
   mat3 normalToEye = mat3(uInv[3 * i].xyz, uInv[3 * i + 1].xyz, uInv[3 * i + 2].xyz);
   s.ng = normalize(normalToEye * h.n);
-  vec3 T = inverse(transpose(normalToEye)) * tangentAt(info.x, h.part, po);
-  T = normalize(T - dot(T, s.ng) * s.ng);
-  vec3 B = cross(s.ng, T);
   s.n = s.ng;
   s.base = vec3(1.0);
   s.emit = 0.0;
   s.emissive = info.w == EMISSIVE;
   if (info.y < 0) return s;
 
+  vec3 po = toObject(i, s.p, 1.0);
   // A scrolling glow (the warp grilles) slides its texture along the part's
   // z axis, the same way on every face, so the flow runs aft on both sides
   vec3 slide = vec3(0.0, 0.0, uMatE[i].w);
   vec2 uv = uvAt(info.x, h.part, po - slide, repeats);
   // Footprint across the ray, and along it, stretched by how obliquely it lands
   vec3 e1 = cross(d, s.ng);
-  e1 = dot(e1, e1) > 1e-8 ? normalize(e1) : T;
+  e1 = dot(e1, e1) > 1e-8 ? normalize(e1) : (abs(s.ng.y) < 0.99 ? normalize(cross(s.ng, vec3(0.0, 1.0, 0.0))) : vec3(1.0, 0.0, 0.0));
   vec3 e2 = cross(s.ng, e1) / max(abs(dot(d, s.ng)), 0.15);
   vec2 d1 = uvAt(info.x, h.part, toObject(i, s.p + e1 * footprint, 1.0) - slide, repeats) - uv;
   vec2 d2 = uvAt(info.x, h.part, toObject(i, s.p + e2 * footprint, 1.0) - slide, repeats) - uv;
@@ -494,25 +643,30 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   s.emit = tex.a;
   if (s.emissive) return s;
 
-  vec3 nt = vec3(0.0, 0.0, 1.0);        // tangent space
   if (info.w == BUMP_MAPPING) {
-    // Tilt the normal against the height field's slope, one texel either side
-    // at the level being read, so a far surface's bumps soften with its color
     float bump = uMatB[i].w;
     if (bump != 0.0) {
-      // The level is the one the footprint's longer axis reads
+      vec3 T = inverse(transpose(normalToEye)) * tangentAt(info.x, h.part, po);
+      T = normalize(T - dot(T, s.ng) * s.ng);
+      vec3 B = cross(s.ng, T);
       vec2 size = texSize(info.y);
       float lod = max(log2(max(length(d1 * size), length(d2 * size))), 0.0);
-      vec2 texel = exp2(lod) / size;
+      float scaleExp = exp2(lod);
+      vec2 texel = scaleExp / size;
       vec2 du = vec2(texel.x, 0.0), dv = vec2(0.0, texel.y);
-      float dhdu = (height(info.y, uv + du, d1, d2) - height(info.y, uv - du, d1, d2)) * 0.5 / exp2(lod);
-      float dhdv = (height(info.y, uv + dv, d1, d2) - height(info.y, uv - dv, d1, d2)) * 0.5 / exp2(lod);
-      nt = normalize(vec3(-bump * dhdu, -bump * dhdv, 1.0));
+      float invScale = 0.5 / scaleExp;
+      float dhdu = (height(info.y, uv + du, d1, d2) - height(info.y, uv - du, d1, d2)) * invScale;
+      float dhdv = (height(info.y, uv + dv, d1, d2) - height(info.y, uv - dv, d1, d2)) * invScale;
+      vec3 nt = normalize(vec3(-bump * dhdu, -bump * dhdv, 1.0));
+      s.n = normalize(mat3(T, B, s.ng) * nt);
     }
   } else if (info.z >= 0) {
-    nt = normalize(sampleTex(info.z, uv, d1, d2).rgb * 2.0 - 1.0);
+    vec3 T = inverse(transpose(normalToEye)) * tangentAt(info.x, h.part, po);
+    T = normalize(T - dot(T, s.ng) * s.ng);
+    vec3 B = cross(s.ng, T);
+    vec3 nt = normalize(sampleTex(info.z, uv, d1, d2).rgb * 2.0 - 1.0);
+    s.n = normalize(mat3(T, B, s.ng) * nt);
   }
-  s.n = normalize(mat3(T, B, s.ng) * nt);
   return s;
 }
 
@@ -571,16 +725,16 @@ vec3 noise3(vec3 p) {
   vec3 x11 = mix(random3(c + uvec3(0, 1, 1)), random3(c + uvec3(1, 1, 1)), f.x);
   return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
 }
-// Five octaves, each shifted so their lattices don't line up; about [0, 1]
+// Four octaves; normalized by 1 / (1 - 0.5^4) = 1 / 0.9375
 vec3 fbm3(vec3 p) {
   vec3 sum = vec3(0.0);
   float amp = 0.5;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 4; i++) {
     sum += amp * noise3(p);
     p = p * 2.03 + vec3(17.1, 31.7, 7.3);
     amp *= 0.5;
   }
-  return sum / 0.96875;
+  return sum * (1.0 / 0.9375);
 }
 
 // One nebula: a soft patch around center, its edge torn up by the noise
@@ -620,7 +774,8 @@ vec3 starColor(float temp) {
 // dot when they are the same)
 float pixelsFrom(vec3 d, vec3 s0, vec3 s1) {
   vec3 ab = s1 - s0;
-  float k = dot(ab, ab) > 0.0 ? clamp(dot(d - s0, ab) / dot(ab, ab), 0.0, 1.0) : 0.0;
+  float d2 = dot(ab, ab);
+  float k = d2 > 0.0 ? clamp(dot(d - s0, ab) / d2, 0.0, 1.0) : 0.0;
   return length(d - (s0 + ab * k)) / uPixelAngle;
 }
 
@@ -657,7 +812,6 @@ vec3 distantStar(vec3 s) {
   vec2 cell = floor((uv * 0.5 + 0.5) * STAR_GRID);
   vec2 mid = (cell + 0.5) / STAR_GRID * 2.0 - 1.0;
   vec3 r1 = random3(uvec3(uvec2(cell), uint(face) + 7u));
-  vec3 r2 = random3(uvec3(uvec2(cell), uint(face) + 101u));
   // Cells near a face's corners cover less of the sky, so they hold a star
   // less often, keeping the density even; the band packs more in near the
   // sky's equator. About 2000 stars.
@@ -666,6 +820,7 @@ vec3 distantStar(vec3 s) {
   float band = 1.0 + 2.28 * exp(-centerDir.y * centerDir.y / (2.0 * 0.175 * 0.175));
   if (r1.x > 0.1 * area * band) return vec3(0.0);
 
+  vec3 r2 = random3(uvec3(uvec2(cell), uint(face) + 101u));
   vec3 star = normalize(cubeDir(face, (cell + 0.15 + 0.7 * r1.yz) / STAR_GRID * 2.0 - 1.0));
   float mag = r2.x * r2.x * r2.x;
   vec3 color = (0.35 + 0.5 * mag) * starColor(r2.y);
@@ -678,8 +833,11 @@ vec3 distantStar(vec3 s) {
 vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v) {
   uvec3 key = uvec3(c + CELL_BIAS);
   vec3 r1 = random3(key);
-  vec3 mid = (vec3(c) + 0.5) * STAR_CELL;
-  float base = STAR_DENSITY * (1.0 + 2.0 * exp(-mid.y * mid.y / (STAR_DISC * STAR_DISC)));
+  float maxChance = mix(STAR_DENSITY * 3.0, min(STAR_DENSITY * 3.0 * WARP_STAR_DENSITY, WARP_STAR_CAP), uWarpStars);
+  if (r1.x >= maxChance) return vec3(0.0);
+
+  float midY = (float(c.y) + 0.5) * STAR_CELL;
+  float base = STAR_DENSITY * (1.0 + 2.0 * exp(-midY * midY / (STAR_DISC * STAR_DISC)));
   float chance = mix(base, min(base * WARP_STAR_DENSITY, WARP_STAR_CAP), uWarpStars);
   if (r1.x >= chance) return vec3(0.0);
   // A star only the warp brings fades in with it
@@ -738,14 +896,19 @@ vec3 nearStars(vec3 o, vec3 d, vec3 v) {
   vec3 wall = (vec3(cell) + step(0.0, d)) * STAR_CELL;
   vec3 tMax = t + abs(wall - p) * invAbs;
   ivec3 reach = ivec3(greaterThan(abs(v), vec3(0.075 * STAR_CELL))) * ivec3(sign(v));
+  bool hasReach = any(notEqual(reach, ivec3(0)));
 
   vec3 light = vec3(0.0);
   for (int i = 0; i < STAR_STEPS; i++) {
     if (t > STAR_REACH) break;
-    for (int k = 0; k < 8; k++) {
-      ivec3 off = ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
-      if (any(greaterThan(off, abs(reach)))) continue;
-      light = max(light, nearStar(cell + off * reach, o, d, v));
+    if (!hasReach) {
+      light = max(light, nearStar(cell, o, d, v));
+    } else {
+      for (int k = 0; k < 8; k++) {
+        ivec3 off = ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        if (any(greaterThan(off, abs(reach)))) continue;
+        light = max(light, nearStar(cell + off * reach, o, d, v));
+      }
     }
     if (tMax.x < tMax.y && tMax.x < tMax.z) { cell.x += stepDir.x; t = tMax.x; tMax.x += tDelta.x; }
     else if (tMax.y < tMax.z)               { cell.y += stepDir.y; t = tMax.y; tMax.y += tDelta.y; }
@@ -780,6 +943,7 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
   vec3 ng = faceforward(s.ng, d, s.ng);
   vec3 color = A.x * body * s.base;
   for (int j = 0; j < NUM_LIGHTS; j++) {
+    if (uLightColor[j] == vec3(0.0)) continue;
     vec3 toLight = uLightPos[j] - s.p;
     float dist = length(toLight);
     vec3 L = toLight / dist;

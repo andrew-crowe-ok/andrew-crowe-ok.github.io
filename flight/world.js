@@ -184,15 +184,18 @@ function fly(e, intent, dt, bodies) {
 
   // Running into a planet or a moon: back out to the surface and keep only
   // the motion along it, so the ship slides round. It also ends a warp.
-  for (let b = 0; b < bodies.length; b++) {
-    const body = bodies[b];
-    const dx = e.pos[0] - body.center[0];
-    const dy = e.pos[1] - body.center[1];
-    const dz = e.pos[2] - body.center[2];
-    const dist = Math.hypot(dx, dy, dz);
-    const reach = body.radius + e.radius;
-    if (dist >= reach) continue;
-    const invDist = dist > 1e-6 ? 1 / dist : 0;
+  const bodyList = bodies || (typeof SYSTEM_BODIES !== "undefined" ? SYSTEM_BODIES : null);
+  if (bodyList) {
+    const eRad = e.radius || FLIGHT.radius;
+    for (let b = 0; b < bodyList.length; b++) {
+      const body = bodyList[b];
+      const dx = e.pos[0] - body.center[0];
+      const dy = e.pos[1] - body.center[1];
+      const dz = e.pos[2] - body.center[2];
+      const dist = Math.hypot(dx, dy, dz);
+      const reach = body.radius + eRad;
+      if (dist >= reach) continue;
+      const invDist = dist > 1e-6 ? 1 / dist : 0;
     const outX = dist > 1e-6 ? dx * invDist : -FLY_SCRATCH.nose[0];
     const outY = dist > 1e-6 ? dy * invDist : -FLY_SCRATCH.nose[1];
     const outZ = dist > 1e-6 ? dz * invDist : -FLY_SCRATCH.nose[2];
@@ -212,6 +215,7 @@ function fly(e, intent, dt, bodies) {
       e.vel[0] *= s; e.vel[1] *= s; e.vel[2] *= s;
     }
     e.speed = Math.min(vLen, FLIGHT.impulse);
+    }
   }
 }
 
@@ -526,6 +530,7 @@ function createWingmanController({ target = null, slotOffset = null, slotIndex =
       for (let i = 0; i < ents.length; i++) {
         const ent = ents[i];
         if (ent === lead) continue;
+        if (ent !== e && ent.role && ent.role !== "wingman" && ent.controller !== wingmanCtrl && ent.controller !== wingmanController) continue;
         if (ent === e) {
           slot = WINGMAN_SLOTS[idx % WINGMAN_SLOTS.length];
           break;
@@ -555,6 +560,41 @@ function createWingmanController({ target = null, slotOffset = null, slotIndex =
 const defaultWingmanController = createWingmanController();
 function wingmanController(e, dt, worldRef) {
   return defaultWingmanController(e, dt, worldRef);
+}
+
+function toggleCompanionEntity(worldRef = (typeof world !== "undefined" ? world : null)) {
+  if (!worldRef || !worldRef.entities || !worldRef.player) return null;
+  const companionIdx = worldRef.entities.findIndex(e => e !== worldRef.player && e.role === "wingman");
+  if (companionIdx >= 0) {
+    return worldRef.entities.splice(companionIdx, 1)[0];
+  }
+  const p = worldRef.player;
+  if (p.rail) {
+    return addEntity({
+      model: "galaxy",
+      rail: companionOrbitPose(-0.5),
+      role: "wingman"
+    });
+  }
+  const slot = [-3.2, 0.4, -4.5];
+  const rotSlot = quatRotate(p.quat, slot);
+  const slotPos = [p.pos[0] + rotSlot[0], p.pos[1] + rotSlot[1], p.pos[2] + rotSlot[2]];
+  const isWarp = p.warp && (p.warp.state === "on" || p.warp.state === "charge");
+  return addEntity({
+    model: "galaxy",
+    rail: null,
+    controller: wingmanController,
+    pos: slotPos,
+    quat: p.quat.slice(),
+    vel: p.vel.slice(),
+    speed: p.speed,
+    role: "wingman",
+    warp: isWarp ? { state: p.warp.state, tau: p.warp.tau } : { state: "off", tau: 0 },
+    warpRamp: isWarp ? p.warpRamp : 0
+  });
+}
+function toggleWingman(worldRef) {
+  return toggleCompanionEntity(worldRef);
 }
 
 function createPursuitController({ target = null, standoff = 2.0 } = {}) {
@@ -725,7 +765,7 @@ function advanceWorld(t, dt) {
       for (let i = 0; i < world.entities.length; i++) {
         const e = world.entities[i];
         if (e === player) continue;
-        if (e.rail && e.role === "wingman") {
+        if (e.rail && (e.role === "wingman" || e.controller === wingmanController)) {
           Object.assign(e, e.rail(t), {
             rail: null,
             controller: e.controller || wingmanController,
@@ -804,4 +844,6 @@ if (typeof window !== "undefined") {
   window.createPatrolController = createPatrolController;
   window.resolveEntityCollisions = resolveEntityCollisions;
   window.computeSteeringIntent = computeSteeringIntent;
+  window.toggleWingman = toggleWingman;
+  window.toggleCompanionEntity = toggleCompanionEntity;
 }

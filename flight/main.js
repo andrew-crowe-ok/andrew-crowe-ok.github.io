@@ -781,10 +781,10 @@ function updateStats(nowMs, frameDelta, cpuMs, ship) {
       let escort = null;
       if (typeof world !== "undefined" && world.entities) {
         for (let i = 0; i < world.entities.length; i++) {
-          if (world.entities[i] !== world.player) {
-            escort = world.entities[i];
-            break;
-          }
+          const ent = world.entities[i];
+          if (ent === world.player) continue;
+          if (ent.role === "wingman") { escort = ent; break; }
+          if (!escort) escort = ent;
         }
       }
       if (escort) {
@@ -1032,33 +1032,38 @@ if (wingmanToggleEl) {
 
 function toggleWingman() {
   if (typeof world === "undefined" || !world.entities) return;
-  const companionIdx = world.entities.findIndex(e => e !== world.player && e.role === "wingman");
-  if (companionIdx >= 0) {
-    world.entities.splice(companionIdx, 1);
+  if (typeof toggleCompanionEntity === "function") {
+    toggleCompanionEntity(world);
   } else {
-    if (world.player.rail) {
-      addEntity({
-        model: "galaxy",
-        rail: companionOrbitPose(-0.5),
-        role: "wingman"
-      });
+    const companionIdx = world.entities.findIndex(e => e !== world.player && e.role === "wingman");
+    if (companionIdx >= 0) {
+      world.entities.splice(companionIdx, 1);
     } else {
-      const p = world.player;
-      const slot = [-3.2, 0.4, -4.5];
-      const slotPos = vadd(p.pos, quatRotate(p.quat, slot));
-      const isWarp = p.warp && (p.warp.state === "on" || p.warp.state === "charge");
-      addEntity({
-        model: "galaxy",
-        rail: null,
-        controller: wingmanController,
-        pos: slotPos,
-        quat: p.quat.slice(),
-        vel: p.vel.slice(),
-        speed: p.speed,
-        role: "wingman",
-        warp: isWarp ? { state: p.warp.state, tau: p.warp.tau } : { state: "off", tau: 0 },
-        warpRamp: isWarp ? p.warpRamp : 0
-      });
+      if (world.player.rail) {
+        addEntity({
+          model: "galaxy",
+          rail: companionOrbitPose(-0.5),
+          role: "wingman"
+        });
+      } else {
+        const p = world.player;
+        const slot = [-3.2, 0.4, -4.5];
+        const rotSlot = quatRotate(p.quat, slot);
+        const slotPos = [p.pos[0] + rotSlot[0], p.pos[1] + rotSlot[1], p.pos[2] + rotSlot[2]];
+        const isWarp = p.warp && (p.warp.state === "on" || p.warp.state === "charge");
+        addEntity({
+          model: "galaxy",
+          rail: null,
+          controller: wingmanController,
+          pos: slotPos,
+          quat: p.quat.slice(),
+          vel: p.vel.slice(),
+          speed: p.speed,
+          role: "wingman",
+          warp: isWarp ? { state: p.warp.state, tau: p.warp.tau } : { state: "off", tau: 0 },
+          warpRamp: isWarp ? p.warpRamp : 0
+        });
+      }
     }
   }
   const hasCompanion = world.entities.some(e => e !== world.player && e.role === "wingman");

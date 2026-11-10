@@ -136,6 +136,7 @@ const SHIP_MV_MAT = new Float32Array(16);
 
 function drawShipAt(parent, { pos, quat }, engineParams = null, isPlayer = false) {
   if (typeof addInstance === "function" && typeof GALAXY_MODEL !== "undefined" && GALAXY_MODEL) {
+    if (typeof scene !== "undefined" && typeof MAX_INSTANCES !== "undefined" && scene.instCount >= MAX_INSTANCES) return;
     const s = ORBIT.shipScale;
     const x = quat[0], y = quat[1], z = quat[2], w = quat[3];
     const px = pos[0], py = pos[1], pz = pos[2];

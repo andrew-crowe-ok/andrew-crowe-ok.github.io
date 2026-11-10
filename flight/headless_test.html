@@ -278,7 +278,7 @@
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       check("webgl: patrol AI drawArrays NO_ERROR", gl.getError() === gl.NO_ERROR);
 
-      // 14. Robustness: instance capping in drawEntities prevents MAX_INSTANCES throw
+      // 14b. Robustness: instance capping in drawEntities prevents MAX_INSTANCES throw
       for (let i = 0; i < 10; i++) {
         addEntity({ model: "galaxy", rail: null, pos: [15 + i * 2, 0, 0] });
       }

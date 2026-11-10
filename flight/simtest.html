@@ -245,6 +245,12 @@ try {
   check("ai-wingman: leader jumps to warp", world.player.warp.state === "on");
   check("ai-wingman: escort jumps to warp simultaneously", escort.warp.state === "on");
 
+  // Wingman warp drop-out synchronization
+  helm.toggleWarp = true;
+  advanceWorld(1.0 + 193 * 0.02, 0.02);
+  check("ai-wingman: leader drops out of warp", world.player.warp.state === "off");
+  check("ai-wingman: escort drops out of warp synchronously", escort.warp.state === "off");
+
   // 6. Entity-to-entity collisions: head-on bounce and deflection
   resetWorld();
   requestEngage();
@@ -472,12 +478,10 @@ try {
   advanceWorld(1.0, 0.016);
   setWarp(world.player, "on");
   world.player.speed = FLIGHT.warp;
-  if (typeof toggleWingman === "function") {
-    toggleWingman();
-    const spawnedWingman = world.entities.find(e => e !== world.player && e.role === "wingman");
-    check("ai-wingman: inherits active warp state on spawn", !!spawnedWingman && spawnedWingman.warp.state === "on");
-    toggleWingman(); // clean up
-  }
+  toggleWingman();
+  const spawnedWingman = world.entities.find(e => e !== world.player && e.role === "wingman");
+  check("ai-wingman: inherits active warp state on spawn", !!spawnedWingman && spawnedWingman.warp.state === "on");
+  toggleWingman(); // clean up
 
   // 17. Steady-state zero Float32Array allocations in physics and moonCenter
   resetWorld();
@@ -508,6 +512,48 @@ try {
     window.Float32Array = OrigF32;
   }
   check("steady-state: zero Float32Array allocations during 60 physics steps", f32Count === 0, `allocated: ${f32Count}`);
+
+  // 18. Wingman formation slot isolation with non-wingman entities present
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  const patrolPrior = addEntity({
+    model: "galaxy",
+    rail: null,
+    role: "patrol",
+    pos: [20, 0, 0],
+    quat: [0, 0, 0, 1]
+  });
+  const wingmanFollower = addEntity({
+    model: "galaxy",
+    rail: null,
+    role: "wingman",
+    controller: wingmanController,
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1]
+  });
+  const intentFollower = wingmanFollower.controller(wingmanFollower, 0.016, world);
+  check("ai-wingman: slot 0 port maintained despite prior patrol entity",
+    intentFollower.throttle > 0);
+
+  // 19. fly() robustness without bodies parameter and missing e.radius
+  const bareShip = {
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1],
+    vel: [0, 0, 0],
+    angVel: [0, 0, 0],
+    speed: 0,
+    throttle: 0,
+    warp: { state: "off", tau: 0 },
+    warpRamp: 0
+  };
+  let bareFlySafe = true;
+  try {
+    fly(bareShip, { pitch: 0, yaw: 0, roll: 0, throttle: 1, toggleWarp: false }, 0.016, null);
+  } catch (err) {
+    bareFlySafe = false;
+  }
+  check("fly: survives call with null bodies and missing radius", bareFlySafe && bareShip.speed > 0);
 } catch (err) { out.push("ERROR " + err.stack); }
 document.getElementById("out").textContent = out.join("\n");
 </script></body></html>

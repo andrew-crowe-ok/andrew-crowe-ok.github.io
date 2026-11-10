@@ -292,6 +292,49 @@
       }
       check("robustness: excess entities capped at MAX_INSTANCES without crash", overflowSafe && scene.instCount === 8);
       check("webgl: capped drawArrays NO_ERROR", gl.getError() === gl.NO_ERROR);
+
+      // 15. KeyC toggles escort companion in orbit mode
+      document.getElementById("wingmanToggle").checked = false;
+      resetScene(0);
+      check("keyc-orbit: initial entities 1", world.entities.length === 1);
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyC" }));
+      check("keyc-orbit: KeyC spawns escort in orbit", world.entities.length === 2 && world.entities[1].role === "wingman");
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyC" }));
+      check("keyc-orbit: KeyC removes escort in orbit", world.entities.length === 1);
+
+      // 16. Wingman toggle preserves other non-player entities
+      resetWorld();
+      requestEngage();
+      const pEnt = addEntity({ model: "galaxy", rail: null, role: "patrol", pos: [10, 0, 0] });
+      check("entities: player + patrol", world.entities.length === 2);
+      toggleWingman();
+      check("toggleWingman: wingman added alongside patrol", world.entities.length === 3);
+      toggleWingman();
+      check("toggleWingman: wingman removed, patrol preserved", world.entities.length === 2 && world.entities.includes(pEnt));
+
+      // 17. Steady-state zero Float32Array allocations in WebGL scene building & entity drawing
+      resetScene(0);
+      toggleWingman();
+      requestEngage();
+      const fWarm = stepFrame(1.0, 0.016);
+      for (let i = 0; i < 5; i++) {
+        buildScene(fWarm, false);
+      }
+      let buildF32 = 0;
+      const OrigF32 = window.Float32Array;
+      window.Float32Array = function(...args) {
+        buildF32++;
+        return new OrigF32(...args);
+      };
+      window.Float32Array.prototype = OrigF32.prototype;
+      try {
+        for (let i = 0; i < 30; i++) {
+          buildScene(fWarm, false);
+        }
+      } finally {
+        window.Float32Array = OrigF32;
+      }
+      check("steady-state: zero Float32Array allocations in 30 buildScene passes", buildF32 === 0, `allocated: ${buildF32}`);
     } catch (err) {
       out.push("ERROR " + err.stack);
     }

@@ -52,13 +52,25 @@ function drawSystem(parent, t, ship) {
   drawEntities(parent, t, ship);
 }
 
+const PLANET_LOCAL_MAT = new Float32Array(16);
+const PLANET_MV_MAT = new Float32Array(16);
+PLANET_LOCAL_MAT[15] = 1;
+
 // Planet: a fine sphere wearing the antelope photo, bump-mapped from its luminance
 function drawPlanet(parent, t) {
   const r = PLANET.radius;
-  const modelView = multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r)));
   if (typeof addInstance === "function" && typeof PLANET_MODEL !== "undefined" && PLANET_MODEL) {
-    addInstance(PLANET_MODEL, modelView);
+    const a = PLANET.spin * t;
+    const c = Math.cos(a) * r, s = Math.sin(a) * r;
+    PLANET_LOCAL_MAT[0] = c;
+    PLANET_LOCAL_MAT[2] = s;
+    PLANET_LOCAL_MAT[5] = r;
+    PLANET_LOCAL_MAT[8] = -s;
+    PLANET_LOCAL_MAT[10] = c;
+    multiplyInto(parent, PLANET_LOCAL_MAT, PLANET_MV_MAT);
+    addInstance(PLANET_MODEL, PLANET_MV_MAT);
   } else if (typeof drawPrimitive === "function") {
+    const modelView = multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r)));
     drawPrimitive(planetMesh, planetTexture, BUMP_MAPPING, modelView, PLANET_MATERIAL);
   }
 }
@@ -66,15 +78,51 @@ function drawPlanet(parent, t) {
 // The moon's frame at scene time t, and where that puts its center
 const moonFrame = t => multiply(rotateX(MOON.tilt),
   multiply(rotateY(MOON.phase + MOON.speed * t), translate(MOON.orbit, 0, 0)));
-const moonCenter = t => transformPoint(moonFrame(t), [0, 0, 0]);
+
+const MOON_CENTER_SCRATCH = [0, 0, 0];
+function moonCenter(t, out = null) {
+  const target = out || MOON_CENTER_SCRATCH;
+  const a = MOON.phase + MOON.speed * t;
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const ct = Math.cos(MOON.tilt), st = Math.sin(MOON.tilt);
+  target[0] = ca * MOON.orbit;
+  target[1] = st * sa * MOON.orbit;
+  target[2] = -ct * sa * MOON.orbit;
+  return target;
+}
+
+const MOON_LOCAL_MAT = new Float32Array(16);
+const MOON_MV_MAT = new Float32Array(16);
+MOON_LOCAL_MAT[15] = 1;
 
 // Moon: one glass sphere, no texture -- what it shows is what's behind it
 function drawMoon(parent, t) {
   const r = MOON.radius;
-  const modelView = multiply(parent, multiply(moonFrame(t), scale(r, r, r)));
   if (typeof addInstance === "function" && typeof MOON_MODEL !== "undefined" && MOON_MODEL) {
-    addInstance(MOON_MODEL, modelView);
+    const a = MOON.phase + MOON.speed * t;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const ct = Math.cos(MOON.tilt), st = Math.sin(MOON.tilt);
+    const orb = MOON.orbit;
+
+    MOON_LOCAL_MAT[0]  = ca * r;
+    MOON_LOCAL_MAT[1]  = st * sa * r;
+    MOON_LOCAL_MAT[2]  = -ct * sa * r;
+
+    MOON_LOCAL_MAT[5]  = ct * r;
+    MOON_LOCAL_MAT[6]  = st * r;
+
+    MOON_LOCAL_MAT[8]  = sa * r;
+    MOON_LOCAL_MAT[9]  = -st * ca * r;
+    MOON_LOCAL_MAT[10] = ct * ca * r;
+
+    MOON_LOCAL_MAT[12] = ca * orb;
+    MOON_LOCAL_MAT[13] = st * sa * orb;
+    MOON_LOCAL_MAT[14] = -ct * sa * orb;
+
+    multiplyInto(parent, MOON_LOCAL_MAT, MOON_MV_MAT);
+    addInstance(MOON_MODEL, MOON_MV_MAT);
   } else if (typeof drawPrimitive === "function") {
+    const modelView = multiply(parent, multiply(moonFrame(t), scale(r, r, r)));
     drawPrimitive(sphereMesh, null, BUMP_MAPPING, modelView, MOON_MATERIAL);
   }
 }

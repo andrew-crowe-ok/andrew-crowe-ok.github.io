@@ -419,6 +419,95 @@ try {
   check("ai-warp-catchup: continues charging without oscillation", distantWingman.warp.state === "charge");
   for (let i = 0; i < 80; i++) stepWorld(1.032 + (i + 1) * 0.016, 0.016);
   check("ai-warp-catchup: jumps to warp", distantWingman.warp.state === "on");
+
+  // 13. Multiple patrol ships waypoint independence
+  resetWorld();
+  const sharedPatrolCtrl = createPatrolController({
+    waypoints: [[10, 0, 0], [0, 10, 0], [-10, 0, 0]],
+    speed: 0.8
+  });
+  const patrolEnt1 = addEntity({ model: "galaxy", rail: null, controller: sharedPatrolCtrl, pos: [9.5, 0, 0] });
+  const patrolEnt2 = addEntity({ model: "galaxy", rail: null, controller: sharedPatrolCtrl, pos: [10, 0, -8] });
+  patrolEnt1.controller(patrolEnt1, 0.016, world);
+  check("ai-patrol: ship 1 advanced to waypoint 1", patrolEnt1.patrolIndex === 1);
+  patrolEnt2.controller(patrolEnt2, 0.016, world);
+  check("ai-patrol: ship 2 remains at waypoint 0 independently", (patrolEnt2.patrolIndex || 0) === 0);
+
+  // 14. Planet collision at warp clamps both velocity and speed
+  resetWorld();
+  const warpCrasher = addEntity({
+    model: "galaxy",
+    rail: null,
+    pos: [0, 0, 2.5],
+    vel: [0, 0, -FLIGHT.warp],
+    speed: FLIGHT.warp,
+    quat: [0, 1, 0, 0]
+  });
+  setWarp(warpCrasher, "on");
+  fly(warpCrasher, { toggleWarp: false, pitch: 0, yaw: 0, roll: 0, throttle: 1 }, 0.016, SYSTEM_BODIES);
+  const crashVelLen = Math.hypot(...warpCrasher.vel);
+  check("planet-collision-warp: warp knocked out", warpCrasher.warp.state === "off");
+  check("planet-collision-warp: scalar speed capped at impulse", warpCrasher.speed <= FLIGHT.impulse + 1e-4);
+  check("planet-collision-warp: velocity vector capped at impulse", crashVelLen <= FLIGHT.impulse + 1e-4, `velLen=${crashVelLen}`);
+
+  // 15. Predictive obstacle deflection on direct bullseye trajectory
+  resetWorld();
+  const bullseyeShip = addEntity({
+    model: "galaxy",
+    rail: null,
+    pos: [0, 0, -10],
+    quat: [0, 0, 0, 1],
+    speed: FLIGHT.impulse
+  });
+  const targetBehindPlanet = [0, 0, 10]; // planet is at [0, 0, 0], radius 2.4
+  const bullseyeIntent = computeSteeringIntent(bullseyeShip, targetBehindPlanet, null, null, 0.016, {}, bullseyeShip.intent);
+  const bullseyeTurn = Math.hypot(bullseyeIntent.pitch, bullseyeIntent.yaw);
+  const hasIntentNaN = isNaN(bullseyeIntent.pitch) || isNaN(bullseyeIntent.yaw) || isNaN(bullseyeIntent.roll);
+  check("ai-avoidance: bullseye trajectory produces no NaN", !hasIntentNaN);
+  check("ai-avoidance: bullseye trajectory commands evasive turn", bullseyeTurn > 0.3, `turn=${bullseyeTurn.toFixed(3)}`);
+
+  // 16. Wingman warp inheritance on spawn
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  setWarp(world.player, "on");
+  world.player.speed = FLIGHT.warp;
+  if (typeof toggleWingman === "function") {
+    toggleWingman();
+    const spawnedWingman = world.entities.find(e => e !== world.player && e.role === "wingman");
+    check("ai-wingman: inherits active warp state on spawn", !!spawnedWingman && spawnedWingman.warp.state === "on");
+    toggleWingman(); // clean up
+  }
+
+  // 17. Steady-state zero Float32Array allocations in physics and moonCenter
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  const testWingman = addEntity({
+    model: "galaxy",
+    rail: null,
+    role: "wingman",
+    controller: wingmanController,
+    pos: [8, 0, -4],
+    quat: [0, 0, 0, 1]
+  });
+  // Warm up
+  for (let i = 0; i < 5; i++) advanceWorld(1.0 + i * 0.016, 0.016);
+  let f32Count = 0;
+  const OrigF32 = window.Float32Array;
+  window.Float32Array = function(...args) {
+    f32Count++;
+    return new OrigF32(...args);
+  };
+  window.Float32Array.prototype = OrigF32.prototype;
+  try {
+    for (let i = 0; i < 60; i++) {
+      advanceWorld(1.1 + i * 0.016, 0.016);
+    }
+  } finally {
+    window.Float32Array = OrigF32;
+  }
+  check("steady-state: zero Float32Array allocations during 60 physics steps", f32Count === 0, `allocated: ${f32Count}`);
 } catch (err) { out.push("ERROR " + err.stack); }
 document.getElementById("out").textContent = out.join("\n");
 </script></body></html>

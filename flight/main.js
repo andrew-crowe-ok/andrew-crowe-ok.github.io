@@ -995,12 +995,17 @@ let sceneT = 0;                             // the scene clock, as of the last f
 
 const returnToOrbit = () => requestReset(sceneT, FADE.out);
 window.addEventListener("keydown", e => {
-  if (!offOrbit() || !FLIGHT_KEYS.includes(e.code) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.code === "KeyC") {
+    if (!e.repeat) toggleWingman();
+    return;
+  }
+  if (!offOrbit() || !FLIGHT_KEYS.includes(e.code)) return;
   // A slider that has the focus keeps its own arrow keys
   if (e.code.startsWith("Arrow") && e.target instanceof HTMLInputElement) return;
   e.preventDefault();
   if (e.code === "Space") { if (!e.repeat) helm.toggleWarp = true; }
-  else if (e.code === "KeyC") { if (!e.repeat) toggleWingman(); }
   else if (e.code === "Escape") returnToOrbit();
   else held.add(e.code);
 });
@@ -1027,7 +1032,7 @@ if (wingmanToggleEl) {
 
 function toggleWingman() {
   if (typeof world === "undefined" || !world.entities) return;
-  const companionIdx = world.entities.findIndex(e => e !== world.player);
+  const companionIdx = world.entities.findIndex(e => e !== world.player && e.role === "wingman");
   if (companionIdx >= 0) {
     world.entities.splice(companionIdx, 1);
   } else {
@@ -1041,6 +1046,7 @@ function toggleWingman() {
       const p = world.player;
       const slot = [-3.2, 0.4, -4.5];
       const slotPos = vadd(p.pos, quatRotate(p.quat, slot));
+      const isWarp = p.warp && (p.warp.state === "on" || p.warp.state === "charge");
       addEntity({
         model: "galaxy",
         rail: null,
@@ -1049,11 +1055,13 @@ function toggleWingman() {
         quat: p.quat.slice(),
         vel: p.vel.slice(),
         speed: p.speed,
-        role: "wingman"
+        role: "wingman",
+        warp: isWarp ? { state: p.warp.state, tau: p.warp.tau } : { state: "off", tau: 0 },
+        warpRamp: isWarp ? p.warpRamp : 0
       });
     }
   }
-  const hasCompanion = world.entities.some(e => e !== world.player);
+  const hasCompanion = world.entities.some(e => e !== world.player && e.role === "wingman");
   if (wingmanToggleEl) wingmanToggleEl.checked = hasCompanion;
   if (helmEls.wingmanButton) helmEls.wingmanButton.setAttribute("aria-pressed", hasCompanion);
 }
@@ -1119,10 +1127,10 @@ function updateHud(ship) {
   let escort = null;
   if (typeof world !== "undefined" && world.entities) {
     for (let i = 0; i < world.entities.length; i++) {
-      if (world.entities[i] !== world.player) {
-        escort = world.entities[i];
-        break;
-      }
+      const ent = world.entities[i];
+      if (ent === world.player) continue;
+      if (ent.role === "wingman") { escort = ent; break; }
+      if (!escort) escort = ent;
     }
   }
   const hasWingman = escort !== null;
@@ -1232,6 +1240,7 @@ function resetScene(time) {
   }
   if (toggleEl) toggleEl.checked = shipCount > 1;
   if (helmEls.wingmanButton) helmEls.wingmanButton.setAttribute("aria-pressed", shipCount > 1);
+  for (const k in hudShown) delete hudShown[k];
   held.clear();
   dropStick();
   rollHeld = 0;
@@ -1270,10 +1279,17 @@ function uploadScene(view, t, ship) {
 
   // The fixed lights ride whatever the view is now; the nav light was placed
   // in eye space by the ship itself
-  const sunEye = transformPoint(view, SUN.pos);
-  const fillEye = transformPoint(view, FILL.pos);
-  lightPosBuf[0] = sunEye[0]; lightPosBuf[1] = sunEye[1]; lightPosBuf[2] = sunEye[2];
-  lightPosBuf[3] = fillEye[0]; lightPosBuf[4] = fillEye[1]; lightPosBuf[5] = fillEye[2];
+  const sx = SUN.pos[0], sy = SUN.pos[1], sz = SUN.pos[2];
+  const sw = view[3] * sx + view[7] * sy + view[11] * sz + view[15];
+  lightPosBuf[0] = (view[0] * sx + view[4] * sy + view[8] * sz + view[12]) / sw;
+  lightPosBuf[1] = (view[1] * sx + view[5] * sy + view[9] * sz + view[13]) / sw;
+  lightPosBuf[2] = (view[2] * sx + view[6] * sy + view[10] * sz + view[14]) / sw;
+
+  const fx = FILL.pos[0], fy = FILL.pos[1], fz = FILL.pos[2];
+  const fw = view[3] * fx + view[7] * fy + view[11] * fz + view[15];
+  lightPosBuf[3] = (view[0] * fx + view[4] * fy + view[8] * fz + view[12]) / fw;
+  lightPosBuf[4] = (view[1] * fx + view[5] * fy + view[9] * fz + view[13]) / fw;
+  lightPosBuf[5] = (view[2] * fx + view[6] * fy + view[10] * fz + view[14]) / fw;
   lightPosBuf[6] = scene.nav[0]; lightPosBuf[7] = scene.nav[1]; lightPosBuf[8] = scene.nav[2];
   gl.uniform3fv(u.uLightPos, lightPosBuf);
 
@@ -1314,11 +1330,35 @@ function uploadScene(view, t, ship) {
 //                the shader; one gl.drawArrays then traces it. `live` also
 //                pulls the next frame of the plasma video.
 const dragAngles = { x: 0, y: 0 };
+const STEP_FRAME_RESULT = { t: 0, ship: null, view: null };
+const FREE_ROT_Y = new Float32Array(16);
+const FREE_ROT_X = new Float32Array(16);
+const FREE_ROT_MAT = new Float32Array(16);
+FREE_ROT_Y[15] = 1;
+FREE_ROT_X[15] = 1;
+
+function setRotateY(a, m) {
+  const c = Math.cos(a), s = Math.sin(a);
+  m[0] = c; m[1] = 0; m[2] = -s; m[3] = 0;
+  m[4] = 0; m[5] = 1; m[6] = 0;  m[7] = 0;
+  m[8] = s; m[9] = 0; m[10] = c; m[11] = 0;
+  m[12] = 0; m[13] = 0; m[14] = 0; m[15] = 1;
+  return m;
+}
+function setRotateX(a, m) {
+  const c = Math.cos(a), s = Math.sin(a);
+  m[0] = 1; m[1] = 0; m[2] = 0;  m[3] = 0;
+  m[4] = 0; m[5] = c; m[6] = s;  m[7] = 0;
+  m[8] = 0; m[9] = -s; m[10] = c; m[11] = 0;
+  m[12] = 0; m[13] = 0; m[14] = 0; m[15] = 1;
+  return m;
+}
+
 function stepFrame(now, dt) {
   if (resetDue(now - sceneStart)) resetScene(now);
   const t = sceneT = now - sceneStart;   // scene clock
 
-  const rotation = multiply(rotateY(dragRotY), rotateX(dragRotX));
+  const rotation = multiplyInto(setRotateY(dragRotY, FREE_ROT_Y), setRotateX(dragRotX, FREE_ROT_X), FREE_ROT_MAT);
 
   // The world is advanced first, because the camera needs to know where the
   // ship is before anything is drawn.
@@ -1330,7 +1370,10 @@ function stepFrame(now, dt) {
     dragAngles);
   lastView = view; lastShip = ship; lastMoon = moon;
   updateEngines(t, dt, ship);
-  return { t, ship, view };
+  STEP_FRAME_RESULT.t = t;
+  STEP_FRAME_RESULT.ship = ship;
+  STEP_FRAME_RESULT.view = view;
+  return STEP_FRAME_RESULT;
 }
 
 function buildScene({ t, ship, view }, live) {

@@ -90,13 +90,17 @@ function makeEntity({ model, rail = null, controller = null, role = null }) {
   };
 }
 
-function addEntity({ model = "galaxy", rail = null, controller = null, role = null, pos = [0, 0, 0], quat = [0, 0, 0, 1], vel = [0, 0, 0], speed = 0, throttle = 0, engines = null } = {}) {
+function addEntity({ model = "galaxy", rail = null, controller = null, role = null, pos = [0, 0, 0], quat = [0, 0, 0, 1], vel = [0, 0, 0], speed = 0, throttle = 0, engines = null, warp = null, warpRamp = 0 } = {}) {
   const e = makeEntity({ model, rail, controller, role });
   e.pos = pos.slice();
   e.quat = quat.slice();
   e.vel = vel.slice();
   e.speed = speed;
   e.throttle = throttle;
+  if (warp) {
+    e.warp = { state: warp.state, tau: warp.tau ?? 0 };
+    e.warpRamp = warpRamp;
+  }
   if (engines) {
     e.engines.impulse = engines.impulse ?? 0.8;
     e.engines.coils = engines.coils ?? 0.6;
@@ -117,6 +121,10 @@ function setWarp(e, state) {
   e.warp = { state, tau: 0 };
   if (state !== "charge") e.warpRamp = state === "on" ? 1 - Math.cbrt(1 - level) : Math.cbrt(level);
 }
+
+// Static unit vectors to eliminate array literal allocations in physics & steering
+const STATIC_FORWARD = [0, 0, 1];
+const STATIC_UP = [0, 1, 0];
 
 // Scratch structures to eliminate per-step heap allocations
 const FLY_SCRATCH = {
@@ -164,7 +172,7 @@ function fly(e, intent, dt, bodies) {
   const ease = atWarp ? FLIGHT.warpEase : FLIGHT.speedEase + (FLIGHT.dropEase - FLIGHT.speedEase) * e.warpRamp;
   e.speed += (target - e.speed) * easeShare(dt, ease);
 
-  quatRotateInto(e.quat, [0, 0, 1], FLY_SCRATCH.nose);
+  quatRotateInto(e.quat, STATIC_FORWARD, FLY_SCRATCH.nose);
   const grip = easeShare(dt, FLIGHT.grip + (FLIGHT.warpGrip - FLIGHT.grip) * level);
   e.vel[0] += (FLY_SCRATCH.nose[0] * e.speed - e.vel[0]) * grip;
   e.vel[1] += (FLY_SCRATCH.nose[1] * e.speed - e.vel[1]) * grip;
@@ -198,7 +206,12 @@ function fly(e, intent, dt, bodies) {
       e.vel[2] -= outZ * inward;
     }
     if (e.warp.state !== "off") setWarp(e, "off");
-    e.speed = Math.min(e.speed, FLIGHT.impulse);
+    const vLen = Math.hypot(e.vel[0], e.vel[1], e.vel[2]);
+    if (vLen > FLIGHT.impulse) {
+      const s = FLIGHT.impulse / vLen;
+      e.vel[0] *= s; e.vel[1] *= s; e.vel[2] *= s;
+    }
+    e.speed = Math.min(vLen, FLIGHT.impulse);
   }
 }
 
@@ -386,11 +399,14 @@ function computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, options 
           const closeY = e.pos[1] + dirY * proj - body.center[1];
           const closeZ = e.pos[2] + dirZ * proj - body.center[2];
           const closeDist = Math.hypot(closeX, closeY, closeZ);
-          if (closeDist < bSafe && closeDist > 1e-4) {
+          if (closeDist < bSafe) {
             const rayPush = ((bSafe - closeDist) / bSafe) * 5.0;
-            aimX += (closeX / closeDist) * rayPush;
-            aimY += (closeY / closeDist) * rayPush;
-            aimZ += (closeZ / closeDist) * rayPush;
+            const pushX = closeDist > 1e-4 ? closeX / closeDist : (Math.abs(dirY) < 0.9 ? 0 : 1);
+            const pushY = closeDist > 1e-4 ? closeY / closeDist : (Math.abs(dirY) < 0.9 ? 1 : 0);
+            const pushZ = closeDist > 1e-4 ? closeZ / closeDist : 0;
+            aimX += pushX * rayPush;
+            aimY += pushY * rayPush;
+            aimZ += pushZ * rayPush;
           }
         }
       }
@@ -430,7 +446,7 @@ function computeSteeringIntent(e, targetPos, targetVel, targetQuat, dt, options 
   // towards starboard (-x). Therefore an error where desired up is towards starboard (localUp.x < 0)
   // requires positive roll, which means rollAngle must be -atan2(localUp.x, localUp.y).
   if (targetQuat) {
-    quatRotateInto(targetQuat, [0, 1, 0], AI_SCRATCH.worldUp);
+    quatRotateInto(targetQuat, STATIC_UP, AI_SCRATCH.worldUp);
   } else {
     AI_SCRATCH.worldUp[0] = 0; AI_SCRATCH.worldUp[1] = 1; AI_SCRATCH.worldUp[2] = 0;
   }
@@ -504,10 +520,11 @@ function createWingmanController({ target = null, slotOffset = null, slotIndex =
 
     // Determine formation slot offset without heap allocations
     let slot = defaultSlot;
-    if (!slotOffset && worldRef && worldRef.entities) {
+    const ents = (worldRef && worldRef.entities) || (typeof world !== "undefined" && world.entities);
+    if (!slotOffset && ents) {
       let idx = 0;
-      for (let i = 0; i < worldRef.entities.length; i++) {
-        const ent = worldRef.entities[i];
+      for (let i = 0; i < ents.length; i++) {
+        const ent = ents[i];
         if (ent === lead) continue;
         if (ent === e) {
           slot = WINGMAN_SLOTS[idx % WINGMAN_SLOTS.length];
@@ -581,7 +598,6 @@ function pursuitController(e, dt, worldRef) {
 }
 
 function createPatrolController({ waypoints = null, radius = 5.0, speed = 0.5 } = {}) {
-  let wpIndex = 0;
   const pts = waypoints || [
     [radius, 0, 0],
     [0, radius * 0.5, radius],
@@ -591,10 +607,12 @@ function createPatrolController({ waypoints = null, radius = 5.0, speed = 0.5 } 
   const options = { standoff: 0.5, maxSpeed: speed * FLIGHT.impulse, allowWarp: false };
 
   return function patrolCtrl(e, dt) {
+    let wpIndex = e.patrolIndex || 0;
     const wp = pts[wpIndex];
     const dist = Math.hypot(wp[0] - e.pos[0], wp[1] - e.pos[1], wp[2] - e.pos[2]);
     if (dist < 1.5) {
       wpIndex = (wpIndex + 1) % pts.length;
+      e.patrolIndex = wpIndex;
     }
     return computeSteeringIntent(e, pts[wpIndex], null, null, dt, options, e.intent);
   };
@@ -649,10 +667,12 @@ const SYSTEM_BODIES = [
 ];
 
 function stepWorld(t, dt) {
-  const mc = moonCenter(t);
-  SYSTEM_BODIES[1].center[0] = mc[0];
-  SYSTEM_BODIES[1].center[1] = mc[1];
-  SYSTEM_BODIES[1].center[2] = mc[2];
+  const mc = moonCenter(t, SYSTEM_BODIES[1].center);
+  if (mc !== SYSTEM_BODIES[1].center) {
+    SYSTEM_BODIES[1].center[0] = mc[0];
+    SYSTEM_BODIES[1].center[1] = mc[1];
+    SYSTEM_BODIES[1].center[2] = mc[2];
+  }
 
   for (let i = 0; i < world.entities.length; i++) {
     const e = world.entities[i];

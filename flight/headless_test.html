@@ -256,7 +256,14 @@
       resetScene(1.0);
       check("resetScene: companion preserved in orbit when toggle active", world.entities.length === 2 && !!world.entities[1].rail);
 
-      // 13. Test Patrol Controller AI rendering in WebGL scene
+      // 13. Test preset query handling (?wingman)
+      presets.set("wingman", "1");
+      document.getElementById("wingmanToggle").checked = false;
+      resetScene(1.5);
+      check("presets: ?wingman spawns companion in orbit", world.entities.length === 2 && document.getElementById("wingmanToggle").checked);
+      presets.delete("wingman");
+
+      // 14. Test Patrol Controller AI rendering in WebGL scene
       resetWorld();
       requestEngage();
       const pShip = addEntity({

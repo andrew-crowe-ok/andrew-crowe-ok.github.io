@@ -35,6 +35,25 @@ try {
   multiplyInto(rotateX(0.4), rotateY(-1.1), multB);
   check("multiplyInto = multiply", near(Array.from(multiply(rotateX(0.4), rotateY(-1.1))), Array.from(multB), 1e-5));
 
+  // in-place quaternion methods agree with allocating versions
+  const qA = quatFromMatrix(rotateX(0.4));
+  const qB = quatFromMatrix(rotateY(-1.1));
+  const qMulOut = [0, 0, 0, 1];
+  quatMulInto(qA, qB, qMulOut);
+  check("quatMulInto = quatMul", near(qMulOut, quatMul(qA, qB)));
+  const qRotVecOut = [0, 0, 0, 1];
+  quatFromRotVecInto([0, 0.6, 0], qRotVecOut);
+  check("quatFromRotVecInto = quatFromRotVec", near(qRotVecOut, quatFromRotVec([0, 0.6, 0])));
+  const qRotateOut = [0, 0, 0];
+  quatRotateInto(q, [0.3, -0.5, 0.8], qRotateOut);
+  check("quatRotateInto = quatRotate", near(qRotateOut, quatRotate(q, [0.3, -0.5, 0.8])));
+  const qNormOut = [0, 0, 0, 1];
+  quatNormalizeInto([2, 3, 4, 5], qNormOut);
+  check("quatNormalizeInto = quatNormalize", near(qNormOut, quatNormalize([2, 3, 4, 5])));
+  const qSlerpOut = [0, 0, 0, 1];
+  slerpInto(qA, qB, 0.4, qSlerpOut);
+  check("slerpInto = slerp", near(qSlerpOut, slerp(qA, qB, 0.4)));
+
   // identity and lerp
   check("identity matrix", near(Array.from(identity()), [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]));
   check("lerp: scalar lerp", Math.abs(lerp(2, 6, 0.25) - 3) < 1e-6);
@@ -300,6 +319,9 @@ try {
   });
   check("entity-collision: warp was on", warpShip.warp.state === "on");
   stepWorld(1.0, 0.016);
+  check("entity-collision: knocked out of warp", warpShip.warp.state === "off");
+  check("entity-collision: speed capped at impulse", warpShip.speed <= FLIGHT.impulse);
+
   // 8. Patrol controller: waypoint sequencing & intent bounds
   resetWorld();
   const patrolWaypoints = [[10, 0, 0], [0, 10, 0], [-10, 0, 0]];
@@ -357,7 +379,7 @@ try {
     quat: [0, 0, 0, 1]
   });
   // Warm up one frame so prev, pose, intent are primed
-  advanceWorld(1.016, 0.016);
+  const initialAdvancePoseRef = advanceWorld(1.016, 0.016);
   const initialPlayerKeys = Object.keys(world.player).sort().join(",");
   const initialWingmanKeys = Object.keys(companion).sort().join(",");
   const initialPoseRef = companion.pose;
@@ -373,6 +395,30 @@ try {
     initialPlayerKeys === postPlayerKeys && initialWingmanKeys === postWingmanKeys);
   check("steady-state: internal pose, prev, and intent buffers reused in-place",
     companion.pose === initialPoseRef && companion.prev === initialPrevRef && companion.intent === initialIntentRef);
+  check("steady-state: advanceWorld return pose buffer reused in-place",
+    advanceWorld(2.0, 0.016) === initialAdvancePoseRef);
+
+  // 12. AI catch-up warp from distance without oscillation
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  world.player.pos = [0, 0, 0];
+  world.player.vel = [0, 0, 0];
+  world.player.speed = 0;
+  const distantWingman = addEntity({
+    model: "galaxy",
+    rail: null,
+    role: "wingman",
+    controller: wingmanController,
+    pos: [0, 0, -60],
+    quat: [0, 0, 0, 1]
+  });
+  stepWorld(1.016, 0.016);
+  check("ai-warp-catchup: initiates warp charge", distantWingman.warp.state === "charge");
+  stepWorld(1.032, 0.016);
+  check("ai-warp-catchup: continues charging without oscillation", distantWingman.warp.state === "charge");
+  for (let i = 0; i < 80; i++) stepWorld(1.032 + (i + 1) * 0.016, 0.016);
+  check("ai-warp-catchup: jumps to warp", distantWingman.warp.state === "on");
 } catch (err) { out.push("ERROR " + err.stack); }
 document.getElementById("out").textContent = out.join("\n");
 </script></body></html>

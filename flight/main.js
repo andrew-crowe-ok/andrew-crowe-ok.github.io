@@ -778,16 +778,22 @@ function updateStats(nowMs, frameDelta, cpuMs, ship) {
       statEls.entities.textContent = `${entCount} ${entCount === 1 ? "ship" : "ships"}`;
     }
     if (statEls.target && statEls.targetRow) {
-      const escort = (typeof world !== "undefined" && world.entities)
-        ? world.entities.find(e => e !== world.player)
-        : null;
+      let escort = null;
+      if (typeof world !== "undefined" && world.entities) {
+        for (let i = 0; i < world.entities.length; i++) {
+          if (world.entities[i] !== world.player) {
+            escort = world.entities[i];
+            break;
+          }
+        }
+      }
       if (escort) {
         statEls.targetRow.hidden = false;
         const dx = escort.pos[0] - ship.pos[0];
         const dy = escort.pos[1] - ship.pos[1];
         const dz = escort.pos[2] - ship.pos[2];
         const dist = Math.hypot(dx, dy, dz);
-        const state = escort.rail ? "ORBIT" : escort.warp && escort.warp.state === "on" ? "WARP" : (dist < 6 ? "ESCORT" : "FLYING");
+        const state = escort.rail ? "ORBIT" : (escort.warp && escort.warp.state === "on") ? "WARP" : (escort.warp && escort.warp.state === "charge") ? "CHARGE" : (dist < 6 ? "ESCORT" : "FLYING");
         statEls.target.textContent = `${dist.toFixed(1)}u [${state}]`;
       } else {
         statEls.targetRow.hidden = true;
@@ -1110,20 +1116,28 @@ function updateHud(ship) {
   setHud("lever", helm.lever.toFixed(2), v => { helmEls.throttle.value = v; });
   setHud("warp", ship.warp.state !== "off", v => { helmEls.warpButton.setAttribute("aria-pressed", v); });
 
-  const hasWingman = typeof world !== "undefined" && world.entities && world.entities.some(e => e !== world.player);
+  let escort = null;
+  if (typeof world !== "undefined" && world.entities) {
+    for (let i = 0; i < world.entities.length; i++) {
+      if (world.entities[i] !== world.player) {
+        escort = world.entities[i];
+        break;
+      }
+    }
+  }
+  const hasWingman = escort !== null;
   if (helmEls.wingmanButton) {
     setHud("wingman", hasWingman, v => {
       helmEls.wingmanButton.setAttribute("aria-pressed", v);
     });
   }
   if (helmEls.helmTarget) {
-    const escort = hasWingman ? world.entities.find(e => e !== world.player) : null;
     if (escort) {
       const dx = escort.pos[0] - ship.pos[0];
       const dy = escort.pos[1] - ship.pos[1];
       const dz = escort.pos[2] - ship.pos[2];
       const dist = Math.hypot(dx, dy, dz);
-      const st = escort.rail ? "ORBIT" : escort.warp && escort.warp.state === "on" ? "WARP" : (dist < 6 ? "ESCORT" : "PURSUIT");
+      const st = escort.rail ? "ORBIT" : (escort.warp && escort.warp.state === "on") ? "WARP" : (escort.warp && escort.warp.state === "charge") ? "CHARGE" : (dist < 6 ? "ESCORT" : "PURSUIT");
       setHud("tgtText", `TGT ${dist.toFixed(1)}U ${st}`, v => {
         helmEls.helmTarget.textContent = v;
         helmEls.helmTarget.hidden = false;
@@ -1211,7 +1225,7 @@ function resetScene(time) {
   sceneStart = time;
   resetWorld();
   const toggleEl = document.getElementById("wingmanToggle");
-  const wantsWingman = toggleEl ? toggleEl.checked : (presets.has("wingman") || Number(presets.get("ships")) > 1);
+  const wantsWingman = (toggleEl && toggleEl.checked) || presets.has("wingman") || Number(presets.get("ships")) > 1;
   const shipCount = Math.max(1, Math.min(MAX_INSTANCES - 2, Number(presets.get("ships") || (wantsWingman ? 2 : 1))));
   for (let s = 1; s < shipCount; s++) {
     addEntity({ model: "galaxy", rail: companionOrbitPose(s * 0.45), role: "wingman" });

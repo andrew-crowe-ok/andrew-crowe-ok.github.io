@@ -1,7 +1,14 @@
 <!DOCTYPE html>
-<html><body><pre id="out"></pre>
+<html><body><pre id="err"></pre><pre id="out"></pre>
+<script>
+window.addEventListener('error', e => {
+  document.getElementById('err').textContent += (e.error ? e.error.stack : e.message) + ' at ' + e.filename + ':' + e.lineno + '\n';
+});
+</script>
 <script src="transforms.js"></script>
 <script src="scene.js"></script>
+<script src="camera.js"></script>
+<script src="audio.js"></script>
 <script src="world.js"></script>
 <script>
 const out = [];
@@ -554,6 +561,110 @@ try {
     bareFlySafe = false;
   }
   check("fly: survives call with null bodies and missing radius", bareFlySafe && bareShip.speed > 0);
+
+  // 20. Audio engine parameter synthesis and bounds
+  check("audio: audioEngine exists", !!window.audioEngine);
+  const audioShip = { speed: 0, throttle: 0, helm: true, warp: { state: "off", tau: 0 }, warpLevel: 0 };
+  window.audioEngine.update(1.0, 0.016, audioShip);
+  const pIdle = window.audioEngine.getParams();
+  check("audio: idle frequency in [45, 60] Hz", pIdle.engineFreq >= 45 && pIdle.engineFreq <= 60, `freq: ${pIdle.engineFreq}`);
+  check("audio: idle gain in [0.05, 0.25]", pIdle.engineGain >= 0.05 && pIdle.engineGain <= 0.25, `gain: ${pIdle.engineGain}`);
+
+  audioShip.speed = FLIGHT.impulse;
+  audioShip.throttle = 1.0;
+  window.audioEngine.update(1.016, 0.016, audioShip);
+  const pFull = window.audioEngine.getParams();
+  check("audio: full throttle frequency in [120, 160] Hz", pFull.engineFreq >= 120 && pFull.engineFreq <= 160, `freq: ${pFull.engineFreq}`);
+  check("audio: full throttle gain in [0.55, 0.85]", pFull.engineGain >= 0.55 && pFull.engineGain <= 0.85, `gain: ${pFull.engineGain}`);
+  check("audio: full throttle cutoff opens in [550, 750] Hz", pFull.engineCutoff >= 550 && pFull.engineCutoff <= 750, `cutoff: ${pFull.engineCutoff}`);
+
+  // 21. Audio mute toggle
+  window.audioEngine.setMuted(true);
+  check("audio: mute sets volume to zero", window.audioEngine.isMuted() && window.audioEngine.getParams().masterVolume === 0);
+  window.audioEngine.setMuted(false);
+  check("audio: unmute restores volume", !window.audioEngine.isMuted() && window.audioEngine.getParams().masterVolume > 0);
+
+  // 22. Audio warp sequence parameter progression
+  audioShip.warp.state = "charge";
+  audioShip.warp.tau = 0.1;
+  window.audioEngine.update(1.1, 0.016, audioShip);
+  const wCharge0 = window.audioEngine.getParams().warpChargeFreq;
+  audioShip.warp.tau = 0.8;
+  window.audioEngine.update(1.8, 0.016, audioShip);
+  const wCharge1 = window.audioEngine.getParams().warpChargeFreq;
+  check("audio: warp charge frequency rises with tau", wCharge1 > wCharge0 && wCharge1 > 400, `w0: ${wCharge0}, w1: ${wCharge1}`);
+
+  audioShip.warp.state = "on";
+  audioShip.warpLevel = 1.0;
+  window.audioEngine.update(2.0, 0.016, audioShip);
+  check("audio: subspace drone gain active in warp", window.audioEngine.getParams().warpDroneGain > 0.4);
+
+  audioShip.warp.state = "off";
+  window.audioEngine.update(2.1, 0.016, audioShip);
+  check("audio: subspace drone gain zeroes when off warp", window.audioEngine.getParams().warpDroneGain === 0);
+
+  // 23. Collision impact event triggering: celestial bodies
+  resetWorld();
+  requestEngage();
+  const crasher = world.entities[0];
+  crasher.pos[0] = PLANET.radius + 0.1; crasher.pos[1] = 0; crasher.pos[2] = 0;
+  crasher.vel[0] = -2.5; crasher.vel[1] = 0; crasher.vel[2] = 0;
+  crasher.speed = 2.5;
+  fly(crasher, { pitch: 0, yaw: 0, roll: 0, throttle: 1, toggleWarp: false }, 0.016, SYSTEM_BODIES);
+  check("impact-celestial: world.lastImpact recorded", !!world.lastImpact && world.lastImpact.other === "planet");
+  check("impact-celestial: impact speed detected", world.lastImpact.speed > 2.0, `speed: ${world.lastImpact.speed}`);
+  check("impact-celestial: outward normal", world.lastImpact.normal[0] > 0.9, f(world.lastImpact.normal));
+
+  // 24. Collision impact event triggering: entity-to-entity
+  const impactShipA = makeEntity({ model: "galaxy" });
+  impactShipA.pos = [10, 0, 0]; impactShipA.vel = [2, 0, 0];
+  const impactShipB = makeEntity({ model: "galaxy" });
+  impactShipB.pos = [10.8, 0, 0]; impactShipB.vel = [-2, 0, 0];
+  resolveEntityCollisions([impactShipA, impactShipB]);
+  check("impact-entity: world.lastImpact recorded", !!world.lastImpact && world.lastImpact.entity === impactShipA && world.lastImpact.other === impactShipB);
+  check("impact-entity: closing speed recorded", world.lastImpact.speed > 3.0, `speed: ${world.lastImpact.speed}`);
+
+  // 25. Camera shake trauma and decay
+  resetCameraShake();
+  check("camera-shake: initial trauma is zero", getCameraShakeTrauma() === 0);
+  addCameraShake(0.85);
+  check("camera-shake: addCameraShake sets trauma", Math.abs(getCameraShakeTrauma() - 0.85) < 1e-4);
+  updateCameraShake(0.1);
+  check("camera-shake: decays monotonically with dt", getCameraShakeTrauma() < 0.85 && getCameraShakeTrauma() > 0.4);
+  updateCameraShake(0.3);
+  check("camera-shake: decays completely to zero", getCameraShakeTrauma() === 0);
+
+  // 26. applyCameraShake behavior and zero allocation
+  const baseMat = identity();
+  const unperturbed = applyCameraShake(baseMat, 1.0, 0.016);
+  check("camera-shake: unperturbed matrix equals input when trauma zero", near(Array.from(baseMat), Array.from(unperturbed)));
+  addCameraShake(0.7);
+  const perturbed = applyCameraShake(baseMat, 1.0, 0.016);
+  check("camera-shake: perturbed matrix shifts translation", Math.hypot(perturbed[12] - baseMat[12], perturbed[13] - baseMat[13]) > 0.01);
+
+  // 27. Steady-state zero Float32Array allocations with physics + camera shake + audio engine
+  resetWorld();
+  requestEngage();
+  advanceWorld(1.0, 0.016);
+  resetCameraShake();
+  let f32SimCount = 0;
+  const OrigF32Sim = window.Float32Array;
+  window.Float32Array = function(...args) {
+    f32SimCount++;
+    return new OrigF32Sim(...args);
+  };
+  window.Float32Array.prototype = OrigF32Sim.prototype;
+  try {
+    for (let i = 0; i < 60; i++) {
+      const p = advanceWorld(1.0 + i * 0.016, 0.016);
+      window.audioEngine.update(1.0 + i * 0.016, 0.016, p);
+      updateCameraShake(0.016);
+      applyCameraShake(baseMat, 1.0 + i * 0.016, 0.016);
+    }
+  } finally {
+    window.Float32Array = OrigF32Sim;
+  }
+  check("steady-state: zero Float32Array allocations in 60 sim + audio + shake steps", f32SimCount === 0, `allocated: ${f32SimCount}`);
 } catch (err) { out.push("ERROR " + err.stack); }
 document.getElementById("out").textContent = out.join("\n");
 </script></body></html>

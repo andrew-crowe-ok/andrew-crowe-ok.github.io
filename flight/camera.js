@@ -101,7 +101,7 @@ function updateCamera(t, dt, ship, free, drag) {
     lensFisheye = 0;
     chaseGrab = null;
     chaseQuat = null;
-    return free;
+    return applyCameraShake(free, t, dt);
   }
   const k = smootherstep(sincePress / CHASE.blend);
   const w = lensFisheye = ship.warpLevel;
@@ -116,7 +116,8 @@ function updateCamera(t, dt, ship, free, drag) {
   const chase = clearOfPlanet(chaseView({ pos: ship.pos, quat: chaseQuat }, look,
     CHASE.dist + (CHASE.warpDist - CHASE.dist) * w,
     CHASE.height + (CHASE.warpHeight - CHASE.height) * w));
-  return k >= 1 ? chase : blendViews(free, chase, k);
+  const finalView = k >= 1 ? chase : blendViews(free, chase, k);
+  return applyCameraShake(finalView, t, dt);
 }
 
 // ---------------------------------------------------------------------------
@@ -269,4 +270,57 @@ function pickObject(x, y, view, ship, moon) {
   ].filter(([, t]) => t !== null);
   if (!hits.length) return null;
   return hits.reduce((a, b) => b[1] < a[1] ? b : a)[0];
+}
+
+// ---------------------------------------------------------------------------
+// Camera Vibration & Shake
+// ---------------------------------------------------------------------------
+let cameraShakeTrauma = 0;
+const SHAKE_DECAY = 3.0; // Decay rate per second (~0.33s to recover from full trauma)
+const SHAKE_VIEW_MAT = new Float32Array(16);
+
+function addCameraShake(amount) {
+  cameraShakeTrauma = Math.min(1.0, cameraShakeTrauma + Math.max(0, amount));
+}
+
+function getCameraShakeTrauma() {
+  return cameraShakeTrauma;
+}
+
+function updateCameraShake(dt) {
+  if (cameraShakeTrauma > 0) {
+    cameraShakeTrauma = Math.max(0, cameraShakeTrauma - SHAKE_DECAY * Math.max(0, dt));
+  }
+  return cameraShakeTrauma;
+}
+
+function resetCameraShake() {
+  cameraShakeTrauma = 0;
+}
+
+function applyCameraShake(view, t, dt) {
+  if (cameraShakeTrauma <= 0) return view;
+  updateCameraShake(dt);
+  const trauma = cameraShakeTrauma;
+  if (trauma <= 0) return view;
+
+  const intensity = trauma * trauma;
+  // Multi-frequency harmonic perturbation for smooth, non-repeating vibration
+  const ox = (Math.sin(t * 53.0) * 0.7 + Math.sin(t * 97.0) * 0.3) * 0.14 * intensity;
+  const oy = (Math.cos(t * 61.0) * 0.7 + Math.sin(t * 103.0) * 0.3) * 0.14 * intensity;
+  const oz = (Math.sin(t * 41.0) * 0.7 + Math.cos(t * 79.0) * 0.3) * 0.09 * intensity;
+
+  SHAKE_VIEW_MAT.set(view);
+  SHAKE_VIEW_MAT[12] += ox;
+  SHAKE_VIEW_MAT[13] += oy;
+  SHAKE_VIEW_MAT[14] += oz;
+  return SHAKE_VIEW_MAT;
+}
+
+if (typeof window !== "undefined") {
+  window.addCameraShake = addCameraShake;
+  window.getCameraShakeTrauma = getCameraShakeTrauma;
+  window.updateCameraShake = updateCameraShake;
+  window.resetCameraShake = resetCameraShake;
+  window.applyCameraShake = applyCameraShake;
 }

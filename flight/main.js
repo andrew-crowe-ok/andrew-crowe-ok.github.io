@@ -968,7 +968,10 @@ canvas.addEventListener("wheel", e => {
 // where the clock is known (world.js), and the button stays down until the
 // ship is back in orbit.
 const engageButton = document.getElementById("engageButton");
-engageButton.addEventListener("click", requestEngage);
+engageButton.addEventListener("click", () => {
+  if (window.audioEngine) window.audioEngine.ensureAudioContext();
+  requestEngage();
+});
 
 // ---------------------------------------------------------------------------
 // The helm. world.js flies the ship from `helm`; this keeps `helm` saying
@@ -1001,6 +1004,10 @@ window.addEventListener("keydown", e => {
     if (!e.repeat) toggleWingman();
     return;
   }
+  if (e.code === "KeyM") {
+    if (!e.repeat && window.audioEngine) window.audioEngine.toggleMute();
+    return;
+  }
   if (!offOrbit() || !FLIGHT_KEYS.includes(e.code)) return;
   // A slider that has the focus keeps its own arrow keys
   if (e.code.startsWith("Arrow") && e.target instanceof HTMLInputElement) return;
@@ -1014,16 +1021,31 @@ window.addEventListener("blur", () => held.clear());
 
 const helmHud = document.getElementById("helmHud");
 const helmEls = Object.fromEntries(["helmMode", "helmSpeed", "helmTarget", "throttle", "warpButton",
-  "wingmanButton", "orbitButton", "stick", "stickKnob", "rollLeft", "rollRight"].map(id => [id, document.getElementById(id)]));
+  "wingmanButton", "audioButton", "orbitButton", "stick", "stickKnob", "rollLeft", "rollRight"].map(id => [id, document.getElementById(id)]));
 
 helmEls.throttle.addEventListener("input", () => { helm.lever = parseFloat(helmEls.throttle.value); });
 // Buttons and the slider give the focus back once used, so Space and the
 // arrows go on flying the ship instead of pressing them again
-for (const el of [helmEls.throttle, helmEls.warpButton, helmEls.wingmanButton, helmEls.orbitButton])
+for (const el of [helmEls.throttle, helmEls.warpButton, helmEls.wingmanButton, helmEls.audioButton, helmEls.orbitButton])
   if (el) el.addEventListener("pointerup", () => el.blur());
 helmEls.warpButton.addEventListener("click", () => { helm.toggleWarp = true; });
 if (helmEls.wingmanButton) helmEls.wingmanButton.addEventListener("click", toggleWingman);
+if (helmEls.audioButton) {
+  helmEls.audioButton.addEventListener("click", () => {
+    if (window.audioEngine) window.audioEngine.toggleMute();
+  });
+}
 helmEls.orbitButton.addEventListener("click", returnToOrbit);
+
+const audioToggleEl = document.getElementById("audioToggle");
+if (audioToggleEl) {
+  audioToggleEl.addEventListener("change", e => {
+    if (window.audioEngine) window.audioEngine.setMuted(!e.target.checked);
+  });
+}
+if (presets.has("mute") || presets.get("audio") === "0") {
+  if (window.audioEngine) window.audioEngine.setMuted(true);
+}
 
 const wingmanToggleEl = document.getElementById("wingmanToggle");
 if (wingmanToggleEl) {
@@ -1207,25 +1229,81 @@ function updateReveal(t) {
   }
 }
 
-// The two washes over the canvas (index.html), set once a frame:
-//   flash  white-blue, at the jump to warp: up in FLASH.rise, then dying away
-//          over FLASH.decay -- it covers the instant the lens starts to open
-//   fade   black, out over FADE.out before a reset and back in over FADE.in
-//          after one (and on page load)
+// The washes over the canvas (index.html), set once a frame:
+//   warpFlash   white-blue, at the jump to warp: up in FLASH.rise, then dying away
+//               over FLASH.decay -- it covers the instant the lens starts to open
+//   shieldFlash cyan directional wash on shield impact deflection
+//   fade        black, out over FADE.out before a reset and back in over FADE.in
+//               after one (and on page load)
 const FLASH = { peak: 0.9, rise: 0.05, decay: 0.16 };
 const FADE = { out: 0.45, in: 0.7 };
 const warpFlash = document.getElementById("warpFlash");
 const fade = document.getElementById("fade");
+const shieldFlash = document.getElementById("shieldFlash");
+let shieldFlashIntensity = 0;
+const SHIELD_DECAY = 3.5;
+const SHIELD_NORMAL_LOCAL = [0, 0, 0];
+
+function triggerShieldFlash(speed, normal, sign = 1) {
+  const maxImpulse = (typeof FLIGHT !== "undefined" && FLIGHT.impulse) ? FLIGHT.impulse : 3.0;
+  shieldFlashIntensity = Math.min(1.0, Math.max(0.35, (speed / maxImpulse) * 0.9 + 0.35));
+  if (shieldFlash) {
+    setWash(shieldFlash, shieldFlashIntensity);
+    if (normal && typeof world !== "undefined" && world.entities && world.entities.length > 0) {
+      const ship = world.entities[0];
+      if (ship && ship.quat) {
+        const qConj = quatConj(ship.quat);
+        quatRotateInto(qConj, normal, SHIELD_NORMAL_LOCAL);
+        const lx = SHIELD_NORMAL_LOCAL[0] * sign;
+        const ly = SHIELD_NORMAL_LOCAL[1] * sign;
+        const sx = Math.min(85, Math.max(15, 50 - lx * 32));
+        const sy = Math.min(85, Math.max(15, 50 - ly * 32));
+        shieldFlash.style.setProperty("--shield-x", `${sx.toFixed(1)}%`);
+        shieldFlash.style.setProperty("--shield-y", `${sy.toFixed(1)}%`);
+      }
+    }
+  }
+}
+
+function handleWorldImpact(impact) {
+  const isPlayer = impact.entity === world.entities[0] || impact.other === world.entities[0];
+  if (isPlayer) {
+    if (window.audioEngine) {
+      window.audioEngine.triggerShieldImpact(impact.speed, impact.normal);
+    }
+    if (typeof addCameraShake === "function") {
+      const maxImpulse = (typeof FLIGHT !== "undefined" && FLIGHT.impulse) ? FLIGHT.impulse : 3.0;
+      addCameraShake(Math.min(1.0, Math.max(0.2, (impact.speed / maxImpulse) * 0.8)));
+    }
+    triggerShieldFlash(impact.speed, impact.normal, impact.entity === world.entities[0] ? 1 : -1);
+  } else {
+    if (window.audioEngine) {
+      window.audioEngine.triggerShieldImpact(impact.speed * 0.5, impact.normal);
+    }
+  }
+}
+world.onImpact = handleWorldImpact;
+
 function setWash(el, v) {
+  if (!el) return;
   const s = v.toFixed(3);
   if (el.style.opacity !== s) el.style.opacity = s;
 }
-function updateWashes(t, ship) {
+function updateWashes(t, ship, dt = 0.016) {
   const w = ship.warp.state === "on" ? ship.warp.tau : null;
   setWash(warpFlash, w === null ? 0 : FLASH.peak *
     (w < FLASH.rise ? w / FLASH.rise : Math.exp(-(w - FLASH.rise) / FLASH.decay)));
   const out = world.resetAt === null ? 0 : smootherstep((t - (world.resetAt - FADE.out)) / FADE.out);
   setWash(fade, Math.max(out, 1 - smootherstep(t / FADE.in)));
+
+  if (shieldFlash) {
+    if (shieldFlashIntensity > 0) {
+      shieldFlashIntensity = Math.max(0, shieldFlashIntensity - dt * SHIELD_DECAY);
+      setWash(shieldFlash, shieldFlashIntensity);
+    } else {
+      setWash(shieldFlash, 0);
+    }
+  }
 }
 
 // Everything back the way the page loaded: the ship on its circle, the free
@@ -1237,6 +1315,9 @@ function resetScene(time) {
   resetFreeCamera();
   sceneStart = time;
   resetWorld();
+  shieldFlashIntensity = 0;
+  if (shieldFlash) setWash(shieldFlash, 0);
+  if (typeof resetCameraShake === "function") resetCameraShake();
   const toggleEl = document.getElementById("wingmanToggle");
   const wantsWingman = (toggleEl && toggleEl.checked) || presets.has("wingman") || Number(presets.get("ships")) > 1;
   const shipCount = Math.max(1, Math.min(MAX_INSTANCES - 2, Number(presets.get("ships") || (wantsWingman ? 2 : 1))));
@@ -1375,6 +1456,9 @@ function stepFrame(now, dt) {
     dragAngles);
   lastView = view; lastShip = ship; lastMoon = moon;
   updateEngines(t, dt, ship);
+  if (window.audioEngine) {
+    window.audioEngine.update(t, dt, ship);
+  }
   STEP_FRAME_RESULT.t = t;
   STEP_FRAME_RESULT.ship = ship;
   STEP_FRAME_RESULT.view = view;
@@ -1421,7 +1505,7 @@ function render(time) {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   endGpuTimer();
 
-  updateWashes(t, ship);
+  updateWashes(t, ship, dt);
   updateReveal(t);
   engageButton.disabled = offOrbit();
   updateHud(ship);
@@ -1441,6 +1525,8 @@ window.getRenderScale = () => renderScale;
 window.assetsReady = assetsReady;
 window.render = render;
 window.benchRunning = false;
+window.triggerShieldFlash = triggerShieldFlash;
+window.handleWorldImpact = handleWorldImpact;
 
 // ?bench runs the benchmark instead of the live loop (bench.js)
 if (!presets.has("bench")) requestAnimationFrame(render);

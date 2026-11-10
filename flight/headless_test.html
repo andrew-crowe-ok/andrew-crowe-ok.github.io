@@ -6,6 +6,7 @@
 </head>
 <body>
   <canvas id="glcanvas" width="640" height="360"></canvas>
+  <div id="shieldFlash" class="wash"></div>
   <div id="warpFlash" class="wash"></div>
   <div id="fade" class="wash"></div>
   <div id="error" role="alert" hidden></div>
@@ -24,10 +25,11 @@
         <button id="rollLeft" class="touch" aria-label="Roll left">&#x27F2;</button>
         <button id="warpButton" aria-pressed="false">Warp</button>
         <button id="wingmanButton" aria-pressed="false">Escort</button>
+        <button id="audioButton" aria-pressed="true">Audio</button>
         <button id="orbitButton">Orbit</button>
         <button id="rollRight" class="touch" aria-label="Roll right">&#x27F3;</button>
       </div>
-      <div id="helmKeys">W S pitch &middot; A D yaw &middot; Q E roll &middot; R F throttle &middot; Space warp &middot; C escort &middot; Esc orbit</div>
+      <div id="helmKeys">W S pitch &middot; A D yaw &middot; Q E roll &middot; R F throttle &middot; Space warp &middot; C escort &middot; M mute &middot; Esc orbit</div>
     </div>
   </div>
 
@@ -68,6 +70,7 @@
       <label><input type="checkbox" id="stats"> Stats</label>
       <label><input type="checkbox" id="invert"> Invert pitch</label>
       <label><input type="checkbox" id="wingmanToggle"> Wingman</label>
+      <label><input type="checkbox" id="audioToggle" checked> Sound</label>
     </div>
   </details>
 
@@ -139,6 +142,7 @@
   <script src="raytrace.js"></script>
   <script src="ship.js"></script>
   <script src="camera.js"></script>
+  <script src="audio.js"></script>
   <script src="scene.js"></script>
   <script src="world.js"></script>
   <script src="main.js"></script>
@@ -335,6 +339,78 @@
         window.Float32Array = OrigF32;
       }
       check("steady-state: zero Float32Array allocations in 30 buildScene passes", buildF32 === 0, `allocated: ${buildF32}`);
+
+      // 18. Procedural Audio Engine presence and headless safety
+      resetScene(0);
+      check("audio: audioEngine exists on window", !!window.audioEngine);
+      const aParams = window.audioEngine.getParams();
+      check("audio: getParams returns valid bounds", aParams && typeof aParams.engineFreq === "number");
+      check("audio: initial idle engine hum bounds", aParams.engineFreq >= 45 && aParams.engineFreq <= 90 && aParams.engineGain > 0);
+
+      // 19. Audio UI controls and mute toggle
+      const audioBtn = document.getElementById("audioButton");
+      const audioChk = document.getElementById("audioToggle");
+      check("audio-ui: audioButton and audioToggle exist in DOM", !!audioBtn && !!audioChk);
+      const wasMuted = window.audioEngine.isMuted();
+      window.audioEngine.setMuted(true);
+      check("audio: setMuted true updates state and volume", window.audioEngine.isMuted() && window.audioEngine.getParams().masterVolume === 0);
+      check("audio-ui: audioButton aria-pressed reflects mute", audioBtn.getAttribute("aria-pressed") === "false");
+      window.audioEngine.setMuted(false);
+      check("audio: setMuted false restores volume", !window.audioEngine.isMuted() && window.audioEngine.getParams().masterVolume > 0);
+
+      // 20. Audio modulation with flight speed & throttle
+      resetScene(0);
+      requestEngage();
+      const pIdle = window.audioEngine.getParams().engineFreq;
+      helm.lever = 1.0;
+      for (let i = 0; i < 30; i++) {
+        stepFrame(0.5 + i * 0.016, 0.016);
+      }
+      const pFast = window.audioEngine.getParams().engineFreq;
+      check("audio: engine frequency increases with speed/throttle", pFast > pIdle, `idle: ${pIdle}, fast: ${pFast}`);
+      check("audio: full throttle engine gain within bounds", window.audioEngine.getParams().engineGain > 0.3);
+
+      // 21. Visual & Audio Shield impact feedback and directional wash
+      resetScene(0);
+      requestEngage();
+      const sFlashEl = document.getElementById("shieldFlash");
+      check("visual: shieldFlash wash element exists", !!sFlashEl);
+      notifyImpact(world.entities[0], "planet", 2.5, 1, 0, 0);
+      check("impact: world.lastImpact recorded", !!world.lastImpact && world.lastImpact.speed === 2.5);
+      check("impact: audio registered impact speed", window.audioEngine.getParams().lastImpactSpeed === 2.5);
+      check("visual: shield flash wash triggered", parseFloat(sFlashEl.style.opacity) > 0.3);
+      check("visual: directional shield wash style assigned", sFlashEl.style.getPropertyValue("--shield-x").length > 0);
+      check("camera-shake: impact induces trauma", getCameraShakeTrauma() > 0.3, `trauma: ${getCameraShakeTrauma()}`);
+
+      // 22. Camera shake & shield flash decay over time
+      for (let i = 0; i < 40; i++) {
+        stepFrame(2.0 + i * 0.016, 0.016);
+        updateWashes(2.0 + i * 0.016, world.entities[0], 0.016);
+      }
+      check("camera-shake: trauma decays to zero", getCameraShakeTrauma() === 0, `trauma: ${getCameraShakeTrauma()}`);
+      check("visual: shield flash decays to zero opacity", parseFloat(sFlashEl.style.opacity) === 0);
+
+      // 23. Warp sequence: charge whine -> jump whoosh -> drone & camera shake
+      resetScene(0);
+      requestEngage();
+      helm.toggleWarp = true;
+      stepFrame(0.1, 0.016);
+      check("warp-audio: charge state activates whine", world.entities[0].warp.state === "charge" && window.audioEngine.getParams().warpChargeGain > 0);
+      const chargeFreq0 = window.audioEngine.getParams().warpChargeFreq;
+
+      // Advance partially through warp charge (~0.5s into the 1.2s charge)
+      for (let i = 0; i < 30; i++) {
+        stepFrame(0.12 + i * 0.016, 0.016);
+      }
+      const chargeFreq1 = window.audioEngine.getParams().warpChargeFreq;
+      check("warp-audio: charge pitch rises monotonically", chargeFreq1 > chargeFreq0, `f0: ${chargeFreq0}, f1: ${chargeFreq1}`);
+
+      // Complete charge and step into warp jump (past 1.2s)
+      for (let i = 0; i < 60; i++) {
+        stepFrame(0.65 + i * 0.016, 0.016);
+      }
+      check("warp: ship reaches warp on", world.entities[0].warp.state === "on");
+      check("warp-audio: subspace drone gain active in warp", window.audioEngine.getParams().warpDroneGain > 0.2);
     } catch (err) {
       out.push("ERROR " + err.stack);
     }

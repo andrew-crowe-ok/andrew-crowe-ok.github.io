@@ -139,7 +139,12 @@ function fly(e, intent, dt, bodies) {
   // Warp: lever -> charge -> jump; the lever again drops back out
   if (intent.toggleWarp) setWarp(e, e.warp.state === "off" ? "charge" : "off");
   e.warp.tau += dt;
-  if (e.warp.state === "charge" && e.warp.tau >= FLIGHT.warpCharge) setWarp(e, "on");
+  if (e.warp.state === "charge" && e.warp.tau >= FLIGHT.warpCharge) {
+    setWarp(e, "on");
+    if (typeof window !== "undefined" && typeof window.addCameraShake === "function" && e === world.entities[0]) {
+      window.addCameraShake(0.65);
+    }
+  }
   const atWarp = e.warp.state === "on";
   e.warpRamp = clamp01(e.warpRamp + (atWarp ? dt / FLIGHT.warpIn : -dt / FLIGHT.warpOut));
   const level = warpLevelOf(e);
@@ -204,6 +209,8 @@ function fly(e, intent, dt, bodies) {
     e.pos[2] = body.center[2] + outZ * reach;
     const inward = e.vel[0] * outX + e.vel[1] * outY + e.vel[2] * outZ;
     if (inward < 0) {
+      const impactSpeed = -inward;
+      notifyImpact(e, body.name || "body", impactSpeed, outX, outY, outZ);
       e.vel[0] -= outX * inward;
       e.vel[1] -= outY * inward;
       e.vel[2] -= outZ * inward;
@@ -300,6 +307,8 @@ function resolveEntityCollisions(entities) {
           const vn = rvx * nx + rvy * ny + rvz * nz;
 
           if (vn < 0) {
+            const impactSpeed = -vn;
+            notifyImpact(a, b, impactSpeed, nx, ny, nz);
             const restitution = 0.5;
             const imp = -(1 + restitution) * vn;
             if (!aRail && !bRail) {
@@ -682,12 +691,38 @@ function playerController(e, dt) {
 // ---------------------------------------------------------------------------
 // The world and its clock
 // ---------------------------------------------------------------------------
-const world = { entities: [], player: null, helmT0: null, resetAt: null, pending: 0, engage: false };
+const world = { entities: [], player: null, helmT0: null, resetAt: null, pending: 0, engage: false, lastImpact: null, onImpact: null, clock: 0 };
+
+const LAST_IMPACT = {
+  entity: null,
+  other: null,
+  speed: 0,
+  normal: [0, 0, 0],
+  t: 0
+};
+
+function notifyImpact(entity, other, speed, nx, ny, nz) {
+  LAST_IMPACT.entity = entity;
+  LAST_IMPACT.other = other;
+  LAST_IMPACT.speed = speed;
+  LAST_IMPACT.normal[0] = nx;
+  LAST_IMPACT.normal[1] = ny;
+  LAST_IMPACT.normal[2] = nz;
+  LAST_IMPACT.t = world.clock || 0;
+  world.lastImpact = LAST_IMPACT;
+  if (typeof world.onImpact === "function") {
+    try {
+      world.onImpact(LAST_IMPACT);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+}
 
 // Back to how the page loads: one ship, riding the orbit
 function resetWorld() {
   const player = makeEntity({ model: "galaxy", rail: orbitPose, role: "player" });
-  Object.assign(world, { entities: [player], player, helmT0: null, resetAt: null, pending: 0, engage: false });
+  Object.assign(world, { entities: [player], player, helmT0: null, resetAt: null, pending: 0, engage: false, lastImpact: null });
   Object.assign(helm, { pitch: 0, yaw: 0, roll: 0, leverRate: 0, toggleWarp: false,
     lever: ORBIT_SPEED / FLIGHT.impulse });
 }
@@ -702,11 +737,12 @@ function requestReset(t, lead) { if (offOrbit()) world.resetAt ??= t + lead; }
 function resetDue(t) { return world.resetAt !== null && t >= world.resetAt; }
 
 const SYSTEM_BODIES = [
-  { center: [0, 0, 0], radius: PLANET.radius },
-  { center: [0, 0, 0], radius: MOON.radius }
+  { name: "planet", center: [0, 0, 0], radius: PLANET.radius },
+  { name: "moon", center: [0, 0, 0], radius: MOON.radius }
 ];
 
 function stepWorld(t, dt) {
+  world.clock = t;
   const mc = moonCenter(t, SYSTEM_BODIES[1].center);
   if (mc !== SYSTEM_BODIES[1].center) {
     SYSTEM_BODIES[1].center[0] = mc[0];
@@ -846,4 +882,6 @@ if (typeof window !== "undefined") {
   window.computeSteeringIntent = computeSteeringIntent;
   window.toggleWingman = toggleWingman;
   window.toggleCompanionEntity = toggleCompanionEntity;
+  window.notifyImpact = notifyImpact;
+  window.SYSTEM_BODIES = SYSTEM_BODIES;
 }

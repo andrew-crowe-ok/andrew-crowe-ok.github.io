@@ -28,6 +28,14 @@
                   rgba(var(--glow), 0.35) 55%, rgba(var(--glow), 0) 80%);
       mix-blend-mode: screen;
     }
+    #shieldFlash {
+      background: radial-gradient(circle at var(--shield-x, 50%) var(--shield-y, 50%),
+                  rgba(180, 245, 255, 0.95) 0%,
+                  rgba(var(--glow), 0.75) 25%,
+                  rgba(40, 140, 255, 0.35) 55%,
+                  transparent 75%);
+      mix-blend-mode: screen;
+    }
     #fade { background: #000; opacity: 1; }
     #error {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -132,7 +140,7 @@
       user-select: none; -webkit-user-select: none;
     }
     #helmButtons button:hover, #helmButtons button:focus-visible { border-color: rgba(var(--glow), 1); }
-    #warpButton[aria-pressed="true"], #wingmanButton[aria-pressed="true"] {
+    #warpButton[aria-pressed="true"], #wingmanButton[aria-pressed="true"], #audioButton[aria-pressed="true"] {
       background: rgba(var(--glow), 0.28); border-color: rgba(var(--glow), 1);
       box-shadow: 0 0 14px rgba(var(--glow), 0.55);
     }
@@ -288,6 +296,7 @@
 
 <body>
   <canvas id="glcanvas"></canvas>
+  <div id="shieldFlash" class="wash"></div>
   <div id="warpFlash" class="wash"></div>
   <div id="fade" class="wash"></div>
   <div id="error" role="alert" hidden></div>
@@ -306,10 +315,11 @@
         <button id="rollLeft" class="touch" aria-label="Roll left">&#x27F2;</button>
         <button id="warpButton" aria-pressed="false">Warp</button>
         <button id="wingmanButton" aria-pressed="false" title="Toggle wingman escort (key: C)">Escort</button>
+        <button id="audioButton" aria-pressed="true" title="Toggle audio (key: M)">Audio</button>
         <button id="orbitButton">Orbit</button>
         <button id="rollRight" class="touch" aria-label="Roll right">&#x27F3;</button>
       </div>
-      <div id="helmKeys">W S pitch &middot; A D yaw &middot; Q E roll &middot; R F throttle &middot; Space warp &middot; C escort &middot; Esc orbit</div>
+      <div id="helmKeys">W S pitch &middot; A D yaw &middot; Q E roll &middot; R F throttle &middot; Space warp &middot; C escort &middot; M mute &middot; Esc orbit</div>
     </div>
   </div>
 
@@ -350,6 +360,7 @@
       <label><input type="checkbox" id="stats"> Stats</label>
       <label><input type="checkbox" id="invert"> Invert pitch</label>
       <label><input type="checkbox" id="wingmanToggle"> Wingman</label>
+      <label><input type="checkbox" id="audioToggle" checked> Sound</label>
     </div>
   </details>
 
@@ -412,6 +423,7 @@
   <script src="textures.js?v=9"></script>
   <script src="ship.js?v=9"></script>
   <script src="camera.js?v=9"></script>
+  <script src="audio.js?v=9"></script>
   <script src="scene.js?v=9"></script>
   <script src="world.js?v=9"></script>
   <script src="main.js?v=9"></script>

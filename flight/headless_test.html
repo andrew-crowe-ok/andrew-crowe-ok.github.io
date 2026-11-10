@@ -375,14 +375,26 @@
       requestEngage();
       const sFlashEl = document.getElementById("shieldFlash");
       check("visual: shieldFlash wash element exists", !!sFlashEl);
-      notifyImpact(world.entities[0], "planet", 2.5, 1, 0, 0);
+
+      // Starboard entity impact (nx > 0) should direct flash towards right (sx > 50%)
+      const starboardEntity = makeEntity({ model: "galaxy" });
+      starboardEntity.pos = [10, 0, 0];
+      notifyImpact(world.entities[0], starboardEntity, 2.5, 1, 0, 0);
       check("impact: world.lastImpact recorded", !!world.lastImpact && world.lastImpact.speed === 2.5);
       check("impact: audio registered impact speed", window.audioEngine.getParams().lastImpactSpeed === 2.5);
       check("visual: shield flash wash triggered", parseFloat(sFlashEl.style.opacity) > 0.3);
-      check("visual: directional shield wash style assigned", sFlashEl.style.getPropertyValue("--shield-x").length > 0);
+      const starX = parseFloat(sFlashEl.style.getPropertyValue("--shield-x"));
+      check("visual: starboard impact maps to right side sx > 50%", starX > 50, `sx: ${starX}`);
       check("camera-shake: impact induces trauma", getCameraShakeTrauma() > 0.3, `trauma: ${getCameraShakeTrauma()}`);
 
+      // Sub-threshold scraping contact (< 0.08) should not add excessive trauma or overwrite flash
+      resetCameraShake();
+      notifyImpact(world.entities[0], "planet", 0.03, 1, 0, 0);
+      check("impact: scraping contact ignored for shake", getCameraShakeTrauma() === 0, `trauma: ${getCameraShakeTrauma()}`);
+
       // 22. Camera shake & shield flash decay over time
+      addCameraShake(0.7);
+      triggerShieldFlash(2.5, [1, 0, 0]);
       for (let i = 0; i < 40; i++) {
         stepFrame(2.0 + i * 0.016, 0.016);
         updateWashes(2.0 + i * 0.016, world.entities[0], 0.016);
@@ -411,6 +423,18 @@
       }
       check("warp: ship reaches warp on", world.entities[0].warp.state === "on");
       check("warp-audio: subspace drone gain active in warp", window.audioEngine.getParams().warpDroneGain > 0.2);
+      check("warp-audio: jump telemetry recorded", window.audioEngine.getParams().lastWarpJumpTime > 0);
+      check("camera-shake: single-trigger warp trauma bounded", getCameraShakeTrauma() <= 0.70, `trauma: ${getCameraShakeTrauma()}`);
+
+      // Dropout transition: toggle warp off and verify dropout sound
+      helm.toggleWarp = true;
+      stepFrame(1.8, 0.016);
+      check("warp: ship dropped out of warp", world.entities[0].warp.state === "off");
+      check("warp-audio: dropout telemetry recorded", window.audioEngine.getParams().lastWarpDropoutTime > 0);
+
+      // Return to orbit via resetScene: verify audio engine clean reset
+      resetScene(2.0);
+      check("audio: resetScene clears warp drone", window.audioEngine.getParams().warpDroneGain === 0);
     } catch (err) {
       out.push("ERROR " + err.stack);
     }

@@ -665,6 +665,29 @@ try {
     window.Float32Array = OrigF32Sim;
   }
   check("steady-state: zero Float32Array allocations in 60 sim + audio + shake steps", f32SimCount === 0, `allocated: ${f32SimCount}`);
+
+  // 28. Audio engine reset, one-shot telemetry, and mute parameter continuity
+  audioShip.warp.state = "on";
+  audioShip.warpLevel = 1.0;
+  window.audioEngine.update(3.0, 0.016, audioShip);
+  check("audio: drone active before reset", window.audioEngine.getParams().warpDroneGain > 0.4);
+  window.audioEngine.reset();
+  const pReset = window.audioEngine.getParams();
+  check("audio: reset zeroes drone gain", pReset.warpDroneGain === 0);
+  check("audio: reset zeroes warp charge freq", pReset.warpChargeFreq === 0);
+
+  window.audioEngine.triggerWarpJump();
+  check("audio: warp jump telemetry recorded", window.audioEngine.getParams().lastWarpJumpTime > 0);
+  window.audioEngine.triggerWarpDropout();
+  check("audio: warp dropout telemetry recorded", window.audioEngine.getParams().lastWarpDropoutTime > 0);
+
+  window.audioEngine.setMuted(true);
+  audioShip.warp.state = "off";
+  audioShip.speed = FLIGHT.impulse;
+  audioShip.throttle = 1.0;
+  window.audioEngine.update(4.0, 0.016, audioShip);
+  check("audio: parameter continuity maintained while muted", window.audioEngine.getParams().engineFreq >= 120);
+  window.audioEngine.setMuted(false);
 } catch (err) { out.push("ERROR " + err.stack); }
 document.getElementById("out").textContent = out.join("\n");
 </script></body></html>

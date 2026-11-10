@@ -51,7 +51,9 @@
     warpChargeGain: 0,
     warpDroneGain: 0,
     lastImpactSpeed: 0,
-    lastImpactTime: 0
+    lastImpactTime: 0,
+    lastWarpJumpTime: 0,
+    lastWarpDropoutTime: 0
   };
 
   function createNoiseBuffer(ctx, seconds = 1.0) {
@@ -202,6 +204,7 @@
 
   // One-shot: Explosive Warp Jump Whoosh
   function triggerWarpJump() {
+    AUDIO_PARAMS.lastWarpJumpTime = (typeof performance !== "undefined" && performance.now) ? performance.now() * 0.001 : (audioCtx ? audioCtx.currentTime : 1);
     if (!audioCtx || isMuted || audioCtx.state === "suspended") return;
     try {
       const now = audioCtx.currentTime;
@@ -223,6 +226,14 @@
         filter.connect(gain);
         gain.connect(masterGainNode);
 
+        noiseSrc.onended = () => {
+          try {
+            noiseSrc.disconnect();
+            filter.disconnect();
+            gain.disconnect();
+          } catch (e) {}
+        };
+
         noiseSrc.start(now);
         noiseSrc.stop(now + 0.86);
       }
@@ -239,6 +250,12 @@
 
       sub.connect(subGain);
       subGain.connect(masterGainNode);
+      sub.onended = () => {
+        try {
+          sub.disconnect();
+          subGain.disconnect();
+        } catch (e) {}
+      };
       sub.start(now);
       sub.stop(now + 0.66);
     } catch (e) {
@@ -248,6 +265,7 @@
 
   // One-shot: Warp Dropout Deceleration Chirp
   function triggerWarpDropout() {
+    AUDIO_PARAMS.lastWarpDropoutTime = (typeof performance !== "undefined" && performance.now) ? performance.now() * 0.001 : (audioCtx ? audioCtx.currentTime : 1);
     if (!audioCtx || isMuted || audioCtx.state === "suspended") return;
     try {
       const now = audioCtx.currentTime;
@@ -262,6 +280,12 @@
 
       osc.connect(gain);
       gain.connect(masterGainNode);
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch (e) {}
+      };
       osc.start(now);
       osc.stop(now + 0.39);
     } catch (e) {
@@ -270,13 +294,18 @@
   }
 
   // One-shot: Resonant Shield Impact Deflection
+  let lastShieldImpactTime = 0;
   function triggerShieldImpact(speed, normal) {
     AUDIO_PARAMS.lastImpactSpeed = speed || 0;
-    AUDIO_PARAMS.lastImpactTime = audioCtx ? audioCtx.currentTime : performance.now() * 0.001;
+    AUDIO_PARAMS.lastImpactTime = (typeof performance !== "undefined" && performance.now) ? performance.now() * 0.001 : (audioCtx ? audioCtx.currentTime : 1);
     if (!audioCtx || isMuted || audioCtx.state === "suspended") return;
 
+    const now = audioCtx.currentTime;
+    if ((speed || 0) < 0.08) return;
+    if (now - lastShieldImpactTime < 0.06) return;
+    lastShieldImpactTime = now;
+
     try {
-      const now = audioCtx.currentTime;
       const maxImpulse = (typeof FLIGHT !== "undefined" && FLIGHT.impulse) ? FLIGHT.impulse : 3.0;
       const intensity = Math.min(1.0, Math.max(0.15, (speed || 1.0) / maxImpulse));
 
@@ -306,6 +335,16 @@
       ringFilter.connect(ringGain);
       ringGain.connect(masterGainNode);
 
+      const cleanupRing = () => {
+        try {
+          osc1.disconnect();
+          osc2.disconnect();
+          ringFilter.disconnect();
+          ringGain.disconnect();
+        } catch (e) {}
+      };
+      osc1.onended = cleanupRing;
+
       osc1.start(now);
       osc2.start(now);
       osc1.stop(now + 0.43);
@@ -325,6 +364,14 @@
         noise.connect(snapFilter);
         snapFilter.connect(snapGain);
         snapGain.connect(masterGainNode);
+
+        noise.onended = () => {
+          try {
+            noise.disconnect();
+            snapFilter.disconnect();
+            snapGain.disconnect();
+          } catch (e) {}
+        };
         noise.start(now);
         noise.stop(now + 0.085);
       }
@@ -366,9 +413,6 @@
     // Transition detection
     if (prevWarpState === "charge" && warpState === "on") {
       triggerWarpJump();
-      if (typeof window !== "undefined" && typeof window.addCameraShake === "function") {
-        window.addCameraShake(0.65);
-      }
     } else if ((prevWarpState === "on" || prevWarpState === "charge") && warpState === "off") {
       triggerWarpDropout();
     }
@@ -392,8 +436,8 @@
     }
     AUDIO_PARAMS.warpDroneGain = warpDroneGainVal;
 
-    // Apply to Web Audio nodes if active and running
-    if (audioCtx && isInitialized && !isMuted && audioCtx.state === "running") {
+    // Apply to Web Audio nodes if active and running (keep continuous even if muted so unmute does not pop)
+    if (audioCtx && isInitialized && audioCtx.state === "running") {
       const time = audioCtx.currentTime;
       const tc = 0.04;
 
@@ -415,12 +459,43 @@
     }
   }
 
+  function resetAudio() {
+    prevWarpState = "off";
+    AUDIO_PARAMS.drive = 0;
+    AUDIO_PARAMS.warpChargeFreq = 0;
+    AUDIO_PARAMS.warpChargeGain = 0;
+    AUDIO_PARAMS.warpDroneGain = 0;
+    if (audioCtx && isInitialized) {
+      const time = audioCtx.currentTime;
+      if (warpChargeGain) warpChargeGain.gain.setValueAtTime(0, time);
+      if (warpDroneGain) warpDroneGain.gain.setValueAtTime(0, time);
+      if (engineGain) engineGain.gain.setValueAtTime(0.08, time);
+      if (engineFilter) engineFilter.frequency.setValueAtTime(160, time);
+      if (oscMid) oscMid.frequency.setValueAtTime(52, time);
+    }
+  }
+
   // Safe user-gesture hooks for autoplay policy
   if (typeof window !== "undefined") {
-    const handleGesture = () => ensureAudioContext();
-    window.addEventListener("pointerdown", handleGesture, { passive: true, once: true });
-    window.addEventListener("touchstart", handleGesture, { passive: true, once: true });
-    window.addEventListener("keydown", handleGesture, { passive: true, once: true });
+    const handleGesture = () => {
+      ensureAudioContext();
+      if (audioCtx && audioCtx.state === "running") {
+        window.removeEventListener("pointerdown", handleGesture);
+        window.removeEventListener("touchstart", handleGesture);
+        window.removeEventListener("keydown", handleGesture);
+      }
+    };
+    window.addEventListener("pointerdown", handleGesture, { passive: true });
+    window.addEventListener("touchstart", handleGesture, { passive: true });
+    window.addEventListener("keydown", handleGesture, { passive: true });
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && audioCtx && audioCtx.state === "suspended" && !isMuted) {
+          audioCtx.resume().catch(() => {});
+        }
+      });
+    }
   }
 
   const audioEngine = {
@@ -431,6 +506,7 @@
     toggleMute: toggleMute,
     ensureAudioContext: ensureAudioContext,
     init: initAudio,
+    reset: resetAudio,
     update: updateAudio,
     triggerWarpJump: triggerWarpJump,
     triggerWarpDropout: triggerWarpDropout,

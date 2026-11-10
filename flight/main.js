@@ -1243,20 +1243,25 @@ const shieldFlash = document.getElementById("shieldFlash");
 let shieldFlashIntensity = 0;
 const SHIELD_DECAY = 3.5;
 const SHIELD_NORMAL_LOCAL = [0, 0, 0];
+const IMPACT_DIR_SCRATCH = [0, 0, 0];
 
-function triggerShieldFlash(speed, normal, sign = 1) {
+function triggerShieldFlash(speed, impactDir) {
   const maxImpulse = (typeof FLIGHT !== "undefined" && FLIGHT.impulse) ? FLIGHT.impulse : 3.0;
-  shieldFlashIntensity = Math.min(1.0, Math.max(0.35, (speed / maxImpulse) * 0.9 + 0.35));
+  const ratio = Math.min(1.0, Math.max(0, (speed || 0) / maxImpulse));
+  if (ratio <= 0.02) return;
+  shieldFlashIntensity = Math.min(1.0, 0.35 + ratio * 0.65);
   if (shieldFlash) {
     setWash(shieldFlash, shieldFlashIntensity);
-    if (normal && typeof world !== "undefined" && world.entities && world.entities.length > 0) {
+    if (impactDir && typeof world !== "undefined" && world.entities && world.entities.length > 0) {
       const ship = world.entities[0];
       if (ship && ship.quat) {
         const qConj = quatConj(ship.quat);
-        quatRotateInto(qConj, normal, SHIELD_NORMAL_LOCAL);
-        const lx = SHIELD_NORMAL_LOCAL[0] * sign;
-        const ly = SHIELD_NORMAL_LOCAL[1] * sign;
-        const sx = Math.min(85, Math.max(15, 50 - lx * 32));
+        quatRotateInto(qConj, impactDir, SHIELD_NORMAL_LOCAL);
+        const lx = SHIELD_NORMAL_LOCAL[0];
+        const ly = SHIELD_NORMAL_LOCAL[1];
+        // In local ship space: +X is starboard (right), +Y is dorsal (up).
+        // In CSS screen space: X 0% is left, 100% is right. Y 0% is top, 100% is bottom.
+        const sx = Math.min(85, Math.max(15, 50 + lx * 32));
         const sy = Math.min(85, Math.max(15, 50 - ly * 32));
         shieldFlash.style.setProperty("--shield-x", `${sx.toFixed(1)}%`);
         shieldFlash.style.setProperty("--shield-y", `${sy.toFixed(1)}%`);
@@ -1266,16 +1271,42 @@ function triggerShieldFlash(speed, normal, sign = 1) {
 }
 
 function handleWorldImpact(impact) {
-  const isPlayer = impact.entity === world.entities[0] || impact.other === world.entities[0];
+  const player = world.entities && world.entities[0];
+  const isPlayerEntity = impact.entity === player;
+  const isPlayerOther = impact.other === player;
+  const isPlayer = isPlayerEntity || isPlayerOther;
+
   if (isPlayer) {
     if (window.audioEngine) {
       window.audioEngine.triggerShieldImpact(impact.speed, impact.normal);
     }
-    if (typeof addCameraShake === "function") {
+    // Filter out resting/sliding contact chatter (< 0.08)
+    if (impact.speed >= 0.08) {
       const maxImpulse = (typeof FLIGHT !== "undefined" && FLIGHT.impulse) ? FLIGHT.impulse : 3.0;
-      addCameraShake(Math.min(1.0, Math.max(0.2, (impact.speed / maxImpulse) * 0.8)));
+      const speedRatio = Math.min(1.0, impact.speed / maxImpulse);
+      if (typeof addCameraShake === "function") {
+        addCameraShake(Math.min(1.0, 0.15 + speedRatio * 0.75));
+      }
+
+      // Determine direction vector from player towards the obstacle
+      if (typeof impact.other === "string") {
+        // Celestial collision: impact.normal points outward from body towards player
+        IMPACT_DIR_SCRATCH[0] = -impact.normal[0];
+        IMPACT_DIR_SCRATCH[1] = -impact.normal[1];
+        IMPACT_DIR_SCRATCH[2] = -impact.normal[2];
+      } else if (isPlayerEntity) {
+        // Entity collision: impact.normal points from entity A (player) towards entity B
+        IMPACT_DIR_SCRATCH[0] = impact.normal[0];
+        IMPACT_DIR_SCRATCH[1] = impact.normal[1];
+        IMPACT_DIR_SCRATCH[2] = impact.normal[2];
+      } else {
+        // Entity collision: impact.normal points from entity A towards entity B (player)
+        IMPACT_DIR_SCRATCH[0] = -impact.normal[0];
+        IMPACT_DIR_SCRATCH[1] = -impact.normal[1];
+        IMPACT_DIR_SCRATCH[2] = -impact.normal[2];
+      }
+      triggerShieldFlash(impact.speed, IMPACT_DIR_SCRATCH);
     }
-    triggerShieldFlash(impact.speed, impact.normal, impact.entity === world.entities[0] ? 1 : -1);
   } else {
     if (window.audioEngine) {
       window.audioEngine.triggerShieldImpact(impact.speed * 0.5, impact.normal);
@@ -1318,6 +1349,9 @@ function resetScene(time) {
   shieldFlashIntensity = 0;
   if (shieldFlash) setWash(shieldFlash, 0);
   if (typeof resetCameraShake === "function") resetCameraShake();
+  if (window.audioEngine && typeof window.audioEngine.reset === "function") {
+    window.audioEngine.reset();
+  }
   const toggleEl = document.getElementById("wingmanToggle");
   const wantsWingman = (toggleEl && toggleEl.checked) || presets.has("wingman") || Number(presets.get("ships")) > 1;
   const shipCount = Math.max(1, Math.min(MAX_INSTANCES - 2, Number(presets.get("ships") || (wantsWingman ? 2 : 1))));

@@ -24,15 +24,16 @@ const PLANET_MATERIAL = {
 };
 const ORBIT = { radius: 5.0, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 
-// The glass rectangle: ~1.5x the ship's width, height, and length, sitting
-// tangentially along the ship's own orbit so the ship flies straight through
-// it. `phase` places it just ahead of the ship in front of the planet's limb on load.
-const MOON = { halfSize: [1.10, 0.32, 1.48], speed: 0, phase: -0.95 };
+// The glass cube: 1.5x the ship's largest dimension (length) on every side,
+// drifting gently along the ship's own orbit in the same direction so the
+// faster ship overtakes and flies straight through it. `phase` places it just
+// ahead of the ship in front of the planet's limb on load.
+const MOON = { halfSize: [1.48, 1.48, 1.48], speed: 0.05, phase: -0.75 };
 // Crystal-clear refractive glass with a subtle blue absorption and Fresnel edge
 // gleam so the ship remains clearly visible as it flies through
 const MOON_MATERIAL = {
   ka: 0.02, kd: 0.05, ks: 0.95, shininess: 220, bumpScale: 0, atmosphere: [0.18, 0.42, 0.90],
-  kt: 0.94, absorb: [0.10, 0.03, 0.01]
+  kt: 0.94, absorb: [0.09, 0.03, 0.01]
 };
 
 // Level 0: planetary system at the origin; t is the scene clock (main.js).
@@ -59,7 +60,7 @@ function drawPlanet(parent, t) {
     multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r))), PLANET_MATERIAL);
 }
 
-// The glass rectangle's frame at scene time t (inside the ship's orbital plane
+// The glass cube's frame at scene time t (inside the ship's orbital plane
 // at radius ORBIT.radius, +z along the orbital tangent), its center, and its inverse
 const moonAngle = t => MOON.phase - MOON.speed * t;
 const moonFrame = t => multiply(rotateX(ORBIT.tilt),
@@ -68,7 +69,7 @@ const inverseMoonFrame = t => multiply(translate(-ORBIT.radius, 0, 0),
   multiply(rotateY(-moonAngle(t)), rotateX(-ORBIT.tilt)));
 const moonCenter = t => transformPoint(moonFrame(t), [0, 0, 0]);
 
-// Glass rectangle: one refractive box, no texture -- what it shows is what's behind or inside it
+// Glass cube: one refractive box, no texture -- what it shows is what's behind or inside it
 function drawMoon(parent, t) {
   const [hx, hy, hz] = MOON.halfSize;
   drawPrimitive(cubeMesh, null, BUMP_MAPPING, multiply(parent, multiply(moonFrame(t), scale(hx, hy, hz))),

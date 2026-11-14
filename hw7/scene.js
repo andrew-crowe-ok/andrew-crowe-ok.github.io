@@ -122,7 +122,7 @@ const ENGAGE = {
   blend: 2.5,       // s, length of the departure blend
   warpAt: 3.2,      // s after the press that the ship jumps to warp
   warp: 10,         // warp speed, in multiples of orbital speed
-  reset: 10         // s from the press until the scene resets
+  reset: 12         // s from the press until the scene resets
 };
 const ORBIT_SPEED = ORBIT.radius * ORBIT.speed;   // units/s along the circle
 

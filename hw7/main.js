@@ -769,9 +769,6 @@ function updateStats(nowMs, frameDelta, cpuMs, ship) {
 // ---------------------------------------------------------------------------
 const CONTROL_INPUTS = {
   bounces:     { read: el => parseInt(el.value), show: v => `${v}` },
-  sun:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
-  fill:        { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
-  nav:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
   shininess:   { read: el => 2 ** parseFloat(el.value), show: v => `×${v.toFixed(2)}` },
   ior:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
   shadows:     { read: el => el.checked },
@@ -1054,10 +1051,9 @@ function uploadScene(view, t, ship) {
   lightPosBuf[7] = scene.nav[1];
   lightPosBuf[8] = scene.nav[2];
 
-  const cs = controls.sun, cf = controls.fill, cn = controls.nav;
-  lightColorBuf[0] = SUN.color[0] * cs; lightColorBuf[1] = SUN.color[1] * cs; lightColorBuf[2] = SUN.color[2] * cs;
-  lightColorBuf[3] = FILL.color[0] * cf; lightColorBuf[4] = FILL.color[1] * cf; lightColorBuf[5] = FILL.color[2] * cf;
-  lightColorBuf[6] = NAV.color[0] * cn; lightColorBuf[7] = NAV.color[1] * cn; lightColorBuf[8] = NAV.color[2] * cn;
+  lightColorBuf[0] = SUN.color[0];  lightColorBuf[1] = SUN.color[1];  lightColorBuf[2] = SUN.color[2];
+  lightColorBuf[3] = FILL.color[0]; lightColorBuf[4] = FILL.color[1]; lightColorBuf[5] = FILL.color[2];
+  lightColorBuf[6] = NAV.color[0];  lightColorBuf[7] = NAV.color[1];  lightColorBuf[8] = NAV.color[2];
 
   gl.uniform3fv(u.uLightPos, lightPosBuf);
   gl.uniform3fv(u.uLightColor, lightColorBuf);

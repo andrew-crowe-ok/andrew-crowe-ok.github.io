@@ -451,8 +451,9 @@ const { color: impulseGlow } = generateSkin("strip", {
   size: [512, 128], uniforms: { uInner: [1.0, 0.6, 0.35], uOuter: [0.75, 0.06, 0.03],
     uFrame: [0.1, 0.08, 0.08], uSlats: 10, uFlow: 0.25 } });
 
-// Static sky nebula / Milky Way backdrop (sqrt-encoded RGBA8)
-const backdropTexture = generateSkin("backdrop", { size: [1024, 512] }).color;
+// Static sky nebula / Milky Way backdrop (procedurally seeded per run, sqrt-encoded RGBA8)
+const skySeed = Math.floor(Math.random() * 1e6) + 1;
+const backdropTexture = generateSkin("backdrop", { size: [1024, 512], seed: skySeed }).color;
 
 // Animated texture: a muted, looping <video> whose current frame is re-uploaded
 // every render, so it gets no mipmaps (LINEAR min filter). REPEAT on s lets u
@@ -1019,6 +1020,7 @@ gl.uniform1f(uniforms.uFishPivot, CHASE.fishPivot);
 gl.uniform2fv(uniforms.uLightRange, lightRangeBuf);
 gl.uniform1f(uniforms.uShutter, STREAK.shutter);
 gl.uniform1f(uniforms.uStreakDim, STREAK.dim);
+gl.uniform1f(uniforms.uSkySeed, skySeed);
 
 // Hand this frame's scene, lights, lens and controls to the shader
 function uploadScene(view, t, ship) {

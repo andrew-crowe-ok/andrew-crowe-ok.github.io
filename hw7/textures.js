@@ -494,7 +494,10 @@ Surface surface(vec2 uv) {
   // filtering. Sampled with textureLod(..., 0.0) in raytrace.js.
   backdrop: { normal: false, clampV: true, mipmap: false, glsl: `
 #define SKY_BIAS 32768
-vec3 skyRand3(uvec3 v) { return vec3(pcg3(v)) * (1.0 / 4294967296.0); }
+vec3 skyRand3(uvec3 v) {
+  uint s = uint(uSeed);
+  return vec3(pcg3(v ^ uvec3(s * 2654435761u, s * 2246822519u, s * 3266489917u))) * (1.0 / 4294967296.0);
+}
 vec3 skyNoise3(vec3 p) {
   vec3 i = floor(p), f = fract(p);
   f = f * f * (3.0 - 2.0 * f);
@@ -527,18 +530,28 @@ Surface surface(vec2 uv) {
   float phi = uv.x * TAU, theta = uv.y * PI;
   float sinTheta = sin(theta);
   vec3 s = vec3(sinTheta * cos(phi), cos(theta), sinTheta * sin(phi));
+  vec3 r0 = skyRand3(uvec3(1u, 2u, 3u));
+  vec3 r1 = skyRand3(uvec3(4u, 5u, 6u));
+  vec3 r2 = skyRand3(uvec3(7u, 8u, 9u));
   vec3 n = skyFbm3(s * 4.0);
   vec3 m = skyFbm3(s * vec3(8.0, 20.0, 8.0) + 1.6 * n);
   float lat = s.y + 0.03 * (n.x - 0.5);
-  vec3 dc = s - normalize(vec3(1.0, 0.0, -0.35));
+  float corePhi = TAU * r0.x;
+  vec3 dc = s - vec3(cos(corePhi), 0.0, sin(corePhi));
   float core = exp(-dot(dc, dc) * (1.0 / 0.49));
   float band = exp(-lat * lat / (2.0 * 0.12 * 0.12)) * (0.3 + 0.8 * n.x + 0.6 * m.x)
              + exp(-lat * lat / (2.0 * 0.2 * 0.2)) * core * (1.2 + 0.8 * m.x);
   float lane = exp(-(lat - 0.012) * (lat - 0.012) / (2.0 * 0.06 * 0.06));
   band *= 1.0 - 0.9 * lane * smoothstep(0.42, 0.62, mix(n.y, m.y, 0.6));
   vec3 glow = 0.11 * band * mix(vec3(0.55, 0.62, 0.85), vec3(1.0, 0.8, 0.55), core);
-  glow += 0.22 * skyNebula(s, normalize(vec3(-0.55, 0.38, -0.75)), 0.55, mix(n.z, m.z, 0.5)) * vec3(0.95, 0.22, 0.38);
-  glow += 0.17 * skyNebula(s, normalize(vec3(0.5, -0.42, 0.75)), 0.48, mix(n.z, m.y, 0.5)) * vec3(0.18, 0.55, 0.75);
+  float p1 = TAU * r0.y, y1 = mix(0.22, 0.55, r1.x), d1 = sqrt(1.0 - y1 * y1);
+  float p2 = TAU * r0.z, y2 = -mix(0.22, 0.55, r1.y), d2 = sqrt(1.0 - y2 * y2);
+  vec3 neb1 = vec3(d1 * cos(p1), y1, d1 * sin(p1));
+  vec3 neb2 = vec3(d2 * cos(p2), y2, d2 * sin(p2));
+  vec3 c1 = mix(vec3(0.95, 0.22, 0.38), vec3(0.88, 0.48, 0.20), r2.y);
+  vec3 c2 = mix(vec3(0.18, 0.55, 0.75), vec3(0.45, 0.30, 0.85), r2.z);
+  glow += 0.22 * skyNebula(s, neb1, mix(0.42, 0.65, r1.z), mix(n.z, m.z, 0.5)) * c1;
+  glow += 0.17 * skyNebula(s, neb2, mix(0.40, 0.62, r2.x), mix(n.z, m.y, 0.5)) * c2;
   vec3 col = glow + vec3(0.002, 0.003, 0.006);
   return Surface(sqrt(clamp(col, 0.0, 1.0)), 1.0, 0.0);
 }

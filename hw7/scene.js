@@ -36,6 +36,10 @@ const MOON_MATERIAL = {
   kt: 0.94, absorb: [0.09, 0.03, 0.01]
 };
 
+// Fresh random galactic orientation on every run
+const SKY_ROT = multiply(rotateY(Math.random() * 2 * Math.PI),
+  multiply(rotateZ((Math.random() - 0.5) * 0.9), rotateX((Math.random() - 0.5) * 0.6)));
+
 // Level 0: planetary system at the origin; t is the scene clock (main.js).
 // `ship` is this frame's shipState(): the camera needs it before anything is
 // drawn, so main.js advances the flight path and passes the result down.
@@ -47,7 +51,7 @@ function drawSystem(parent, t, ship) {
   const plane = multiply(parent, rotateX(ORBIT.tilt));
   const o = transformPoint(plane, [0, 0, 0]);
   const streak = vmul(vsub(o, transformPoint(plane, ship.streak)), lensFisheye);
-  setSky(parent, streak);
+  setSky(multiply(parent, SKY_ROT), streak);
   drawPlanet(parent, t);
   drawMoon(parent, t);
   drawOrbit(plane, ship);

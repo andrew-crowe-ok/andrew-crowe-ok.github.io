@@ -133,6 +133,7 @@ uniform vec3 uStreak;        // the stars' velocity past the eye, eye space
 uniform float uShutter, uMaxStreak, uStreakDim;
 uniform float uStarScale;     // pixels rendered per CSS pixel
 uniform float uWarpStars;     // 0..1, how far the warp's extra stars have faded in
+uniform float uSkySeed;       // fresh random seed per run for stars and backdrop
 
 out vec4 fragColor;
 
@@ -724,7 +725,10 @@ uvec3 pcg3d(uvec3 v) {
   v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
   return v;
 }
-vec3 random3(uvec3 v) { return vec3(pcg3d(v)) * (1.0 / 4294967296.0); }
+vec3 random3(uvec3 v) {
+  uint s = uint(uSkySeed);
+  return vec3(pcg3d(v ^ uvec3(s * 2654435761u, s * 2246822519u, s * 3266489917u))) * (1.0 / 4294967296.0);
+}
 
 // ---- backdrop --------------------------------------------------------------
 

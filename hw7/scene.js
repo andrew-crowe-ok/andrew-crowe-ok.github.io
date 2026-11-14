@@ -22,7 +22,7 @@ const PLANET = { radius: 2.4, spin: 0.08 };                     // spin in rad/s
 const PLANET_MATERIAL = {
   ka: 0.03, kd: 1.0, ks: 0.05, shininess: 8, bumpScale: 1.2, atmosphere: [0.35, 0.6, 1.0]
 };
-const ORBIT = { radius: 5.0, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
+const ORBIT = { radius: 5.8, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 
 // The glass cube: 1.5x the ship's largest dimension (length) on every side,
 // drifting gently along the ship's own orbit in the same direction so the

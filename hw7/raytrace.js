@@ -511,11 +511,21 @@ float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
   return max(min((-b + s) * invA, tmax) - max((-b - s) * invA, tmin), 0.0);
 }
 
+// How much of (tmin, tmax) the ray spends inside primitive i (glass box or sphere)
+float glassChord(int i, vec3 o, vec3 d, float tmin, float tmax) {
+  vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
+  if (uInfo[i].x == BOX) {
+    vec2 span = boxSpan(oo, dd, vec3(1.0));
+    return max(min(span.y, tmax) - max(span.x, tmin), 0.0);
+  }
+  return sphereChord(oo, dd, tmin, tmax);
+}
+
 // Shadow ray: how much light gets from o to dist along d. An opaque part
 // blocks it; glass lets through its transmittance, less what it absorbs over
 // the chord the ray cuts through it (Beer-Lambert), so glass casts a pale
 // colored shadow instead of a black one. Glowing parts are light sources
-// themselves and cast none. (The glass parts are all spheres.)
+// themselves and cast none.
 vec3 transmittance(vec3 o, vec3 d, float dist) {
   vec3 tr = vec3(1.0);
   int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
@@ -525,7 +535,7 @@ vec3 transmittance(vec3 o, vec3 d, float dist) {
     if (kt <= 0.0) {
       if (shadowHit(i, o, d, EPS, dist)) return vec3(0.0);
     } else {
-      float chord = sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist);
+      float chord = glassChord(i, o, d, EPS, dist);
       if (chord > 0.0) tr *= kt * exp(-uMatD[i].rgb * chord);
     }
   }
@@ -538,7 +548,7 @@ vec3 transmittance(vec3 o, vec3 d, float dist) {
       if (kt <= 0.0) {
         if (shadowHit(i, o, d, EPS, dist)) return vec3(0.0);
       } else {
-        float chord = sphereChord(toObject(i, o, 1.0), toObject(i, d, 0.0), EPS, dist);
+        float chord = glassChord(i, o, d, EPS, dist);
         if (chord > 0.0) tr *= kt * exp(-uMatD[i].rgb * chord);
       }
     }
@@ -1074,7 +1084,9 @@ void main() {
       vec3 tdir = refract(p.d, n, eta);
       vec3 outside = s.p + ng * EPS, inside = s.p - ng * EPS;
       if (tdir == vec3(0.0)) {
-        // Total internal reflection: all of it stays in the glass
+        // Total internal reflection: stay inside glass without consuming a
+        // bounce so rays in a flat-faced prism still escape cleanly (bounded by MAX_SEGMENTS).
+        p.depth--;
         p.o = outside; p.d = rdir; p.weight *= B.y;
       } else {
         // Schlick, with the angle on the vacuum side

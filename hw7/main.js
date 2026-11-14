@@ -901,12 +901,12 @@ document.addEventListener("keydown", e => {
 // Clicking the ship, the planet or the moon centers the view on it. Picking
 // reads the view, ship and moon of the last frame drawn, which is what was
 // clicked on.
-let lastView = null, lastShip = null, lastMoon = null;
+let lastView = null, lastShip = null, lastTime = 0;
 canvas.addEventListener("click", e => {
   if (!lastView || offOrbit() || dragged) return;
   const r = canvas.getBoundingClientRect();
   const hit = pickObject(2 * (e.clientX - r.left) / r.width - 1,
-    1 - 2 * (e.clientY - r.top) / r.height, lastView, lastShip, lastMoon);
+    1 - 2 * (e.clientY - r.top) / r.height, lastView, lastShip, lastTime);
   if (!hit) return;
   focusOn(hit, performance.now() / 1000, [camX, camY]);
   camX = 0; camY = 0;
@@ -1106,7 +1106,7 @@ function render(time) {
   const moon = moonCenter(t);
   const view = updateCamera(t, ship, freeView(now, dt, ship, moon, rotation, [camX, camY]),
     { x: dragRotX, y: dragRotY });
-  lastView = view; lastShip = ship; lastMoon = moon;
+  lastView = view; lastShip = ship; lastTime = t;
 
   // Walk the hierarchy to collect this frame's primitives, then trace them all
   scene.count = 0;

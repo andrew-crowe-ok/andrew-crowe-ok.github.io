@@ -28,9 +28,9 @@ const CHASE = {
   warpDist: 1.38,                 // initial tight pull-in right at the jump
   warpHeight: 0.44,               // low chase stance over the nacelles
   warpBlend: 0.48,                // s, the dolly zoom into warp
-  warpLagRate: 0.65,              // units/s the camera falls behind at warp
-  warpLagKnee: 0.60,              // s before steady fallback reaches full rate
-  warpDrop: 0.14,                 // drops slightly into the wake as it loses ground
+  warpLagRate: 0.40,              // units/s the camera falls behind at warp
+  warpLagKnee: 0.65,              // s before steady fallback reaches full rate
+  warpDrop: 0.08,                 // drops slightly into the wake as it loses ground
   fishHalfX: 138 * Math.PI / 180, // half the fisheye's horizontal field of view
   fishStretch: 2.20,              // sustained vertical stretch during warp
   fishStretchPulse: 0.35,         // extra rubber-band stretch right at the jump
@@ -161,7 +161,7 @@ const ZOOM = {
   // Nearest the camera may come. Around the planet it stays outside the ship's
   // whole sweep (orbit radius + half its length), so the ship never flies
   // through the lens; around the ship it stays outside the ship's box.
-  min: { planet: 5.6, ship: 1.2, moon: 2.0 },
+  min: { planet: 6.2, ship: 1.2, moon: 2.2 },
   max: 30,                        // short of the nearest stars (STAR_FIELD.clear) even from the ship
   clearPlanet: 0.25,              // nearest the eye comes to the planet's surface
   perPixel: 0.0012,               // about 13% a wheel notch
@@ -242,22 +242,21 @@ function rayHitsSphere(o, d, r) {
 }
 
 // What a click at (x, y) in normalized device coordinates lands on, given the
-// view, ship and moon of the frame it was clicked on: "ship", "planet", "moon"
-// or null. The
-// plain lens sends eye-space direction (x / P00, y / P11, -1) to that pixel,
-// and the view's rotation is undone by its transpose. Only for the free view,
-// whose lens is the plain one. The ship's frame is rigid, so t along the ray
-// means the same distance in it as in the world and the two hits compare.
-function pickObject(x, y, view, ship, moon) {
+// view, ship and scene time t of the frame it was clicked on: "ship", "planet",
+// "moon" or null. The plain lens sends eye-space direction (x / P00, y / P11, -1)
+// to that pixel, and the view's rotation is undone by its transpose. Only for the
+// free view, whose lens is the plain one. Rigid frames preserve t along the ray.
+function pickObject(x, y, view, ship, t) {
   const d = untransformVector(view, [x / projection[0], y / projection[5], -1]);
   const o = viewParts(view).eye;
 
   const toShip = inverseShipFrame(ship);
+  const toMoon = inverseMoonFrame(t);
   const hits = [
     ["ship", rayHitsBox(transformPoint(toShip, o), transformVector(toShip, d),
       vmul(SHIP_HALF_EXTENT, ORBIT.shipScale))],
     ["planet", rayHitsSphere(o, d, PLANET.radius)],
-    ["moon", rayHitsSphere(vsub(o, moon), d, MOON.radius)]
+    ["moon", rayHitsBox(transformPoint(toMoon, o), transformVector(toMoon, d), MOON.halfSize)]
   ].filter(([, t]) => t !== null);
   if (!hits.length) return null;
   return hits.reduce((a, b) => b[1] < a[1] ? b : a)[0];

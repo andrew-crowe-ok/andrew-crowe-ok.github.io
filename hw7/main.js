@@ -1027,6 +1027,7 @@ function uploadScene(view, t, ship) {
   gl.uniform1f(u.uProj00, projection[0]);
   gl.uniform1f(u.uProj11, projection[5]);
   gl.uniform1f(u.uFisheye, lensFisheye);
+  gl.uniform1f(u.uFishStretch, lensStretch);
   const pixel = pixelAngle();
   gl.uniform1f(u.uPixelAngle, pixel);
 

@@ -25,22 +25,25 @@ const CHASE = {
   // the same size on screen while it bulges toward the lens.
   dist: 2.2,                      // units behind the ship's middle before warp,
   height: 0.7,                    //   and above it: the plain lens frames it whole
-  warpDist: 1.50,                 // at warp: clear behind the hull tail (0.93 back) and
-                                  //   nacelle tail cones (0.98 back) so the whole ship
-                                  //   stays inside the frame
-  warpHeight: 0.48,               // ~18 deg above the ship, matching the pre-warp angle
-  warpBlend: 0.55,                // s, the dolly zoom into warp
-  fishHalfX: 125 * Math.PI / 180, // half the fisheye's horizontal field of view
-  fishStretch: 1.55,              // the fisheye's vertical stretch (see the lens),
-  fishPivot: -0.35                //   about this height on screen (-1 bottom, 1 top)
+  warpDist: 1.38,                 // initial tight pull-in right at the jump
+  warpHeight: 0.44,               // low chase stance over the nacelles
+  warpBlend: 0.48,                // s, the dolly zoom into warp
+  warpLagRate: 0.65,              // units/s the camera falls behind at warp
+  warpLagKnee: 0.60,              // s before steady fallback reaches full rate
+  warpDrop: 0.14,                 // drops slightly into the wake as it loses ground
+  fishHalfX: 138 * Math.PI / 180, // half the fisheye's horizontal field of view
+  fishStretch: 2.20,              // sustained vertical stretch during warp
+  fishStretchPulse: 0.35,         // extra rubber-band stretch right at the jump
+  fishPivot: -0.18                //   about this height on screen (-1 bottom, 1 top)
 };
 
 // The lens, read by the ray tracer every frame: 0 = the projection matrix's
 // rectilinear view, 1 = full fisheye. The fisheye is equisolid,
-// r = sin(theta / 2) / sin(fishHalfX / 2), stretched fishStretch times
+// r = sin(theta / 2) / sin(fishHalfX / 2), stretched lensStretch times
 // vertically about fishPivot, so the ship draws out nose to tail; the ray
 // tracer runs that mapping backwards to find each pixel's ray (raytrace.js).
 let lensFisheye = 0;
+let lensStretch = CHASE.fishStretch;
 
 let chaseGrab = null;   // the drag angles when this chase began
 
@@ -95,11 +98,21 @@ function updateCamera(t, ship, free, drag) {
   const sincePress = engageElapsed(t);
   if (sincePress === null) {
     lensFisheye = 0;
+    lensStretch = CHASE.fishStretch;
     chaseGrab = null;
     return free;
   }
   const k = smootherstep(sincePress / CHASE.blend);
-  const w = lensFisheye = ship.warpTau === null ? 0 : easeOutCubic(ship.warpTau / CHASE.warpBlend);
+  const wt = ship.warpTau;
+  const w = lensFisheye = wt === null ? 0 : easeOutCubic(wt / CHASE.warpBlend);
+
+  // Right at the jump the lens over-stretches briefly like a rubber band; then
+  // the camera falls progressively further behind and settles into the wake as
+  // it fails to keep pace with the ship.
+  const pulse = wt === null ? 0 : (wt / 0.35) * Math.exp(1 - wt / 0.35);
+  lensStretch = CHASE.fishStretch + CHASE.fishStretchPulse * pulse;
+  const lag = wt === null ? 0 : CHASE.warpLagRate * (wt * wt) / (wt + CHASE.warpLagKnee);
+  const wakeDrop = wt === null ? 0 : CHASE.warpDrop * (1 - Math.exp(-wt / 2.2));
 
   // Only the dragging done since the chase took over counts, so taking the
   // mouse never snaps the view
@@ -107,10 +120,9 @@ function updateCamera(t, ship, free, drag) {
 
   const pitch = Math.max(-1.2, Math.min(1.2, drag.x - chaseGrab.x));
   const look = multiply(rotateY(drag.y - chaseGrab.y), rotateX(pitch));
-  const surge = ship.warpTau === null ? 0 : 1.6 * ship.warpTau * Math.exp(-4.0 * ship.warpTau);
   const chase = chaseView(ship, look,
-    CHASE.dist + (CHASE.warpDist - CHASE.dist) * w + surge,
-    CHASE.height + (CHASE.warpHeight - CHASE.height) * w,
+    CHASE.dist + (CHASE.warpDist - CHASE.dist) * w + lag,
+    CHASE.height + (CHASE.warpHeight - CHASE.height) * w - wakeDrop,
     0.05 * w);
   return k >= 1 ? chase : blendViews(free, chase, k);
 }

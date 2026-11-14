@@ -49,7 +49,7 @@ const STAR_FIELD = { cell: 8, density: 0.06, disc: 30, clear: 36, reach: 160, re
 // `density` times its usual (capped at `cap`) as the ship jumps, the new stars
 // fading in over `fadeIn` seconds -- several times the streaks for no extra
 // steps of the walk.
-const WARP_STARS = { density: 6, cap: 0.9, fadeIn: 0.5 };
+const WARP_STARS = { density: 5, cap: 0.75, fadeIn: 0.5 };
 const glslFloat = x => Number.isInteger(x) ? x.toFixed(1) : String(x);
 
 const RAYTRACE_VS = `#version 300 es
@@ -625,7 +625,10 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   s.base = vec3(1.0);
   s.emit = 0.0;
   s.emissive = info.w == EMISSIVE;
-  if (info.y < 0) return s;
+  if (info.y < 0) {
+    if (s.emissive && uMatC[i].rgb != vec3(0.0)) s.base = uMatC[i].rgb;
+    return s;
+  }
 
   vec3 po = toObject(i, s.p, 1.0);
   // A scrolling glow (the warp grilles) slides its texture along the part's
@@ -715,58 +718,14 @@ vec3 random3(uvec3 v) { return vec3(pcg3d(v)) * (1.0 / 4294967296.0); }
 
 // ---- backdrop --------------------------------------------------------------
 
-// Value noise with three independent channels for the price of one: each
-// lattice corner's hash already gives three numbers
-vec3 noise3(vec3 p) {
-  vec3 i = floor(p), f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  uvec3 c = uvec3(ivec3(i) + CELL_BIAS);
-  vec3 x00 = mix(random3(c),                  random3(c + uvec3(1, 0, 0)), f.x);
-  vec3 x10 = mix(random3(c + uvec3(0, 1, 0)), random3(c + uvec3(1, 1, 0)), f.x);
-  vec3 x01 = mix(random3(c + uvec3(0, 0, 1)), random3(c + uvec3(1, 0, 1)), f.x);
-  vec3 x11 = mix(random3(c + uvec3(0, 1, 1)), random3(c + uvec3(1, 1, 1)), f.x);
-  return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
-}
-// Four octaves; normalized by 1 / (1 - 0.5^4) = 1 / 0.9375
-vec3 fbm3(vec3 p) {
-  vec3 sum = vec3(0.0);
-  float amp = 0.5;
-  for (int i = 0; i < 4; i++) {
-    sum += amp * noise3(p);
-    p = p * 2.03 + vec3(17.1, 31.7, 7.3);
-    amp *= 0.5;
-  }
-  return sum * (1.0 / 0.9375);
-}
-
-// One nebula: a soft patch around center, its edge torn up by the noise
-float nebula(vec3 s, vec3 center, float radius, float n) {
-  vec3 diff = s - center;
-  float r2 = dot(diff, diff) / (radius * radius);
-  if (r2 > 2.0) return 0.0;
-  return smoothstep(0.05, 0.6, exp(-r2) * (0.1 + 2.2 * n * n) - 0.3);
-}
-
+// The sky glow (Milky Way, warm starlight, nebula clouds) is pre-baked on the
+// CPU into unit 15 in sqrt space so 8-bit quantization holds down to deep
+// blacks; squaring recovers linear light.
 vec3 backdrop(vec3 s) {
-  // Two noises: a broad one for the clouds' shapes, and a finer one, bent by
-  // the first and drawn out along the band, for grain and dust filaments
-  vec3 n = fbm3(s * 4.0);
-  vec3 m = fbm3(s * vec3(8.0, 20.0, 8.0) + 1.6 * n);
-  float lat = s.y + 0.03 * (n.x - 0.5);
-  // The galactic core sits in the band, toward +x
-  vec3 dc = s - normalize(vec3(1.0, 0.0, -0.35));
-  float core = exp(-dot(dc, dc) * (1.0 / 0.49));
-  float band = exp(-lat * lat / (2.0 * 0.12 * 0.12)) * (0.3 + 0.8 * n.x + 0.6 * m.x)
-             + exp(-lat * lat / (2.0 * 0.2 * 0.2)) * core * (1.2 + 0.8 * m.x);
-  // Dust lanes: dark filaments threaded along the band's middle
-  float lane = exp(-(lat - 0.012) * (lat - 0.012) / (2.0 * 0.06 * 0.06));
-  band *= 1.0 - 0.9 * lane * smoothstep(0.42, 0.62, mix(n.y, m.y, 0.6));
-  vec3 glow = 0.11 * band * mix(vec3(0.55, 0.62, 0.85), vec3(1.0, 0.8, 0.55), core);
-  // An emission nebula glowing hydrogen red above the band, and a bluer one
-  // below it on the far side
-  glow += 0.22 * nebula(s, normalize(vec3(-0.55, 0.38, -0.75)), 0.55, mix(n.z, m.z, 0.5)) * vec3(0.95, 0.22, 0.38);
-  glow += 0.17 * nebula(s, normalize(vec3(0.5, -0.42, 0.75)), 0.48, mix(n.z, m.y, 0.5)) * vec3(0.18, 0.55, 0.75);
-  return glow + vec3(0.002, 0.003, 0.006);
+  float phi = atan(s.z, s.x);
+  float theta = acos(clamp(s.y, -1.0, 1.0));
+  vec3 c = textureLod(uTex[15], vec2(phi / TAU, theta / PI), 0.0).rgb;
+  return c * c;
 }
 
 // ---- stars -----------------------------------------------------------------
@@ -843,7 +802,7 @@ vec3 distantStar(vec3 s) {
 // The near star in cell c, if it has one, seen along ray o + t d; v is how
 // far the stars move past the eye over the shutter
 vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v, float maxChance, float maxRadiusPx,
-              float maxRadiusAngle2, float cosMaxStreak, float cosLimit) {
+              float maxRadiusAngle2, float cosMaxStreak, float cosLimit, float reachDist) {
   uvec3 key = uvec3(c + CELL_BIAS);
   vec3 r1 = random3(key);
   if (r1.x >= maxChance) return vec3(0.0);
@@ -855,7 +814,7 @@ vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v, float maxChance, float maxRadiusP
   if (dot(pos, pos) < STAR_CLEAR * STAR_CLEAR) return vec3(0.0);
   vec3 q = pos - o;
   float dist2 = dot(q, q);
-  if (dist2 > STAR_REACH * STAR_REACH || dist2 < 0.25) return vec3(0.0);
+  if (dist2 > reachDist * reachDist || dist2 < 0.25) return vec3(0.0);
   float qDotD = dot(q, d);
   if (qDotD <= 0.0) return vec3(0.0);
 
@@ -901,7 +860,7 @@ vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v, float maxChance, float maxRadiusP
   // Brighter and a little larger as the ship closes on it, fading toward the
   // far edge of the field, where the distant layer carries on
   float near = STAR_REF / dist;
-  float level = (0.45 + 0.55 * mag) * min(near * near, 4.0) * smoothstep(STAR_REACH, 0.6 * STAR_REACH, dist);
+  float level = (0.45 + 0.55 * mag) * min(near * near, 4.0) * smoothstep(reachDist, 0.6 * reachDist, dist);
   float size = (1.0 + 2.2 * mag) * clamp(sqrt(near), 0.7, 2.0) * uStarScale;
 
   // The chance test above leaves r1.x uniform in [0, chance): the twinkle's phase
@@ -942,16 +901,17 @@ vec3 nearStars(vec3 o, vec3 d, vec3 v) {
   float cosMaxStreak = cos(uMaxStreak);
   float cosLimit = cos(min(uMaxStreak + maxRadiusAngle * 1.05, PI));
 
+  float reachDist = mix(STAR_REACH, 112.0, uWarpStars);
   vec3 light = vec3(0.0);
   for (int i = 0; i < STAR_STEPS; i++) {
-    if (t > STAR_REACH) break;
+    if (t > reachDist) break;
     if (!hasReach) {
-      light = max(light, nearStar(cell, o, d, v, maxChance, maxRadiusPx, maxRadiusAngle2, cosMaxStreak, cosLimit));
+      light = max(light, nearStar(cell, o, d, v, maxChance, maxRadiusPx, maxRadiusAngle2, cosMaxStreak, cosLimit, reachDist));
     } else {
       for (int k = 0; k < 8; k++) {
         ivec3 off = ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
         if (any(greaterThan(off, absReach)) || any(notEqual((off - needVal) * skipMask, ivec3(0)))) continue;
-        light = max(light, nearStar(cell + off * reach, o, d, v, maxChance, maxRadiusPx, maxRadiusAngle2, cosMaxStreak, cosLimit));
+        light = max(light, nearStar(cell + off * reach, o, d, v, maxChance, maxRadiusPx, maxRadiusAngle2, cosMaxStreak, cosLimit, reachDist));
       }
     }
     if (tMax.x < tMax.y && tMax.x < tMax.z) {
@@ -1033,7 +993,7 @@ bool primaryRay(out vec3 d) {
   d = normalize(vec3(ndc.x / uProj00, ndc.y / uProj11, -1.0));
   if (uFisheye <= 0.0) return true;
   float aspect = uProj11 / uProj00;
-  vec2 q = vec2(ndc.x, (uFishPivot + (ndc.y - uFishPivot) / uFishStretch) / aspect);
+  vec2 q = vec2(ndc.x * min(aspect, 1.0), (uFishPivot + (ndc.y - uFishPivot) / uFishStretch) / max(aspect, 1.0));
   float k = length(q) * sin(0.5 * uFishHalfX);
   if (k >= 1.0) {
     if (uFisheye >= 1.0) return false;

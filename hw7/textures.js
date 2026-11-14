@@ -488,6 +488,61 @@ Surface surface(vec2 uv) {
   return Surface(col, 1.0, 0.0);
 }
 ` },
+
+  // Equirectangular sky backdrop (Milky Way band, dust lanes, and two nebulae),
+  // encoded as sqrt(color) in RGBA8 so dark gradients don't band under linear
+  // filtering. Sampled with textureLod(..., 0.0) in raytrace.js.
+  backdrop: { normal: false, clampV: true, mipmap: false, glsl: `
+#define SKY_BIAS 32768
+vec3 skyRand3(uvec3 v) { return vec3(pcg3(v)) * (1.0 / 4294967296.0); }
+vec3 skyNoise3(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  uvec3 c = uvec3(ivec3(i) + SKY_BIAS);
+  vec3 x00 = mix(skyRand3(c),                  skyRand3(c + uvec3(1, 0, 0)), f.x);
+  vec3 x10 = mix(skyRand3(c + uvec3(0, 1, 0)), skyRand3(c + uvec3(1, 1, 0)), f.x);
+  vec3 x01 = mix(skyRand3(c + uvec3(0, 0, 1)), skyRand3(c + uvec3(1, 0, 1)), f.x);
+  vec3 x11 = mix(skyRand3(c + uvec3(0, 1, 1)), skyRand3(c + uvec3(1, 1, 1)), f.x);
+  return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
+}
+vec3 skyFbm3(vec3 p) {
+  vec3 sum = vec3(0.0);
+  float amp = 0.5;
+  for (int i = 0; i < 4; i++) {
+    sum += amp * skyNoise3(p);
+    p = p * 2.03 + vec3(17.1, 31.7, 7.3);
+    amp *= 0.5;
+  }
+  return sum * (1.0 / 0.9375);
+}
+float skyNebula(vec3 s, vec3 center, float radius, float n) {
+  vec3 diff = s - center;
+  float r2 = dot(diff, diff) / (radius * radius);
+  if (r2 > 2.0) return 0.0;
+  return smoothstep(0.05, 0.6, exp(-r2) * (0.1 + 2.2 * n * n) - 0.3);
+}
+vec2 texelPhys(vec2 uv) { return vec2(1.0); }
+
+Surface surface(vec2 uv) {
+  float phi = uv.x * TAU, theta = uv.y * PI;
+  float sinTheta = sin(theta);
+  vec3 s = vec3(sinTheta * cos(phi), cos(theta), sinTheta * sin(phi));
+  vec3 n = skyFbm3(s * 4.0);
+  vec3 m = skyFbm3(s * vec3(8.0, 20.0, 8.0) + 1.6 * n);
+  float lat = s.y + 0.03 * (n.x - 0.5);
+  vec3 dc = s - normalize(vec3(1.0, 0.0, -0.35));
+  float core = exp(-dot(dc, dc) * (1.0 / 0.49));
+  float band = exp(-lat * lat / (2.0 * 0.12 * 0.12)) * (0.3 + 0.8 * n.x + 0.6 * m.x)
+             + exp(-lat * lat / (2.0 * 0.2 * 0.2)) * core * (1.2 + 0.8 * m.x);
+  float lane = exp(-(lat - 0.012) * (lat - 0.012) / (2.0 * 0.06 * 0.06));
+  band *= 1.0 - 0.9 * lane * smoothstep(0.42, 0.62, mix(n.y, m.y, 0.6));
+  vec3 glow = 0.11 * band * mix(vec3(0.55, 0.62, 0.85), vec3(1.0, 0.8, 0.55), core);
+  glow += 0.22 * skyNebula(s, normalize(vec3(-0.55, 0.38, -0.75)), 0.55, mix(n.z, m.z, 0.5)) * vec3(0.95, 0.22, 0.38);
+  glow += 0.17 * skyNebula(s, normalize(vec3(0.5, -0.42, 0.75)), 0.48, mix(n.z, m.y, 0.5)) * vec3(0.18, 0.55, 0.75);
+  vec3 col = glow + vec3(0.002, 0.003, 0.006);
+  return Surface(sqrt(clamp(col, 0.0, 1.0)), 1.0, 0.0);
+}
+` },
 };
 
 // Pass 1: the pattern, once per texel. The height goes out in 16 bits, split
@@ -599,22 +654,24 @@ function createSkinGenerator(gl, { scale = 1 } = {}) {
   // Immutable RGBA8 storage. The final textures get a full mip chain, trilinear
   // filtering and the most anisotropy the GPU offers, which is what keeps the
   // saucer sharp when it's seen nearly edge-on.
-  function target(w, h, mipmapped) {
+  function target(w, h, mipmapped, linear = mipmapped, clampV = false) {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texStorage2D(gl.TEXTURE_2D, mipmapped ? 1 + Math.floor(Math.log2(Math.max(w, h))) : 1, gl.RGBA8, w, h);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mipmapped ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, mipmapped ? gl.LINEAR : gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mipmapped ? gl.LINEAR_MIPMAP_LINEAR : linear ? gl.LINEAR : gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, linear ? gl.LINEAR : gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, clampV ? gl.CLAMP_TO_EDGE : gl.REPEAT);
     if (aniso && mipmapped) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, maxAniso);
     return tex;
   }
 
   return function generateSkin(kind, { size: [w0, h0], uniforms = {}, seed = 1, relief = 1, wrapV = false }) {
+    const spec = SKIN_KINDS[kind];
     const k = Math.min(scale, maxSize / Math.max(w0, h0));
     const w = Math.max(4, Math.round(w0 * k)), h = Math.max(4, Math.round(h0 * k));
-    const withNormal = SKIN_KINDS[kind].normal;
+    const withNormal = spec.normal;
+    const mipmap = spec.mipmap !== false;
     const common = { ...uniforms, uSize: [w, h], uSeed: seed };
 
     // Everything this changes, to put back after
@@ -627,7 +684,7 @@ function createSkinGenerator(gl, { scale = 1 } = {}) {
     gl.bindVertexArray(vao);
 
     // Pass 1: color, and the height if there will be a normal map
-    const color = target(w, h, true);
+    const color = target(w, h, mipmap, true, spec.clampV);
     const height = withNormal ? target(w, h, false) : null;
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color, 0);
     if (height) gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, height, 0);
@@ -650,10 +707,12 @@ function createSkinGenerator(gl, { scale = 1 } = {}) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.deleteFramebuffer(fb);
     gl.deleteTexture(height);
-    for (const tex of [color, normal]) {
-      if (!tex) continue;
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.generateMipmap(gl.TEXTURE_2D);
+    if (mipmap) {
+      for (const tex of [color, normal]) {
+        if (!tex) continue;
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.generateMipmap(gl.TEXTURE_2D);
+      }
     }
 
     gl.bindVertexArray(null);

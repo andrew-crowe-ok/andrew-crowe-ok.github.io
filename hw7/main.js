@@ -451,11 +451,8 @@ const { color: impulseGlow } = generateSkin("strip", {
   size: [512, 128], uniforms: { uInner: [1.0, 0.6, 0.35], uOuter: [0.75, 0.06, 0.03],
     uFrame: [0.1, 0.08, 0.08], uSlats: 10, uFlow: 0.25 } });
 
-// The nav light's bulb: one flat color, drawn glowing
-const beaconTexture = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, beaconTexture);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([150, 205, 255, 255]));
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+// Static sky nebula / Milky Way backdrop (sqrt-encoded RGBA8)
+const backdropTexture = generateSkin("backdrop", { size: [1024, 512] }).color;
 
 // Animated texture: a muted, looping <video> whose current frame is re-uploaded
 // every render, so it gets no mipmaps (LINEAR min filter). REPEAT on s lets u
@@ -494,7 +491,7 @@ const plasma = loadVideoTexture(["textures/plasma.webm", "textures/plasma.mp4"])
 // Unit i holds TEXTURES[i] (raytrace.js samples them by unit)
 const TEXTURES = [planetTexture, saucerTexture, saucerNormalMap, deckTexture, deckNormalMap,
   rimTexture, rimNormalMap, hullTexture, hullNormalMap, nacelleTexture, nacelleNormalMap,
-  deflectorGlow, grilleGlow, impulseGlow, plasma.texture, beaconTexture];
+  deflectorGlow, grilleGlow, impulseGlow, plasma.texture, backdropTexture];
 if (TEXTURES.length !== TEXTURE_UNITS) throw new Error("TEXTURE_UNITS is out of date");
 TEXTURES.forEach((texture, i) => { if (texture) texture._unitIndex = i; });
 function bindTextures() {
@@ -565,7 +562,7 @@ function adaptResolution(now, frameMs) {
 // mipmap levels: the plain lens's, blended toward the fisheye's as it opens
 function pixelAngle() {
   const rect = 2 / (projection[5] * canvas.height);
-  const fish = 4 * Math.sin(CHASE.fishHalfX / 2) / canvas.width;
+  const fish = 4 * Math.sin(CHASE.fishHalfX / 2) / Math.max(canvas.width, canvas.height);
   return rect + (fish - rect) * lensFisheye;
 }
 

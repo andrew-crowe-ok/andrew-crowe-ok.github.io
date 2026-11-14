@@ -154,11 +154,13 @@ function drawShip(parent) {
 }
 
 // Level 2: the nav light, and the glowing bulb that shows where it is
+const BEACON_MATERIAL = { ka: 0, kd: 0, ks: 0, shininess: 1, bumpScale: 0,
+  atmosphere: [150 / 255, 205 / 255, 255 / 255] };
 function drawNavLight(ship) {
   setNavLight(transformPoint(ship, NAV_LIGHT.pos));
   const r = NAV_LIGHT.radius;
-  drawPrimitive(sphereMesh, beaconTexture, EMISSIVE,
-    multiply(ship, multiply(translate(...NAV_LIGHT.bulb), scale(r, r, r))));
+  drawPrimitive(sphereMesh, null, EMISSIVE,
+    multiply(ship, multiply(translate(...NAV_LIGHT.bulb), scale(r, r, r))), BEACON_MATERIAL);
 }
 
 // Level 2: saucer section, three stacked squashed spheres -- a thin lens out to

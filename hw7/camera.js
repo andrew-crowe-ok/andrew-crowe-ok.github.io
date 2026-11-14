@@ -25,14 +25,14 @@ const CHASE = {
   // the same size on screen while it bulges toward the lens.
   dist: 2.2,                      // units behind the ship's middle before warp,
   height: 0.7,                    //   and above it: the plain lens frames it whole
-  warpDist: 0.95,                 // at warp: the hull's tail reaches 0.62 back,
-                                  //   the nacelle tail cones 0.95 back but 0.32
-                                  //   off to either side
-  warpHeight: 0.30,               // and above it, clear of the hull and saucer
+  warpDist: 1.50,                 // at warp: clear behind the hull tail (0.93 back) and
+                                  //   nacelle tail cones (0.98 back) so the whole ship
+                                  //   stays inside the frame
+  warpHeight: 0.48,               // ~18 deg above the ship, matching the pre-warp angle
   warpBlend: 0.55,                // s, the dolly zoom into warp
   fishHalfX: 125 * Math.PI / 180, // half the fisheye's horizontal field of view
-  fishStretch: 1.8,               // the fisheye's vertical stretch (see the lens),
-  fishPivot: -0.47                //   about this height on screen (-1 bottom, 1 top)
+  fishStretch: 1.55,              // the fisheye's vertical stretch (see the lens),
+  fishPivot: -0.35                //   about this height on screen (-1 bottom, 1 top)
 };
 
 // The lens, read by the ray tracer every frame: 0 = the projection matrix's
@@ -45,11 +45,11 @@ let lensFisheye = 0;
 let chaseGrab = null;   // the drag angles when this chase began
 
 // The camera's own frame inside the ship's: dist behind the ship's middle and
-// height above it, pitched down by atan(height / dist) so the ship sits in the
-// middle of the frame. The rotateY(PI) is there because the ship flies up its
-// own +z while an eye looks down its own -z.
-function chaseEyeFrame(dist, height) {
-  return multiply(multiply(rotateX(Math.atan2(height, dist)), rotateY(Math.PI)),
+// height above it, pitched down toward (0, aimY, 0) in ship space. The
+// rotateY(PI) is there because the ship flies up its own +z while an eye looks
+// down its own -z.
+function chaseEyeFrame(dist, height, aimY = 0) {
+  return multiply(multiply(rotateX(Math.atan2(height - aimY, dist)), rotateY(Math.PI)),
     translate(0, -height, dist));
 }
 
@@ -62,8 +62,8 @@ function inverseShipFrame({ pos, heading }) {
 
 // The view matrix that rides the ship. `look` turns the ship's frame before the
 // camera is placed in it, which swings the camera around the ship.
-function chaseView(ship, look, dist, height) {
-  return multiply(multiply(chaseEyeFrame(dist, height), look), inverseShipFrame(ship));
+function chaseView(ship, look, dist, height, aimY = 0) {
+  return multiply(multiply(chaseEyeFrame(dist, height, aimY), look), inverseShipFrame(ship));
 }
 
 const easeOutCubic = u => u <= 0 ? 0 : u >= 1 ? 1 : 1 - (1 - u) ** 3;
@@ -105,9 +105,13 @@ function updateCamera(t, ship, free, drag) {
   // mouse never snaps the view
   chaseGrab ??= { ...drag };
 
-  const look = multiply(rotateY(drag.y - chaseGrab.y), rotateX(drag.x - chaseGrab.x));
-  const chase = chaseView(ship, look, CHASE.dist + (CHASE.warpDist - CHASE.dist) * w,
-    CHASE.height + (CHASE.warpHeight - CHASE.height) * w);
+  const pitch = Math.max(-1.2, Math.min(1.2, drag.x - chaseGrab.x));
+  const look = multiply(rotateY(drag.y - chaseGrab.y), rotateX(pitch));
+  const surge = ship.warpTau === null ? 0 : 1.6 * ship.warpTau * Math.exp(-4.0 * ship.warpTau);
+  const chase = chaseView(ship, look,
+    CHASE.dist + (CHASE.warpDist - CHASE.dist) * w + surge,
+    CHASE.height + (CHASE.warpHeight - CHASE.height) * w,
+    0.05 * w);
   return k >= 1 ? chase : blendViews(free, chase, k);
 }
 

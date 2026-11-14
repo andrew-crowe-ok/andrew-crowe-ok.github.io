@@ -309,6 +309,7 @@ bool hitTorus(vec3 o, vec3 d, float r, float tmin, inout float t, out vec3 n) {
   float len = length(d);
   vec3 u = d / len;                       // march in object-space units
   float b = dot(o, u), c = dot(o, o) - (1.0 + r) * (1.0 + r);
+  if (b > 0.0 && c > 0.0) return false;
   float disc = b * b - c;
   if (disc < 0.0) return false;
   float s = sqrt(disc);
@@ -321,9 +322,9 @@ bool hitTorus(vec3 o, vec3 d, float r, float tmin, inout float t, out vec3 n) {
   if (x0 >= x1) return false;
   float x = x0;
   for (int i = 0; i < 32; i++) {
-    float h = torusDistance(o + u * x, r);
+    vec3 p = o + u * x;
+    float h = torusDistance(p, r);
     if (h < 1e-4) {
-      vec3 p = o + u * x;
       vec2 q = normalize(p.xz);
       n = p - vec3(q.x, 0.0, q.y);        // from the tube's center line
       t = x / len;
@@ -435,6 +436,7 @@ bool shadowTorus(vec3 o, vec3 d, float r, float tmin, float tmax) {
   float len = length(d);
   vec3 u = d / len;
   float b = dot(o, u), c = dot(o, o) - (1.0 + r) * (1.0 + r);
+  if (b > 0.0 && c > 0.0) return false;
   float disc = b * b - c;
   if (disc < 0.0) return false;
   float s = sqrt(disc);
@@ -739,8 +741,10 @@ vec3 fbm3(vec3 p) {
 
 // One nebula: a soft patch around center, its edge torn up by the noise
 float nebula(vec3 s, vec3 center, float radius, float n) {
-  float r = length(s - center) / radius;
-  return smoothstep(0.05, 0.6, exp(-r * r) * (0.1 + 2.2 * n * n) - 0.3);
+  vec3 diff = s - center;
+  float r2 = dot(diff, diff) / (radius * radius);
+  if (r2 > 2.0) return 0.0;
+  return smoothstep(0.05, 0.6, exp(-r2) * (0.1 + 2.2 * n * n) - 0.3);
 }
 
 vec3 backdrop(vec3 s) {
@@ -750,7 +754,8 @@ vec3 backdrop(vec3 s) {
   vec3 m = fbm3(s * vec3(8.0, 20.0, 8.0) + 1.6 * n);
   float lat = s.y + 0.03 * (n.x - 0.5);
   // The galactic core sits in the band, toward +x
-  float core = exp(-pow(length(s - normalize(vec3(1.0, 0.0, -0.35))) / 0.7, 2.0));
+  vec3 dc = s - normalize(vec3(1.0, 0.0, -0.35));
+  float core = exp(-dot(dc, dc) * (1.0 / 0.49));
   float band = exp(-lat * lat / (2.0 * 0.12 * 0.12)) * (0.3 + 0.8 * n.x + 0.6 * m.x)
              + exp(-lat * lat / (2.0 * 0.2 * 0.2)) * core * (1.2 + 0.8 * m.x);
   // Dust lanes: dark filaments threaded along the band's middle
@@ -810,31 +815,79 @@ vec3 distantStar(vec3 s) {
   vec2 uv;
   int face = cubeFace(s, uv);
   vec2 cell = floor((uv * 0.5 + 0.5) * STAR_GRID);
-  vec2 mid = (cell + 0.5) / STAR_GRID * 2.0 - 1.0;
   vec3 r1 = random3(uvec3(uvec2(cell), uint(face) + 7u));
+  if (r1.x > 0.328) return vec3(0.0);
+  vec2 mid = (cell + 0.5) / STAR_GRID * 2.0 - 1.0;
   // Cells near a face's corners cover less of the sky, so they hold a star
   // less often, keeping the density even; the band packs more in near the
   // sky's equator. About 2000 stars.
   vec3 centerDir = normalize(cubeDir(face, mid));
-  float area = pow(1.0 + dot(mid, mid), -1.5);
+  float m2 = 1.0 + dot(mid, mid);
+  float area = inversesqrt(m2 * m2 * m2);
   float band = 1.0 + 2.28 * exp(-centerDir.y * centerDir.y / (2.0 * 0.175 * 0.175));
   if (r1.x > 0.1 * area * band) return vec3(0.0);
 
-  vec3 r2 = random3(uvec3(uvec2(cell), uint(face) + 101u));
   vec3 star = normalize(cubeDir(face, (cell + 0.15 + 0.7 * r1.yz) / STAR_GRID * 2.0 - 1.0));
+  vec3 diff = s - star;
+  float maxAng = max(1.4 * uStarScale, 0.75) * uPixelAngle;
+  float dist2 = dot(diff, diff);
+  if (dist2 >= maxAng * maxAng) return vec3(0.0);
+
+  vec3 r2 = random3(uvec3(uvec2(cell), uint(face) + 101u));
   float mag = r2.x * r2.x * r2.x;
   vec3 color = (0.35 + 0.5 * mag) * starColor(r2.y);
   float size = (1.0 + 1.8 * mag) * uStarScale;
-  return starDot(color, size, length(s - star) / uPixelAngle, 0.0, r2.z);
+  return starDot(color, size, sqrt(dist2) / uPixelAngle, 0.0, r2.z);
 }
 
 // The near star in cell c, if it has one, seen along ray o + t d; v is how
 // far the stars move past the eye over the shutter
-vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v) {
+vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v, float maxChance, float maxRadiusPx,
+              float maxRadiusAngle2, float cosMaxStreak, float cosLimit) {
   uvec3 key = uvec3(c + CELL_BIAS);
   vec3 r1 = random3(key);
-  float maxChance = mix(STAR_DENSITY * 3.0, min(STAR_DENSITY * 3.0 * WARP_STAR_DENSITY, WARP_STAR_CAP), uWarpStars);
   if (r1.x >= maxChance) return vec3(0.0);
+
+  vec3 r2 = random3(key + uvec3(0, 0, 7919));
+  // Kept off the cell's walls, so a star's glow never spills into a cell the
+  // walk doesn't look in
+  vec3 pos = (vec3(c) + 0.15 + 0.7 * vec3(r1.yz, r2.x)) * STAR_CELL;
+  if (dot(pos, pos) < STAR_CLEAR * STAR_CLEAR) return vec3(0.0);
+  vec3 q = pos - o;
+  float dist2 = dot(q, q);
+  if (dist2 > STAR_REACH * STAR_REACH || dist2 < 0.25) return vec3(0.0);
+  float qDotD = dot(q, d);
+  if (qDotD <= 0.0) return vec3(0.0);
+
+  float invDist = inversesqrt(dist2);
+  vec3 s0 = q * invDist, s1 = s0;
+  float px = 0.0, streakPx = 0.0;
+  if (v == vec3(0.0)) {
+    float d2 = max(2.0 - 2.0 * qDotD * invDist, 0.0);
+    if (d2 >= maxRadiusAngle2) return vec3(0.0);
+    px = sqrt(d2) / uPixelAngle;
+  } else {
+    // Where it was a shutter ago, its streak no longer than uMaxStreak
+    s1 = normalize(q - v);
+    float cosAng = dot(s0, s1);
+    if (cosAng < cosMaxStreak) {
+      if (dot(d, s0) <= cosLimit) return vec3(0.0);
+      float angle = acos(clamp(cosAng, -1.0, 1.0));
+      s1 = normalize(mix(s0, s1, uMaxStreak / angle));
+      streakPx = uMaxStreak / uPixelAngle;
+      px = pixelsFrom(d, s0, s1);
+      if (px >= maxRadiusPx) return vec3(0.0);
+    } else {
+      vec3 ab = s1 - s0;
+      float ab2 = dot(ab, ab);
+      float k = ab2 > 0.0 ? clamp(dot(d - s0, ab) / ab2, 0.0, 1.0) : 0.0;
+      vec3 diff = d - (s0 + ab * k);
+      float diff2 = dot(diff, diff);
+      if (diff2 >= maxRadiusAngle2) return vec3(0.0);
+      px = sqrt(diff2) / uPixelAngle;
+      streakPx = acos(clamp(cosAng, -1.0, 1.0)) / uPixelAngle;
+    }
+  }
 
   float midY = (float(c.y) + 0.5) * STAR_CELL;
   float base = STAR_DENSITY * (1.0 + 2.0 * exp(-midY * midY / (STAR_DISC * STAR_DISC)));
@@ -842,15 +895,8 @@ vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v) {
   if (r1.x >= chance) return vec3(0.0);
   // A star only the warp brings fades in with it
   float fade = r1.x < base ? 1.0 : uWarpStars;
-  vec3 r2 = random3(key + uvec3(0, 0, 7919));
-  // Kept off the cell's walls, so a star's glow never spills into a cell the
-  // walk doesn't look in
-  vec3 pos = (vec3(c) + 0.15 + 0.7 * vec3(r1.yz, r2.x)) * STAR_CELL;
-  if (dot(pos, pos) < STAR_CLEAR * STAR_CLEAR) return vec3(0.0);
-  vec3 q = pos - o;
-  float dist = length(q);
-  if (dist > STAR_REACH || dist < 0.5 || dot(q, d) <= 0.0) return vec3(0.0);
 
+  float dist = dist2 * invDist;
   float mag = r2.y * r2.y * r2.y;
   // Brighter and a little larger as the ship closes on it, fading toward the
   // far edge of the field, where the distant layer carries on
@@ -858,20 +904,8 @@ vec3 nearStar(ivec3 c, vec3 o, vec3 d, vec3 v) {
   float level = (0.45 + 0.55 * mag) * min(near * near, 4.0) * smoothstep(STAR_REACH, 0.6 * STAR_REACH, dist);
   float size = (1.0 + 2.2 * mag) * clamp(sqrt(near), 0.7, 2.0) * uStarScale;
 
-  vec3 s0 = q / dist, s1 = s0;
-  float streakPx = 0.0;
-  if (v != vec3(0.0)) {
-    // Where it was a shutter ago, its streak no longer than uMaxStreak
-    s1 = normalize(q - v);
-    float angle = acos(clamp(dot(s0, s1), -1.0, 1.0));
-    if (angle > uMaxStreak) {
-      s1 = normalize(mix(s0, s1, uMaxStreak / angle));
-      angle = uMaxStreak;
-    }
-    streakPx = angle / uPixelAngle;
-  }
   // The chance test above leaves r1.x uniform in [0, chance): the twinkle's phase
-  return starDot(fade * level * starColor(r2.z), size, pixelsFrom(d, s0, s1), streakPx, r1.x / chance);
+  return starDot(fade * level * starColor(r2.z), size, px, streakPx, r1.x / chance);
 }
 
 // The near stars along ray o + t d: an Amanatides-Woo walk through the cells
@@ -896,23 +930,37 @@ vec3 nearStars(vec3 o, vec3 d, vec3 v) {
   vec3 wall = (vec3(cell) + step(0.0, d)) * STAR_CELL;
   vec3 tMax = t + abs(wall - p) * invAbs;
   ivec3 reach = ivec3(greaterThan(abs(v), vec3(0.075 * STAR_CELL))) * ivec3(sign(v));
+  ivec3 absReach = abs(reach);
   bool hasReach = any(notEqual(reach, ivec3(0)));
+  ivec3 needVal = ivec3(equal(stepDir, reach));
+  ivec3 skipMask = ivec3(0);
+
+  float maxChance = mix(STAR_DENSITY * 3.0, min(STAR_DENSITY * 3.0 * WARP_STAR_DENSITY, WARP_STAR_CAP), uWarpStars);
+  float maxRadiusPx = max(3.2 * uStarScale, 0.75);
+  float maxRadiusAngle = maxRadiusPx * uPixelAngle;
+  float maxRadiusAngle2 = maxRadiusAngle * maxRadiusAngle;
+  float cosMaxStreak = cos(uMaxStreak);
+  float cosLimit = cos(min(uMaxStreak + maxRadiusAngle * 1.05, PI));
 
   vec3 light = vec3(0.0);
   for (int i = 0; i < STAR_STEPS; i++) {
     if (t > STAR_REACH) break;
     if (!hasReach) {
-      light = max(light, nearStar(cell, o, d, v));
+      light = max(light, nearStar(cell, o, d, v, maxChance, maxRadiusPx, maxRadiusAngle2, cosMaxStreak, cosLimit));
     } else {
       for (int k = 0; k < 8; k++) {
         ivec3 off = ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
-        if (any(greaterThan(off, abs(reach)))) continue;
-        light = max(light, nearStar(cell + off * reach, o, d, v));
+        if (any(greaterThan(off, absReach)) || any(notEqual((off - needVal) * skipMask, ivec3(0)))) continue;
+        light = max(light, nearStar(cell + off * reach, o, d, v, maxChance, maxRadiusPx, maxRadiusAngle2, cosMaxStreak, cosLimit));
       }
     }
-    if (tMax.x < tMax.y && tMax.x < tMax.z) { cell.x += stepDir.x; t = tMax.x; tMax.x += tDelta.x; }
-    else if (tMax.y < tMax.z)               { cell.y += stepDir.y; t = tMax.y; tMax.y += tDelta.y; }
-    else                                    { cell.z += stepDir.z; t = tMax.z; tMax.z += tDelta.z; }
+    if (tMax.x < tMax.y && tMax.x < tMax.z) {
+      cell.x += stepDir.x; t = tMax.x; tMax.x += tDelta.x; skipMask = ivec3(absReach.x, 0, 0);
+    } else if (tMax.y < tMax.z) {
+      cell.y += stepDir.y; t = tMax.y; tMax.y += tDelta.y; skipMask = ivec3(0, absReach.y, 0);
+    } else {
+      cell.z += stepDir.z; t = tMax.z; tMax.z += tDelta.z; skipMask = ivec3(0, 0, absReach.z);
+    }
   }
   return light;
 }
@@ -956,9 +1004,10 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
     // everything is lit harder than the far. Past the light's reach it stops
     // falling off, so the ship stays lit as it warps out of the system.
     float ref2 = uLightRange[j].x * uLightRange[j].x;
-    float d = min(dist, uLightRange[j].y);
-    float att = uAttenuation ? 2.0 * ref2 / (ref2 + d * d) : 1.0;
-    float spec = pow(max(dot(V, reflect(-L, n)), 0.0), A.w * uShininessScale);
+    float dAtt = min(dist, uLightRange[j].y);
+    float att = uAttenuation ? 2.0 * ref2 / (ref2 + dAtt * dAtt) : 1.0;
+    float rdotv = max(dot(V, reflect(-L, n)), 0.0);
+    float spec = rdotv > 0.0 ? pow(rdotv, A.w * uShininessScale) : 0.0;
     color += uLightColor[j] * vis * att * (A.y * body * s.base * diff + A.z * spec);
   }
   // Lit windows and lights in the skin shine whatever the lighting, so they
@@ -967,7 +1016,8 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
   // The planet's atmosphere, as in HW6: a glow at the limb, on the sunlit side
   vec3 glow = uMatC[i].rgb;
   if (glow != vec3(0.0)) {
-    float rim = pow(1.0 - max(dot(ng, V), 0.0), 3.0);
+    float rimBase = 1.0 - max(dot(ng, V), 0.0);
+    float rim = rimBase * rimBase * rimBase;
     float day = smoothstep(-0.25, 0.5, dot(ng, normalize(uLightPos[0] - s.p)));
     color += glow * rim * day;
   }
@@ -985,7 +1035,10 @@ bool primaryRay(out vec3 d) {
   float aspect = uProj11 / uProj00;
   vec2 q = vec2(ndc.x, (uFishPivot + (ndc.y - uFishPivot) / uFishStretch) / aspect);
   float k = length(q) * sin(0.5 * uFishHalfX);
-  if (k >= 1.0) return uFisheye < 1.0;
+  if (k >= 1.0) {
+    if (uFisheye >= 1.0) return false;
+    k = 1.0;
+  }
   float theta = 2.0 * asin(k);
   vec2 dir = length(q) > 1e-6 ? normalize(q) : vec2(0.0);
   vec3 fish = vec3(sin(theta) * dir, -cos(theta));
@@ -1065,10 +1118,12 @@ void main() {
         p.o = outside; p.d = rdir; p.weight *= B.y;
       } else {
         // Schlick, with the angle on the vacuum side
-        float c = entering ? -dot(p.d, n) : -dot(tdir, n);
+        float c = clamp(entering ? -dot(p.d, n) : -dot(tdir, n), 0.0, 1.0);
         float r0 = (B.z - 1.0) / (B.z + 1.0);
         r0 *= r0;
-        float F = r0 + (1.0 - r0) * pow(1.0 - c, 5.0);
+        float omc = 1.0 - c;
+        float omc2 = omc * omc;
+        float F = r0 + (1.0 - r0) * omc2 * omc2 * omc;
         // The reflected ray stays in the medium it came from; the refracted
         // one crosses into glass, or back out of it
         Path reflected = Path(outside, rdir, p.weight * B.y * F, p.absorb, p.travelled, p.depth);

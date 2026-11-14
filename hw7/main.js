@@ -18,7 +18,13 @@ window.addEventListener("error", e => showError(`The ray tracer stopped: ${e.mes
 canvas.addEventListener("webglcontextlost", () =>
   showError("The GPU dropped the WebGL context. Reload the page, or lower the bounces with ?bounces=1."));
 
-const gl = canvas.getContext("webgl2");
+const gl = canvas.getContext("webgl2", {
+  alpha: false,
+  depth: false,
+  stencil: false,
+  antialias: false,
+  powerPreference: "high-performance"
+});
 if (!gl) showError("This browser has no WebGL 2, which the ray tracer needs.");
 
 function compile(type, source) {
@@ -341,15 +347,17 @@ function loadTexture(urls, thumbUrl) {
       // Try background fetch + createImageBitmap for true off-thread decode & Y-flip
       try {
         if (typeof createImageBitmap === "function" && typeof fetch === "function") {
-          const resp = await fetch(url);
+          const resp = await fetch(url, { mode: "cors", credentials: "same-origin" });
           if (resp.ok) {
             const blob = await resp.blob();
             const bmp = await createImageBitmap(blob, { imageOrientation: "flipY" });
             if (!fullLoaded) {
               fullLoaded = true;
               upload(bmp, true);
+              bmp.close();
               return;
             }
+            bmp.close();
           }
         }
       } catch (e) {
@@ -464,9 +472,11 @@ function loadVideoTexture(sources) {
   video.src = sources.find(src => video.canPlayType(src.endsWith(".webm") ? "video/webm" : "video/mp4")) ?? sources[0];
   video.play().catch(() => {});  // autoplay of muted video is allowed; ignore if blocked
 
+  let lastVideoTime = -1;
   function update() {
-    if (video.readyState < video.HAVE_CURRENT_DATA) return;
-    gl.activeTexture(gl.TEXTURE0 + 14);
+    if (video.readyState < video.HAVE_CURRENT_DATA || video.currentTime === lastVideoTime) return;
+    lastVideoTime = video.currentTime;
+    gl.activeTexture(gl.TEXTURE0 + (texture._unitIndex ?? 14));
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
@@ -538,7 +548,9 @@ resize();
 
 const adapt = { t0: null, frames: 0, ms: 0 };
 function adaptResolution(now, frameMs) {
-  if (!MOBILE || controls.resolution) { adapt.t0 = null; adapt.frames = 0; adapt.ms = 0; return; }
+  if (!MOBILE || controls.resolution || (controls.fps && 1000 / controls.fps >= ADAPT.slow)) {
+    adapt.t0 = null; adapt.frames = 0; adapt.ms = 0; return;
+  }
   adapt.t0 ??= now;
   adapt.frames++; adapt.ms += frameMs;
   if (now - adapt.t0 < ADAPT.window) return;
@@ -623,9 +635,8 @@ function endGpuTimer() {
 function pollGpuTimer() {
   if (!timerExt || !pendingGpuQuery) return;
   const available = gl.getQueryParameter(pendingGpuQuery, gl.QUERY_RESULT_AVAILABLE);
-  const disjoint = gl.getParameter(timerExt.GPU_DISJOINT_EXT);
   if (available) {
-    if (!disjoint) {
+    if (!gl.getParameter(timerExt.GPU_DISJOINT_EXT)) {
       const elapsedNs = gl.getQueryParameter(pendingGpuQuery, gl.QUERY_RESULT);
       lastGpuMs = elapsedNs / 1e6;
     }
@@ -866,7 +877,8 @@ canvas.addEventListener("pointercancel", liftPointer);
 
 const CONTROL_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "s"];
 document.addEventListener("keydown", e => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement ||
+      e.target instanceof HTMLTextAreaElement) return;
   if (e.key === "i" || e.key === "I" || e.key === "o" || e.key === "O") {
     const statsInput = document.getElementById("stats");
     if (statsInput) {
@@ -1004,6 +1016,12 @@ const lightRangeBuf = new Float32Array([
   FILL.ref, FILL.reach,
   NAV.ref, NAV.reach
 ]);
+gl.uniform1f(uniforms.uFishHalfX, CHASE.fishHalfX);
+gl.uniform1f(uniforms.uFishStretch, CHASE.fishStretch);
+gl.uniform1f(uniforms.uFishPivot, CHASE.fishPivot);
+gl.uniform2fv(uniforms.uLightRange, lightRangeBuf);
+gl.uniform1f(uniforms.uShutter, STREAK.shutter);
+gl.uniform1f(uniforms.uStreakDim, STREAK.dim);
 
 // Hand this frame's scene, lights, lens and controls to the shader
 function uploadScene(view, t, ship) {
@@ -1012,9 +1030,6 @@ function uploadScene(view, t, ship) {
   gl.uniform1f(u.uProj00, projection[0]);
   gl.uniform1f(u.uProj11, projection[5]);
   gl.uniform1f(u.uFisheye, lensFisheye);
-  gl.uniform1f(u.uFishHalfX, CHASE.fishHalfX);
-  gl.uniform1f(u.uFishStretch, CHASE.fishStretch);
-  gl.uniform1f(u.uFishPivot, CHASE.fishPivot);
   const pixel = pixelAngle();
   gl.uniform1f(u.uPixelAngle, pixel);
 
@@ -1046,7 +1061,6 @@ function uploadScene(view, t, ship) {
 
   gl.uniform3fv(u.uLightPos, lightPosBuf);
   gl.uniform3fv(u.uLightColor, lightColorBuf);
-  gl.uniform2fv(u.uLightRange, lightRangeBuf);
 
   gl.uniform1i(u.uBounces, controls.bounces);
   gl.uniform1i(u.uShadows, controls.shadows);
@@ -1057,9 +1071,7 @@ function uploadScene(view, t, ship) {
   gl.uniform3fv(u.uSkyCenter, scene.sky.center);
   gl.uniformMatrix3fv(u.uSkyRot, false, scene.sky.rot);
   gl.uniform3fv(u.uStreak, scene.sky.streak);
-  gl.uniform1f(u.uShutter, STREAK.shutter);
   gl.uniform1f(u.uMaxStreak, STREAK.max * renderScale * pixel);
-  gl.uniform1f(u.uStreakDim, STREAK.dim);
   gl.uniform1f(u.uStarScale, renderScale);
   const fade = ship.warpTau === null ? 0 : Math.min(1, ship.warpTau / WARP_STARS.fadeIn);
   gl.uniform1f(u.uWarpStars, fade * fade * (3 - 2 * fade));
@@ -1105,7 +1117,6 @@ function render(time) {
   drawSystem(view, t, ship);
   plasma.setRate(engines.plasmaRate);
   plasma.update();
-  bindTextures();
   uploadScene(view, t, ship);
 
   beginGpuTimer();

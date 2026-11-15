@@ -513,14 +513,14 @@ bindTextures();
 // a ray tree, so the drawing buffer is capped at 900p's pixel count
 // (540p's on phones), and the browser scales it up past that.
 //
-// On phones, the cap also adapts automatically: every ADAPT.window seconds the
-// mean frame time is checked, and the pixel budget shrinks by ADAPT.step while
-// frames run slower than ADAPT.slow, or grows back toward the cap while they
-// run faster than ADAPT.fast, never below ADAPT.floor of it.
+// The pixel cap also adapts automatically to hold the 60 FPS target: every
+// ADAPT.window seconds the mean frame time is checked, and the pixel budget
+// shrinks by ADAPT.step while frames run slower than ADAPT.slow, or grows back
+// toward the cap while they run faster than ADAPT.fast, never below ADAPT.floor.
 const BASE_FOVY = Math.PI / 4, MIN_ASPECT = 1.6;
 const AUTO_PIXELS = MOBILE ? 960 * 540 : 1600 * 900;
-const ADAPT = { window: 1.0, slow: 45, fast: 30, step: 0.8, floor: 0.25 };
-const MAX_FPS = 40;
+const ADAPT = { window: 1.0, slow: 22, fast: 19, step: 0.8, floor: MOBILE ? 0.25 : 0.36 };
+const MAX_FPS = 60;
 let pixelBudget = 1;   // share of AUTO_PIXELS in use
 let projection, renderScale = 1;
 function resize() {
@@ -540,9 +540,6 @@ resize();
 
 const adapt = { t0: null, frames: 0, ms: 0 };
 function adaptResolution(now, frameMs) {
-  if (!MOBILE) {
-    adapt.t0 = null; adapt.frames = 0; adapt.ms = 0; return;
-  }
   adapt.t0 ??= now;
   adapt.frames++; adapt.ms += frameMs;
   if (now - adapt.t0 < ADAPT.window) return;

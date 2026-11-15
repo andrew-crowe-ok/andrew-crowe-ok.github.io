@@ -108,7 +108,7 @@
       right: calc(16px + env(safe-area-inset-right));
       max-width: calc(100vw - 32px);
     }
-    #shaderBox[open] { width: min(460px, calc(100vw - 32px)); }
+    #shaderBox[open] { width: min(560px, calc(100vw - 32px)); }
     #controls summary, #shaderBox summary {
       cursor: pointer; list-style: none; user-select: none;
       font: 600 11px / 1 "Orbitron", "Eurostile", "Segoe UI", system-ui, sans-serif;
@@ -142,37 +142,96 @@
     #controls .checks label { display: flex; align-items: center; gap: 0.4em; cursor: pointer; }
     #controls .checks input { margin: 0; accent-color: rgb(var(--glow)); }
 
-    #shaderBox .tabs { display: flex; gap: 0.4em; margin-bottom: 0.55em; }
+    #shaderBox .tabs { display: flex; gap: 0.4em; margin-bottom: 0.45em; }
     #shaderBox button {
       font: 600 11px / 1.2 "Segoe UI", system-ui, sans-serif; color: var(--ink);
       background: rgba(8, 22, 40, 0.75); border: 1px solid rgba(var(--glow), 0.35);
-      border-radius: 7px; padding: 0.4em 0.7em; cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
+      border-radius: 7px; padding: 0.42em 0.8em; cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
     }
     #shaderBox button:hover, #shaderBox button:focus-visible {
       border-color: rgba(var(--glow), 0.85);
       background: rgba(18, 44, 76, 0.85);
       outline: none;
     }
-    #shaderBox .tab { flex: 1; text-align: center; opacity: 0.75; }
+    #shaderBox .tab { flex: 1; text-align: center; opacity: 0.72; }
     #shaderBox .tab[aria-selected="true"] {
       opacity: 1; border-color: rgba(var(--glow), 0.9);
-      background: rgba(20, 52, 90, 0.85);
-      box-shadow: inset 0 0 8px rgba(var(--glow), 0.25);
+      background: rgba(20, 52, 90, 0.88);
+      box-shadow: inset 0 0 10px rgba(var(--glow), 0.25);
     }
+    #shaderHint {
+      margin-bottom: 0.5em; padding: 0.4em 0.6em;
+      font: 11px / 1.35 "Segoe UI", system-ui, sans-serif;
+      color: rgba(212, 238, 255, 0.86);
+      background: rgba(var(--glow), 0.08);
+      border-left: 2px solid rgba(var(--glow), 0.55);
+      border-radius: 0 6px 6px 0;
+    }
+    #shaderHint code {
+      font: 10.5px / 1.2 ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+      color: #ffd27d; background: rgba(0, 0, 0, 0.28);
+      padding: 0.08em 0.32em; border-radius: 4px;
+    }
+    .editorShell {
+      --code-font: 12px / 1.48 ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+      --code-pad-y: 9px;
+      display: grid; grid-template-columns: auto 1fr;
+      height: min(46vh, 360px); min-height: 180px;
+      resize: vertical; overflow: hidden;
+      background: rgba(2, 8, 18, 0.88);
+      border: 1px solid rgba(var(--glow), 0.35); border-radius: 9px;
+      box-shadow: inset 0 0 14px rgba(0, 0, 0, 0.45);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .editorShell:focus-within {
+      border-color: rgba(var(--glow), 0.9);
+      box-shadow: 0 0 10px rgba(var(--glow), 0.2), inset 0 0 14px rgba(0, 0, 0, 0.45);
+    }
+    #shaderGutter {
+      margin: 0; padding: var(--code-pad-y) 8px var(--code-pad-y) 9px;
+      font: var(--code-font); text-align: right; user-select: none; overflow: hidden;
+      color: rgba(var(--glow), 0.42); background: rgba(6, 18, 34, 0.55);
+      border-right: 1px solid rgba(var(--glow), 0.16);
+      font-variant-numeric: tabular-nums;
+    }
+    .editorWrap { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+    #shaderHighlight, #shaderEditor {
+      position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+      box-sizing: border-box; padding: var(--code-pad-y) 11px;
+      font: var(--code-font); tab-size: 2; white-space: pre;
+      border: 0; letter-spacing: 0;
+    }
+    #shaderHighlight { pointer-events: none; overflow: hidden; color: var(--ink); }
     #shaderEditor {
-      display: block; width: 100%; height: min(42vh, 320px); min-height: 150px;
-      box-sizing: border-box; padding: 0.55em 0.65em; resize: vertical;
-      font: 12px / 1.4 ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, monospace;
-      tab-size: 2; color: var(--ink);
-      background: rgba(2, 8, 18, 0.82); border: 1px solid rgba(var(--glow), 0.35);
-      border-radius: 8px; outline: none;
+      overflow: auto; resize: none; outline: none; background: transparent;
+      color: transparent; caret-color: #ffffff; -webkit-text-fill-color: transparent;
+      scrollbar-width: thin; scrollbar-color: rgba(var(--glow), 0.35) transparent;
     }
-    #shaderEditor:focus { border-color: rgba(var(--glow), 0.85); }
+    #shaderEditor::selection { background: rgba(var(--glow), 0.28); }
+    #shaderEditor::-webkit-scrollbar { width: 8px; height: 8px; }
+    #shaderEditor::-webkit-scrollbar-thumb {
+      background: rgba(var(--glow), 0.32); border-radius: 999px;
+    }
+    #shaderEditor::-webkit-scrollbar-track { background: transparent; }
+    .tok-com { color: #6f8cad; font-style: italic; }
+    .tok-kw  { color: #66c8ff; font-weight: 600; }
+    .tok-ty  { color: #6be5c8; }
+    .tok-bi  { color: #ffd27d; }
+    .tok-num { color: #ff9e80; }
+    .tok-pp  { color: #c59eff; }
+
     #shaderBox .actions {
       display: flex; align-items: center; gap: 0.5em; margin-top: 0.55em;
     }
     #shaderApply { border-color: rgba(var(--glow), 0.65); }
+    #shaderApply.pending {
+      border-color: rgba(var(--glow), 1);
+      background: rgba(22, 62, 108, 0.88);
+      box-shadow: 0 0 10px rgba(var(--glow), 0.32);
+    }
+    #shaderBox .shortcut { font-size: 11px; opacity: 0.55; }
+    @media (max-width: 460px) { #shaderBox .shortcut { display: none; } }
     #shaderStatus {
       margin-left: auto; font-size: 11px; opacity: 0.75;
       font-variant-numeric: tabular-nums;
@@ -217,10 +276,18 @@
       <button type="button" class="tab" role="tab" data-tab="shadeLocal" aria-selected="true">Lighting &amp; Shadows</button>
       <button type="button" class="tab" role="tab" data-tab="stepBounce" aria-selected="false">Bounces &amp; Glass</button>
     </div>
-    <textarea id="shaderEditor" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="GLSL shader block"></textarea>
+    <div id="shaderHint"></div>
+    <div class="editorShell">
+      <pre id="shaderGutter" aria-hidden="true"></pre>
+      <div class="editorWrap">
+        <pre id="shaderHighlight" aria-hidden="true"></pre>
+        <textarea id="shaderEditor" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="GLSL shader block"></textarea>
+      </div>
+    </div>
     <div class="actions">
       <button type="button" id="shaderApply" title="Compile and apply (Ctrl+Enter / Cmd+Enter)">Apply</button>
       <button type="button" id="shaderReset" title="Restore default GLSL for both tabs">Reset</button>
+      <span class="shortcut">Ctrl/Cmd+Enter &middot; Tab</span>
       <span id="shaderStatus">Applied</span>
     </div>
     <pre id="shaderError" role="alert" hidden></pre>
@@ -228,13 +295,13 @@
 
   <!-- ?v= changes with each deploy, so a browser never runs a cached script
        from the last one alongside new ones -->
-  <script src="transforms.js?v=33"></script>
-  <script src="raytrace.js?v=33"></script>
-  <script src="textures.js?v=33"></script>
-  <script src="ship.js?v=33"></script>
-  <script src="camera.js?v=33"></script>
-  <script src="scene.js?v=33"></script>
-  <script src="main.js?v=33"></script>
+  <script src="transforms.js?v=34"></script>
+  <script src="raytrace.js?v=34"></script>
+  <script src="textures.js?v=34"></script>
+  <script src="ship.js?v=34"></script>
+  <script src="camera.js?v=34"></script>
+  <script src="scene.js?v=34"></script>
+  <script src="main.js?v=34"></script>
 </body>
 
 </html>

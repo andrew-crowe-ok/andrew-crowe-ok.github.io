@@ -844,7 +844,47 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
     });
   }
 
+  const escapeHtml = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const GLSL_KW = new Set(["if", "else", "for", "while", "do", "return", "continue", "break",
+    "struct", "in", "out", "inout", "uniform", "const", "true", "false"]);
+  const GLSL_TY = new Set(["void", "bool", "int", "uint", "float", "vec2", "vec3", "vec4",
+    "bvec2", "bvec3", "bvec4", "ivec2", "ivec3", "ivec4", "mat2", "mat3", "mat4", "Surface", "Path", "Hit"]);
+  const GLSL_BI = new Set(["dot", "cross", "normalize", "length", "distance", "reflect", "refract",
+    "faceforward", "clamp", "max", "min", "mix", "pow", "exp", "sqrt", "abs", "smoothstep", "step",
+    "maxComponent", "transmittance", "uMatA", "uMatB", "uMatC", "uMatD", "uMatE",
+    "uLightPos", "uLightColor", "uLightRange", "uShadows", "uAttenuation", "uShininessScale",
+    "uBounces", "NUM_LIGHTS", "EPS", "STACK_SIZE"]);
+  const GLSL_TOKEN = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|^[ \t]*#[^\n]*|\b(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[uUfF]?\b|\b[A-Za-z_]\w*\b)/gm;
+
+  function highlightGLSL(src) {
+    let out = "", pos = 0;
+    GLSL_TOKEN.lastIndex = 0;
+    for (let m; (m = GLSL_TOKEN.exec(src)); ) {
+      if (m.index > pos) out += escapeHtml(src.slice(pos, m.index));
+      const tok = m[0];
+      let cls = "";
+      if (tok[0] === "/") cls = "tok-com";
+      else if (tok.trimStart()[0] === "#") cls = "tok-pp";
+      else if (tok[0] <= "9" && tok[0] >= "0" || tok[0] === ".") cls = "tok-num";
+      else if (GLSL_KW.has(tok)) cls = "tok-kw";
+      else if (GLSL_TY.has(tok)) cls = "tok-ty";
+      else if (GLSL_BI.has(tok)) cls = "tok-bi";
+      out += cls ? `<span class="${cls}">${escapeHtml(tok)}</span>` : escapeHtml(tok);
+      pos = m.index + tok.length;
+    }
+    if (pos < src.length) out += escapeHtml(src.slice(pos));
+    return out;
+  }
+
+  const TAB_HINTS = {
+    shadeLocal: "Direct Phong lighting, shadow rays, distance falloff, emission &amp; limb glow. Uniforms: <code>uShadows</code> <code>uAttenuation</code> <code>uShininessScale</code> <code>uMatA..E</code>",
+    stepBounce: "Ray-tree recursion step: mirror reflection, Snell refraction, TIR &amp; Schlick Fresnel. Uniforms: <code>uBounces</code> <code>B.x</code> (mirror) <code>B.y</code> (glass) <code>B.z</code> (IOR) <code>uMatD</code> (absorb)"
+  };
+
   const editor = document.getElementById("shaderEditor");
+  const highlightEl = document.getElementById("shaderHighlight");
+  const gutterEl = document.getElementById("shaderGutter");
+  const hintEl = document.getElementById("shaderHint");
   const applyBtn = document.getElementById("shaderApply");
   const resetBtn = document.getElementById("shaderReset");
   const statusEl = document.getElementById("shaderStatus");
@@ -858,26 +898,43 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
   let applied = { ...blocks };
   let activeTab = "shadeLocal";
 
+  function syncScroll() {
+    highlightEl.scrollTop = editor.scrollTop;
+    highlightEl.scrollLeft = editor.scrollLeft;
+    gutterEl.scrollTop = editor.scrollTop;
+  }
+  function renderCodeOverlay() {
+    const code = editor.value;
+    highlightEl.innerHTML = highlightGLSL(code) + "\n";
+    const lines = code.split("\n").length;
+    gutterEl.textContent = Array.from({ length: lines }, (_, i) => i + 1).join("\n") + "\n";
+    syncScroll();
+  }
   function setStatus(text, cls = "") {
     statusEl.textContent = text;
     statusEl.className = cls;
   }
   function updateModifiedStatus() {
     blocks[activeTab] = editor.value;
+    renderCodeOverlay();
     const dirty = blocks.shadeLocal !== applied.shadeLocal || blocks.stepBounce !== applied.stepBounce;
+    applyBtn.classList.toggle("pending", dirty);
     if (errorEl.hidden) setStatus(dirty ? "Modified" : "Applied", dirty ? "modified" : "");
   }
   function selectTab(tab) {
     blocks[activeTab] = editor.value;
     activeTab = tab;
     editor.value = blocks[tab];
+    hintEl.innerHTML = TAB_HINTS[tab];
     for (const btn of tabBtns) btn.setAttribute("aria-selected", String(btn.dataset.tab === tab));
+    renderCodeOverlay();
   }
   function applyShaders() {
     blocks[activeTab] = editor.value;
     try {
       rebuildProgram(blocks.shadeLocal, blocks.stepBounce);
       applied = { ...blocks };
+      applyBtn.classList.remove("pending");
       errorEl.hidden = true;
       errorEl.textContent = "";
       setStatus("Applied");
@@ -891,12 +948,16 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
     blocks.shadeLocal = DEFAULT_SHADE_LOCAL_GLSL;
     blocks.stepBounce = DEFAULT_STEP_BOUNCE_GLSL;
     editor.value = blocks[activeTab];
+    renderCodeOverlay();
     applyShaders();
   }
 
   editor.value = blocks[activeTab];
+  hintEl.innerHTML = TAB_HINTS[activeTab];
+  renderCodeOverlay();
   tabBtns.forEach(btn => btn.addEventListener("click", () => selectTab(btn.dataset.tab)));
   editor.addEventListener("input", updateModifiedStatus);
+  editor.addEventListener("scroll", syncScroll);
   editor.addEventListener("keydown", e => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();

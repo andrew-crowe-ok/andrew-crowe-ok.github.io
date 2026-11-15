@@ -1025,13 +1025,21 @@ vec3 sky(vec3 o, vec3 d, bool primary) {
 // highlight is added in full, so glass still glints.
 `;
 
-const DEFAULT_SHADE_LOCAL_GLSL = `vec3 shadeLocal(Surface s, vec3 d, int i) {
+const DEFAULT_SHADE_LOCAL_GLSL = `// Direct lighting at hit s (ray dir d, primitive i).
+// uMatA[i]: ka, kd, ks, shininess | uMatB[i]: kr, kt, ior, bump
+vec3 shadeLocal(Surface s, vec3 d, int i) {
   vec4 A = uMatA[i], B = uMatB[i];
+  // Fraction of surface not claimed by mirror (B.x) or glass (B.y)
   float body = max(1.0 - B.x - B.y, 0.0);
   vec3 V = -d;
-  vec3 n = faceforward(s.n, d, s.ng);
+  // Flip shading & geometric normals to face the incoming ray
+  vec3 n  = faceforward(s.n, d, s.ng);
   vec3 ng = faceforward(s.ng, d, s.ng);
+
+  // 1. Ambient term
   vec3 color = A.x * body * s.base;
+
+  // 2. Direct Phong lighting + shadow rays across all scene lights
   for (int j = 0; j < NUM_LIGHTS; j++) {
     if (uLightColor[j] == vec3(0.0)) continue;
     vec3 toLight = uLightPos[j] - s.p;
@@ -1039,27 +1047,30 @@ const DEFAULT_SHADE_LOCAL_GLSL = `vec3 shadeLocal(Surface s, vec3 d, int i) {
     vec3 L = toLight / dist;
     float diff = dot(n, L);
     if (diff <= 0.0 || dot(ng, L) <= 0.0) continue;
+
+    // Shadow ray: transmittance() attenuates through glass & blocks opaque hits
     vec3 vis = uShadows ? transmittance(s.p + ng * EPS, L, dist) : vec3(1.0);
     if (vis == vec3(0.0)) continue;
-    // Attenuation 1 / (a + c d^2), scaled to 1 at the light's reference
-    // distance: the planet keeps its brightness, but the near side of
-    // everything is lit harder than the far. Past the light's reach it stops
-    // falling off, so the ship stays lit as it warps out of the system.
+
+    // Inverse-square attenuation normalized to 1 at light ref distance,
+    // clamped beyond reach so the ship stays lit during warp
     float ref2 = uLightRange[j].x * uLightRange[j].x;
     float dAtt = min(dist, uLightRange[j].y);
-    float att = uAttenuation ? 2.0 * ref2 / (ref2 + dAtt * dAtt) : 1.0;
+    float att  = uAttenuation ? 2.0 * ref2 / (ref2 + dAtt * dAtt) : 1.0;
+
+    // Specular highlight is added in full so glass still glints
     float rdotv = max(dot(V, reflect(-L, n)), 0.0);
-    float spec = rdotv > 0.0 ? pow(rdotv, A.w * uShininessScale) : 0.0;
+    float spec  = rdotv > 0.0 ? pow(rdotv, A.w * uShininessScale) : 0.0;
     color += uLightColor[j] * vis * att * (A.y * body * s.base * diff + A.z * spec);
   }
-  // Lit windows and lights in the skin shine whatever the lighting, so they
-  // stay bright on the night side
+
+  // 3. Self-lit windows/lights stay bright on the night side
   color += uMatE[i].x * s.emit * s.base;
-  // The planet's atmosphere, as in HW6: a glow at the limb, on the sunlit side
+
+  // 4. Atmospheric limb glow on the sunlit side of the planet
   vec3 glow = uMatC[i].rgb;
   if (glow != vec3(0.0)) {
-    float rimBase = 1.0 - max(dot(ng, V), 0.0);
-    float rim = rimBase * rimBase * rimBase;
+    float rim = pow(1.0 - max(dot(ng, V), 0.0), 3.0);
     float day = smoothstep(-0.25, 0.5, dot(ng, normalize(uLightPos[0] - s.p)));
     color += glow * rim * day;
   }
@@ -1101,51 +1112,59 @@ struct Path {
 float maxComponent(vec3 v) { return max(v.r, max(v.g, v.b)); }
 `;
 
-const DEFAULT_STEP_BOUNCE_GLSL = `bool stepBounce(inout Path p, Surface s, int id, out Path pushed, out bool hasPushed) {
+const DEFAULT_STEP_BOUNCE_GLSL = `// Advance ray path p after hitting surface s (primitive id).
+// Returns true to keep tracing p; sets pushed/hasPushed for glass splits.
+// uMatB[id]: kr (mirror), kt (glass), ior | uMatD[id].rgb: Beer-Lambert absorb
+bool stepBounce(inout Path p, Surface s, int id, out Path pushed, out bool hasPushed) {
   pushed = p;
   hasPushed = false;
   vec4 B = uMatB[id];
+
+  // 1. Stop at bounce limit or on purely diffuse surfaces
   if (p.depth >= uBounces || (B.x <= 0.0 && B.y <= 0.0)) return false;
   p.depth++;
 
   if (B.y > 0.0) {
-    // Glass. n faces the incoming ray; entering means going from vacuum in.
+    // 2. Transmissive glass: orient normals toward incoming ray
     bool entering = dot(p.d, s.ng) < 0.0;
-    vec3 n = entering ? s.n : -s.n;
+    vec3 n  = entering ? s.n : -s.n;
     vec3 ng = entering ? s.ng : -s.ng;
-    float eta = entering ? 1.0 / B.z : B.z;
+    float eta = entering ? 1.0 / B.z : B.z;   // n1 / n2 for Snell's law
     vec3 rdir = reflect(p.d, n);
     vec3 tdir = refract(p.d, n, eta);
     vec3 outside = s.p + ng * EPS, inside = s.p - ng * EPS;
+
     if (tdir == vec3(0.0)) {
-      // Total internal reflection: stay inside glass without consuming a
-      // bounce so rays in a flat-faced prism still escape cleanly (bounded by MAX_SEGMENTS).
+      // Total internal reflection: stay inside without spending a bounce
       p.depth--;
       p.o = outside; p.d = rdir; p.weight *= B.y;
     } else {
-      // Schlick, with the angle on the vacuum side
-      float c = clamp(entering ? -dot(p.d, n) : -dot(tdir, n), 0.0, 1.0);
+      // Schlick Fresnel approximation using the vacuum-side cosine
+      float c  = clamp(entering ? -dot(p.d, n) : -dot(tdir, n), 0.0, 1.0);
       float r0 = (B.z - 1.0) / (B.z + 1.0);
       r0 *= r0;
       float omc = 1.0 - c;
-      float omc2 = omc * omc;
-      float F = r0 + (1.0 - r0) * omc2 * omc2 * omc;
-      // The reflected ray stays in the medium it came from; the refracted
-      // one crosses into glass, or back out of it
+      float F = r0 + (1.0 - r0) * omc * omc * omc * omc * omc;
+
+      // Split into reflected (same medium) and refracted (enters/exits glass)
       Path reflected = Path(outside, rdir, p.weight * B.y * F, p.absorb, p.travelled, p.depth);
       Path refracted = Path(inside, tdir, p.weight * B.y * (1.0 - F),
                             entering ? uMatD[id].rgb : vec3(0.0), p.travelled, p.depth);
+
+      // Follow the stronger branch now; queue the weaker branch on the stack
       Path weaker;
       if (F <= 0.5) { p = refracted; weaker = reflected; }
       else          { p = reflected; weaker = refracted; }
       if (maxComponent(weaker.weight) > 0.01) { pushed = weaker; hasPushed = true; }
     }
   } else {
-    // Mirror: polished hull, copper dish
+    // 3. Mirror reflection (polished hull, copper dish)
     p.o = s.p + faceforward(s.ng, p.d, s.ng) * EPS;
     p.d = reflect(p.d, faceforward(s.n, p.d, s.ng));
     p.weight *= B.x;
   }
+
+  // 4. Prune rays whose remaining contribution is negligible
   return maxComponent(p.weight) >= 0.01;
 }`;
 

@@ -454,7 +454,7 @@ const { color: impulseGlow } = generateSkin("strip", {
 // Static sky nebula / Milky Way backdrop (procedurally seeded per run, sqrt-encoded RGBA8)
 const skyParam = parseInt(new URLSearchParams(location.search).get("sky"));
 const skySeed = Number.isFinite(skyParam) && skyParam > 0 ? skyParam : Math.floor(Math.random() * 1e6) + 1;
-const backdropTexture = generateSkin("backdrop", { size: [2048, 1024], seed: skySeed }).color;
+const backdropTexture = generateSkin("backdrop", { size: [4096, 2048], seed: skySeed }).color;
 
 // Animated texture: a muted, looping <video> whose current frame is re-uploaded
 // every render, so it gets no mipmaps (LINEAR min filter). REPEAT on s lets u
@@ -774,6 +774,7 @@ const CONTROL_INPUTS = {
   ior:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
   shadows:     { read: el => el.checked },
   attenuation: { read: el => el.checked },
+  wavy:        { read: el => el.checked },
   stats:       { read: el => el.checked },
   resolution:  { read: el => parseInt(el.value) || 0 },
   fps:         { read: el => parseInt(el.value) || 0 }
@@ -1062,6 +1063,7 @@ function uploadScene(view, t, ship) {
   gl.uniform1i(u.uBounces, controls.bounces);
   gl.uniform1i(u.uShadows, controls.shadows);
   gl.uniform1i(u.uAttenuation, controls.attenuation);
+  gl.uniform1i(u.uWavy, controls.wavy);
   gl.uniform1f(u.uShininessScale, controls.shininess);
   gl.uniform1f(u.uTime, t);
 

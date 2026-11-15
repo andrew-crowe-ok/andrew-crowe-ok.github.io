@@ -22,7 +22,7 @@ const PLANET = { radius: 2.4, spin: 0.08 };                     // spin in rad/s
 const PLANET_MATERIAL = {
   ka: 0.03, kd: 1.0, ks: 0.05, shininess: 8, bumpScale: 1.2, atmosphere: [0.35, 0.6, 1.0]
 };
-const ORBIT = { radius: 5.8, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
+const ORBIT = { radius: 5.8, speed: 0.4, tilt: 0.25, shipScale: 0.32 };
 
 // The glass cube: 1.5x the ship's largest dimension (length) on every side,
 // drifting gently along the ship's own orbit in the opposite direction so the
@@ -121,8 +121,8 @@ function drawMoon(parent, t) {
 const ENGAGE = {
   blend: 2.5,       // s, length of the departure blend
   warpAt: 3.2,      // s after the press that the ship jumps to warp
-  warp: 10,         // warp speed, in multiples of orbital speed
-  reset: 12         // s from the press until the scene resets
+  warp: 30,         // warp speed, in multiples of orbital speed
+  reset: 9          // s from the press until the scene resets
 };
 const ORBIT_SPEED = ORBIT.radius * ORBIT.speed;   // units/s along the circle
 

@@ -36,7 +36,7 @@ const TEXTURE_UNITS = 16;
 // Warp streaks, as in HW6's point sprites: each star is smeared over the path
 // it covers in `shutter` seconds, at most `max` CSS pixels long, and dims as
 // its light is spread along that path
-const STREAK = { shutter: 0.45, max: 40, dim: 0.1 };
+const STREAK = { shutter: 0.3, max: 75, dim: 0.08 };
 
 // The near star field (see the shader's Sky section): an endless grid of
 // `cell`-unit cubes, each holding a star with chance `density` (up to three
@@ -120,7 +120,7 @@ uniform vec2 uLightRange[NUM_LIGHTS];   // distance at which attenuation is 1, a
 
 // ---- controls --------------------------------------------------------------
 uniform int uBounces;
-uniform bool uShadows, uAttenuation;
+uniform bool uShadows, uAttenuation, uWavy;
 uniform float uShininessScale;
 
 uniform sampler2D uTex[TEXTURE_UNITS];
@@ -337,9 +337,66 @@ bool hitTorus(vec3 o, vec3 d, float r, float tmin, inout float t, out vec3 n) {
   return false;
 }
 
+// ---- HW3 wavy ripple (glass cube only) -------------------------------------
+bool isWavyCube(int i) {
+  return uWavy && uMatE[i].y < -0.5 && uInfo[i].x == BOX && uMatB[i].y > 0.0;
+}
+float wavyOffset(vec3 p) {
+  return 0.12 * sin(uTime * 3.0 + p.x * 2.5 + p.z * 2.5);
+}
+float wavyBoxEval(vec3 p) {
+  vec3 q = vec3(p.x, p.y - wavyOffset(p), p.z);
+  return max(abs(q.x), max(abs(q.y), abs(q.z))) - 1.0;
+}
+vec3 wavyBoxNormal(vec3 p, out int part) {
+  vec3 q = vec3(p.x, p.y - wavyOffset(p), p.z);
+  vec3 aq = abs(q), g;
+  if (aq.x >= aq.y && aq.x >= aq.z) { part = q.x > 0.0 ? 4 : 5; g = vec3(sign(q.x), 0.0, 0.0); }
+  else if (aq.y >= aq.z)            { part = q.y > 0.0 ? 2 : 3; g = vec3(0.0, sign(q.y), 0.0); }
+  else                              { part = q.z > 0.0 ? 0 : 1; g = vec3(0.0, 0.0, sign(q.z)); }
+  float dw = 0.12 * 2.5 * cos(uTime * 3.0 + p.x * 2.5 + p.z * 2.5);
+  return vec3(g.x - g.y * dw, g.y, g.z - g.y * dw);
+}
+
+// Coarse scan + bisection/secant inside the displaced cube's tight bounding slab
+bool hitWavyBox(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
+  vec2 span = boxSpan(o, d, vec3(1.0, 1.12, 1.0) + vec3(2e-3));
+  float t0 = max(span.x, tmin), t1 = min(span.y, t);
+  if (t0 >= t1) return false;
+
+  float prevT = t0, prevV = wavyBoxEval(o + d * t0);
+  bool startIn = prevV <= 0.0;
+  float dt = (t1 - t0) / 32.0;
+
+  for (int s = 1; s <= 32; s++) {
+    float curT = t0 + dt * float(s);
+    float curV = wavyBoxEval(o + d * curT);
+    if ((curV <= 0.0) != startIn) {
+      float a = prevT, b = curT, va = prevV, vb = curV;
+      for (int k = 0; k < 12; k++) {
+        float denom = vb - va;
+        float m = (k < 8 || abs(denom) < 1e-12)
+          ? 0.5 * (a + b)
+          : mix(a, b, clamp(-va / denom, 0.1, 0.9));
+        float vm = wavyBoxEval(o + d * m);
+        if ((vm <= 0.0) == (va <= 0.0)) { a = m; va = vm; }
+        else { b = m; vb = vm; }
+      }
+      float denom = vb - va;
+      float th = abs(denom) > 1e-12 ? mix(a, b, clamp(-va / denom, 0.0, 1.0)) : 0.5 * (a + b);
+      t = th;
+      n = wavyBoxNormal(o + d * th, part);
+      return true;
+    }
+    prevT = curT; prevV = curV;
+  }
+  return false;
+}
+
 bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
   vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
   part = 0;
+  if (isWavyCube(i))     return hitWavyBox(oo, dd, tmin, t, n, part);
   int shape = uInfo[i].x;
   if (shape == SPHERE)   return hitSphere(oo, dd, tmin, t, n);
   if (shape == CYLINDER) return hitCylinder(oo, dd, tmin, t, n, part);

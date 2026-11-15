@@ -23,7 +23,7 @@ const CHASE = {
   warpDist: 2.2,                  // matches pre-warp dist so pull-away is purely monotonic
   warpHeight: 0.56,               // gently settles slightly lower over the wake
   warpBlend: 0.90,                // s, smooth C2 transition into the warp lens
-  warpLagRate: 1.25,              // units/s the camera falls behind at warp
+  warpLagRate: 1.85,              // units/s the camera falls behind at warp
   warpLagKnee: 0.85,              // s before steady fallback reaches full rate
   fishHalfX: 138 * Math.PI / 180, // half the fisheye's horizontal field of view
   fishStretch: 2.15,              // sustained vertical stretch during warp

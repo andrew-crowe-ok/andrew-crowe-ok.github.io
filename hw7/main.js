@@ -452,8 +452,9 @@ const { color: impulseGlow } = generateSkin("strip", {
     uFrame: [0.1, 0.08, 0.08], uSlats: 10, uFlow: 0.25 } });
 
 // Static sky nebula / Milky Way backdrop (procedurally seeded per run, sqrt-encoded RGBA8)
-const skySeed = Math.floor(Math.random() * 1e6) + 1;
-const backdropTexture = generateSkin("backdrop", { size: [1024, 512], seed: skySeed }).color;
+const skyParam = parseInt(new URLSearchParams(location.search).get("sky"));
+const skySeed = Number.isFinite(skyParam) && skyParam > 0 ? skyParam : Math.floor(Math.random() * 1e6) + 1;
+const backdropTexture = generateSkin("backdrop", { size: [2048, 1024], seed: skySeed }).color;
 
 // Animated texture: a muted, looping <video> whose current frame is re-uploaded
 // every render, so it gets no mipmaps (LINEAR min filter). REPEAT on s lets u

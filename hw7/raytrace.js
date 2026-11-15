@@ -745,7 +745,16 @@ vec3 backdrop(vec3 s) {
 // ---- stars -----------------------------------------------------------------
 
 vec3 starColor(float temp) {
-  return vec3(0.80 + 0.30 * temp, 0.88 + 0.08 * abs(temp - 0.5), 1.10 - 0.35 * temp);
+  // Subtle per-seed spectral skew so some skies lean young OB-blue and others warm K/M-gold
+  float skew = mix(0.75, 1.35, fract(uSkySeed * 0.61803398875));
+  float t = pow(clamp(temp, 1e-4, 1.0), skew);
+  vec3 hot  = vec3(0.58, 0.78, 1.18);
+  vec3 mid  = vec3(1.00, 0.98, 0.95);
+  vec3 warm = vec3(1.14, 0.78, 0.42);
+  vec3 cool = vec3(1.10, 0.44, 0.24);
+  if (t < 0.36) return mix(hot, mid, t / 0.36);
+  if (t < 0.72) return mix(mid, warm, (t - 0.36) / 0.36);
+  return mix(warm, cool, (t - 0.72) / 0.28);
 }
 
 // Pixels from direction d to the streak running from s0 back to s1 (a round

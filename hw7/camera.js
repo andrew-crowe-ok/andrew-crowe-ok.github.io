@@ -28,9 +28,9 @@ const CHASE = {
   warpDist: 1.38,                 // initial tight pull-in right at the jump
   warpHeight: 0.44,               // low chase stance over the nacelles
   warpBlend: 0.48,                // s, the dolly zoom into warp
-  warpLagRate: 0.40,              // units/s the camera falls behind at warp
-  warpLagKnee: 0.65,              // s before steady fallback reaches full rate
-  warpDrop: 0.08,                 // drops slightly into the wake as it loses ground
+  warpLagRate: 1.15,              // units/s the camera falls behind at warp
+  warpLagKnee: 0.55,              // s before steady fallback reaches full rate
+  warpDrop: 0.14,                 // drops slightly into the wake as it loses ground
   fishHalfX: 138 * Math.PI / 180, // half the fisheye's horizontal field of view
   fishStretch: 2.20,              // sustained vertical stretch during warp
   fishStretchPulse: 0.35,         // extra rubber-band stretch right at the jump

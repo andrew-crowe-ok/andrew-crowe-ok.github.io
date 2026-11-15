@@ -25,9 +25,9 @@ const PLANET_MATERIAL = {
 const ORBIT = { radius: 5.8, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 
 // The glass cube: 1.5x the ship's largest dimension (length) on every side,
-// drifting gently along the ship's own orbit in the same direction so the
-// faster ship overtakes and flies straight through it. `phase` places it just
-// ahead of the ship in front of the planet's limb on load.
+// drifting gently along the ship's own orbit in the opposite direction so the
+// ship meets and flies straight through it. `phase` places it just ahead of
+// the ship in front of the planet's limb on load.
 const MOON = { halfSize: [1.48, 1.48, 1.48], speed: 0.05, phase: -0.75 };
 // Crystal-clear refractive glass with a subtle blue absorption and Fresnel edge
 // gleam so the ship remains clearly visible as it flies through
@@ -66,7 +66,7 @@ function drawPlanet(parent, t) {
 
 // The glass cube's frame at scene time t (inside the ship's orbital plane
 // at radius ORBIT.radius, +z along the orbital tangent), its center, and its inverse
-const moonAngle = t => MOON.phase - MOON.speed * t;
+const moonAngle = t => MOON.phase + MOON.speed * t;
 const moonFrame = t => multiply(rotateX(ORBIT.tilt),
   multiply(rotateY(moonAngle(t)), translate(ORBIT.radius, 0, 0)));
 const inverseMoonFrame = t => multiply(translate(-ORBIT.radius, 0, 0),

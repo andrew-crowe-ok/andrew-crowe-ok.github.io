@@ -489,9 +489,11 @@ Surface surface(vec2 uv) {
 }
 ` },
 
-  // Equirectangular sky backdrop (Milky Way band, dust lanes, and two nebulae),
-  // encoded as sqrt(color) in RGBA8 so dark gradients don't band under linear
-  // filtering. Sampled with textureLod(..., 0.0) in raytrace.js.
+  // Equirectangular sky backdrop (warped Milky Way band, forked dust lanes,
+  // emission/reflection nebulae, filamentary shockwaves, shells, cosmic streams,
+  // dark dust globules, and distant galaxies), encoded as sqrt(color) in RGBA8
+  // so dark gradients don't band under linear filtering. Sampled with
+  // textureLod(..., 0.0) in raytrace.js.
   backdrop: { normal: false, clampV: true, mipmap: false, glsl: `
 #define SKY_BIAS 32768
 vec3 skyRand3(uvec3 v) {
@@ -518,11 +520,129 @@ vec3 skyFbm3(vec3 p) {
   }
   return sum * (1.0 / 0.9375);
 }
-float skyNebula(vec3 s, vec3 center, float radius, float n) {
+vec3 skyRidge3(vec3 p) {
+  vec3 sum = vec3(0.0);
+  float amp = 0.5;
+  for (int i = 0; i < 4; i++) {
+    vec3 r = 1.0 - abs(2.0 * skyNoise3(p) - 1.0);
+    sum += amp * (r * r);
+    p = p * 2.07 + vec3(13.7, 29.3, 19.1);
+    amp *= 0.5;
+  }
+  return sum * (1.0 / 0.9375);
+}
+vec3 skySphereDir(vec2 u) {
+  float z = 2.0 * u.x - 1.0;
+  float a = TAU * u.y;
+  float r = sqrt(max(1.0 - z * z, 0.0));
+  return vec3(r * cos(a), z, r * sin(a));
+}
+vec3 skyTangent(vec3 c, float ang) {
+  vec3 up = abs(c.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+  vec3 t = normalize(cross(up, c));
+  vec3 b = cross(c, t);
+  return t * cos(ang) + b * sin(ang);
+}
+vec3 skyRotateHue(vec3 c, float a) {
+  vec3 k = vec3(0.57735027);
+  float ca = cos(a), sa = sin(a);
+  return clamp(c * ca + cross(k, c) * sa + k * dot(k, c) * (1.0 - ca), 0.0, 1.2);
+}
+void skyPalette(vec3 r, vec3 rMix, out vec3 cA, out vec3 cB, out vec3 cC,
+                out vec3 cBandCool, out vec3 cBandWarm, out vec3 cVoid) {
+  int idx = int(floor(r.x * 10.0)) % 10;
+  cVoid = vec3(0.002, 0.003, 0.006);
+  if (idx == 0) {
+    // Carina / Orion: H-alpha ruby, OIII teal, warm ionization gold
+    cA = vec3(0.95, 0.16, 0.34); cB = vec3(0.14, 0.72, 0.85); cC = vec3(1.00, 0.60, 0.20);
+    cBandCool = vec3(0.55, 0.65, 0.90); cBandWarm = vec3(1.00, 0.82, 0.58);
+  } else if (idx == 1) {
+    // Cygnus Veil: electric cyan, ultraviolet, scarlet shock
+    cA = vec3(0.10, 0.80, 0.96); cB = vec3(0.54, 0.22, 0.94); cC = vec3(0.96, 0.18, 0.32);
+    cBandCool = vec3(0.45, 0.68, 0.92); cBandWarm = vec3(0.92, 0.72, 0.88);
+    cVoid = vec3(0.002, 0.002, 0.007);
+  } else if (idx == 2) {
+    // Emerald Lagoon: jade green-cyan, sapphire reflection, amber dust
+    cA = vec3(0.12, 0.85, 0.56); cB = vec3(0.18, 0.45, 0.96); cC = vec3(0.98, 0.52, 0.14);
+    cBandCool = vec3(0.40, 0.72, 0.76); cBandWarm = vec3(0.95, 0.84, 0.56);
+    cVoid = vec3(0.001, 0.004, 0.005);
+  } else if (idx == 3) {
+    // Rosette Ember: deep scarlet, molten copper, slate reflection blue
+    cA = vec3(0.92, 0.14, 0.22); cB = vec3(0.96, 0.48, 0.14); cC = vec3(0.32, 0.52, 0.92);
+    cBandCool = vec3(0.62, 0.50, 0.72); cBandWarm = vec3(1.00, 0.70, 0.42);
+    cVoid = vec3(0.004, 0.002, 0.003);
+  } else if (idx == 4) {
+    // Trifid Amethyst: orchid magenta, cobalt blue, aqua core
+    cA = vec3(0.86, 0.22, 0.74); cB = vec3(0.22, 0.40, 0.98); cC = vec3(0.24, 0.90, 0.72);
+    cBandCool = vec3(0.58, 0.54, 0.90); cBandWarm = vec3(0.98, 0.74, 0.84);
+    cVoid = vec3(0.003, 0.002, 0.006);
+  } else if (idx == 5) {
+    // Solar Helix: burnished gold, deep ocean teal, rose pink
+    cA = vec3(1.00, 0.72, 0.22); cB = vec3(0.12, 0.56, 0.68); cC = vec3(0.94, 0.28, 0.52);
+    cBandCool = vec3(0.56, 0.60, 0.68); cBandWarm = vec3(1.00, 0.86, 0.54);
+    cVoid = vec3(0.003, 0.003, 0.004);
+  } else if (idx == 6) {
+    // Glacial Borealis: seafoam mint, ice blue, soft lavender
+    cA = vec3(0.18, 0.90, 0.70); cB = vec3(0.24, 0.62, 1.00); cC = vec3(0.72, 0.36, 0.98);
+    cBandCool = vec3(0.42, 0.74, 0.88); cBandWarm = vec3(0.84, 0.92, 1.00);
+    cVoid = vec3(0.001, 0.003, 0.006);
+  } else if (idx == 7) {
+    // Starburst Coral: coral peach, deep indigo, bright teal
+    cA = vec3(0.98, 0.40, 0.28); cB = vec3(0.36, 0.24, 0.88); cC = vec3(0.38, 0.88, 0.64);
+    cBandCool = vec3(0.56, 0.52, 0.82); cBandWarm = vec3(1.00, 0.76, 0.60);
+    cVoid = vec3(0.003, 0.002, 0.005);
+  } else if (idx == 8) {
+    // Dusty Lagoon: warm ochre, turquoise OIII, plum violet
+    cA = vec3(0.92, 0.58, 0.24); cB = vec3(0.16, 0.78, 0.78); cC = vec3(0.68, 0.22, 0.58);
+    cBandCool = vec3(0.48, 0.64, 0.74); cBandWarm = vec3(0.98, 0.78, 0.48);
+    cVoid = vec3(0.002, 0.003, 0.004);
+  } else {
+    // Ionized Violet: electric magenta, sapphire, pale gold
+    cA = vec3(0.94, 0.18, 0.56); cB = vec3(0.16, 0.58, 0.98); cC = vec3(0.96, 0.82, 0.36);
+    cBandCool = vec3(0.52, 0.58, 0.92); cBandWarm = vec3(0.98, 0.78, 0.72);
+    cVoid = vec3(0.002, 0.002, 0.006);
+  }
+  float drift = (r.y - 0.5) * 0.7;
+  cA = skyRotateHue(cA, drift);
+  cB = skyRotateHue(cB, -drift * 0.75 + (r.z - 0.5) * 0.45);
+  cC = skyRotateHue(cC, (rMix.x - 0.5) * 0.8);
+  cBandCool = skyRotateHue(cBandCool, (rMix.y - 0.5) * 0.35);
+  cBandWarm = skyRotateHue(cBandWarm, (rMix.z - 0.5) * 0.25);
+}
+float skyCloud(vec3 s, vec3 center, vec3 axis, float rad, float stretch, float nVal, float fineVal) {
   vec3 diff = s - center;
-  float r2 = dot(diff, diff) / (radius * radius);
-  if (r2 > 2.0) return 0.0;
-  return smoothstep(0.05, 0.6, exp(-r2) * (0.1 + 2.2 * n * n) - 0.3);
+  float along = dot(diff, axis);
+  float r2 = (dot(diff, diff) + stretch * along * along) / (rad * rad);
+  if (r2 > 2.6) return 0.0;
+  float body = exp(-r2) * (0.14 + 1.85 * nVal * nVal + 0.55 * fineVal) - 0.24;
+  return smoothstep(0.02, 0.58, body);
+}
+float skyFilaments(vec3 s, vec3 center, float rad, float ridge, float nVal) {
+  vec3 diff = s - center;
+  float r2 = dot(diff, diff) / (rad * rad);
+  if (r2 > 2.4) return 0.0;
+  float strand = smoothstep(0.36, 0.84, ridge) * smoothstep(0.28, 0.72, nVal);
+  return exp(-r2) * strand * strand;
+}
+float skyShell(vec3 s, vec3 center, vec3 lobeDir, float radius, float thick, float asym,
+               float nVal, float ridge, out float innerGlow) {
+  float d = dot(s, center);
+  if (d < cos(min(radius + 4.0 * thick, PI))) { innerGlow = 0.0; return 0.0; }
+  float ang = acos(clamp(d, -1.0, 1.0)) + 0.06 * (nVal - 0.5);
+  float ring = exp(-pow((ang - radius) / thick, 2.0));
+  vec3 tangent = normalize(s - center * d + vec3(1e-5));
+  float crescent = mix(1.0, smoothstep(-0.35, 0.65, dot(tangent, lobeDir)), asym);
+  innerGlow = exp(-pow(ang / max(radius * 0.85, 0.05), 2.0)) * (0.35 + 0.65 * nVal) * crescent;
+  return ring * crescent * (0.45 + 0.85 * ridge);
+}
+float skyGalaxy(vec3 s, vec3 center, vec3 majorAxis, float rad, float flatRatio, float dust) {
+  vec3 diff = s - center;
+  float d2 = dot(diff, diff);
+  if (d2 > rad * rad * 9.0) return 0.0;
+  float x = dot(diff, majorAxis);
+  float y = dot(diff, cross(center, majorAxis)) * flatRatio;
+  float r = sqrt(x * x + y * y) / rad;
+  return exp(-r * 2.1) * (0.75 + 0.35 * dust) + 1.6 * exp(-r * r * 14.0);
 }
 vec2 texelPhys(vec2 uv) { return vec2(1.0); }
 
@@ -530,29 +650,112 @@ Surface surface(vec2 uv) {
   float phi = uv.x * TAU, theta = uv.y * PI;
   float sinTheta = sin(theta);
   vec3 s = vec3(sinTheta * cos(phi), cos(theta), sinTheta * sin(phi));
+
   vec3 r0 = skyRand3(uvec3(1u, 2u, 3u));
   vec3 r1 = skyRand3(uvec3(4u, 5u, 6u));
   vec3 r2 = skyRand3(uvec3(7u, 8u, 9u));
-  vec3 n = skyFbm3(s * 4.0);
-  vec3 m = skyFbm3(s * vec3(8.0, 20.0, 8.0) + 1.6 * n);
-  float lat = s.y + 0.03 * (n.x - 0.5);
+  vec3 r3 = skyRand3(uvec3(11u, 13u, 17u));
+  vec3 r4 = skyRand3(uvec3(19u, 23u, 29u));
+  vec3 r5 = skyRand3(uvec3(31u, 37u, 41u));
+  vec3 r6 = skyRand3(uvec3(43u, 47u, 53u));
+  vec3 r7 = skyRand3(uvec3(59u, 61u, 67u));
+  vec3 r8 = skyRand3(uvec3(71u, 73u, 79u));
+
+  vec3 cA, cB, cC, cBandCool, cBandWarm, cVoid;
+  skyPalette(r2, r8, cA, cB, cC, cBandCool, cBandWarm, cVoid);
+
+  // Domain-warped 3D FBM + ridged filaments + fine wisps, all evaluated on unit sphere s
+  vec3 n = skyFbm3(s * mix(3.2, 5.0, r1.x) + r1 * 4.0);
+  vec3 w = skyFbm3(s * vec3(7.5, 14.0, 7.5) + 1.8 * n);
+  vec3 f = skyRidge3(s * mix(3.8, 6.8, r1.y) + 1.35 * n);
+  vec3 fine = skyFbm3(s * 18.0 + 0.85 * w);
+
+  // 1. Warped Milky Way band + variable galactic bulge + forked dust rifts
+  float warpPhase = TAU * r0.z;
+  float cp = cos(warpPhase), sp = sin(warpPhase);
+  float bandWarp = (r3.x - 0.5) * 0.16 * (2.0 * (s.x * cp + s.z * sp) * (-s.x * sp + s.z * cp));
+  float lat = s.y + bandWarp + mix(0.02, 0.055, r3.y) * (n.x - 0.5) + 0.02 * (w.x - 0.5);
+  float bandSigma = mix(0.075, 0.165, r3.z);
+  float bandStrength = mix(0.055, 0.15, r4.x);
   float corePhi = TAU * r0.x;
   vec3 dc = s - vec3(cos(corePhi), 0.0, sin(corePhi));
-  float core = exp(-dot(dc, dc) * (1.0 / 0.49));
-  float band = exp(-lat * lat / (2.0 * 0.12 * 0.12)) * (0.3 + 0.8 * n.x + 0.6 * m.x)
-             + exp(-lat * lat / (2.0 * 0.2 * 0.2)) * core * (1.2 + 0.8 * m.x);
-  float lane = exp(-(lat - 0.012) * (lat - 0.012) / (2.0 * 0.06 * 0.06));
-  band *= 1.0 - 0.9 * lane * smoothstep(0.42, 0.62, mix(n.y, m.y, 0.6));
-  vec3 glow = 0.11 * band * mix(vec3(0.55, 0.62, 0.85), vec3(1.0, 0.8, 0.55), core);
-  float p1 = TAU * r0.y, y1 = mix(0.22, 0.55, r1.x), d1 = sqrt(1.0 - y1 * y1);
-  float p2 = TAU * r0.z, y2 = -mix(0.22, 0.55, r1.y), d2 = sqrt(1.0 - y2 * y2);
-  vec3 neb1 = vec3(d1 * cos(p1), y1, d1 * sin(p1));
-  vec3 neb2 = vec3(d2 * cos(p2), y2, d2 * sin(p2));
-  vec3 c1 = mix(vec3(0.95, 0.22, 0.38), vec3(0.88, 0.48, 0.20), r2.y);
-  vec3 c2 = mix(vec3(0.18, 0.55, 0.75), vec3(0.45, 0.30, 0.85), r2.z);
-  glow += 0.22 * skyNebula(s, neb1, mix(0.42, 0.65, r1.z), mix(n.z, m.z, 0.5)) * c1;
-  glow += 0.17 * skyNebula(s, neb2, mix(0.40, 0.62, r2.x), mix(n.z, m.y, 0.5)) * c2;
-  vec3 col = glow + vec3(0.002, 0.003, 0.006);
+  float core = exp(-dot(dc, dc) * mix(1.4, 3.2, r4.y));
+  float band = exp(-lat * lat / (2.0 * bandSigma * bandSigma)) * (0.28 + 0.78 * n.x + 0.62 * w.x)
+             + exp(-lat * lat / (2.0 * (bandSigma * 1.65) * (bandSigma * 1.65))) * core * mix(0.45, 1.45, r4.z) * (0.9 + 0.8 * w.x);
+
+  float lane1 = exp(-pow((lat - (r5.x - 0.5) * 0.03) / mix(0.032, 0.064, r5.y), 2.0));
+  float lane2 = exp(-pow((lat + 0.045 * s.x - 0.014) / 0.036, 2.0)) * r5.z;
+  float dustMask = max(lane1 * smoothstep(0.38, 0.64, mix(n.y, w.y, 0.65)),
+                       0.75 * lane2 * smoothstep(0.42, 0.68, f.x));
+  band *= 1.0 - 0.92 * dustMask;
+  vec3 glow = bandStrength * band * mix(cBandCool, cBandWarm, clamp(core * 1.15, 0.0, 1.0));
+
+  // 2. Anisotropic emission & reflection clouds with dual-tone cores
+  vec3 neb1 = skySphereDir(vec2(mix(0.15, 0.85, r0.y), r1.z));
+  vec3 neb2 = skySphereDir(vec2(mix(0.12, 0.88, r1.x), r3.x));
+  vec3 neb3 = skySphereDir(vec2(mix(0.20, 0.80, r4.y), r6.z));
+  float c1 = skyCloud(s, neb1, skyTangent(neb1, TAU * r5.x), mix(0.38, 0.68, r1.z), mix(0.0, 2.2, r5.y),
+                      mix(n.z, w.z, 0.55), fine.x);
+  float c2 = skyCloud(s, neb2, skyTangent(neb2, TAU * r5.z), mix(0.36, 0.64, r2.x), mix(0.0, 2.0, r6.x),
+                      mix(n.z, w.y, 0.55), fine.y);
+  float c3 = skyCloud(s, neb3, skyTangent(neb3, TAU * r6.y), mix(0.26, 0.48, r6.z), mix(0.3, 1.8, r7.x),
+                      mix(n.y, w.x, 0.50), fine.z) * smoothstep(0.25, 0.55, r7.y);
+
+  float cloudCarve = 1.0 - 0.55 * smoothstep(0.55, 0.88, f.z);
+  glow += mix(0.14, 0.25, r4.x) * c1 * cloudCarve * mix(cA, cC, smoothstep(0.35, 0.85, fine.x));
+  glow += mix(0.12, 0.22, r4.z) * c2 * cloudCarve * mix(cB, cA * 0.6 + cB * 0.4, smoothstep(0.4, 0.85, fine.y));
+  glow += 0.18 * c3 * mix(cC, cB, smoothstep(0.35, 0.80, fine.z));
+
+  // 3. Filamentary veil / supernova shockwave tendrils
+  vec3 veil1Dir = skySphereDir(r6.xy);
+  vec3 veil2Dir = skySphereDir(r7.yz);
+  float fil1 = skyFilaments(s, veil1Dir, mix(0.45, 0.82, r7.z), f.x, n.z);
+  float fil2 = skyFilaments(s, veil2Dir, mix(0.38, 0.72, r8.x), f.y, w.z);
+  float veilAmp = mix(0.12, 0.36, r6.y * r6.y);
+  glow += veilAmp * fil1 * mix(cC, cA, f.z);
+  glow += (0.8 * veilAmp) * fil2 * mix(cA, cB, f.x);
+
+  // 4. Ring / crescent bubble nebula (appears prominently on ~65% of skies)
+  if (r6.x > 0.35) {
+    vec3 shellDir = skySphereDir(vec2(mix(0.18, 0.82, r7.x), r8.y));
+    vec3 lobeDir = skyTangent(shellDir, TAU * r8.z);
+    float innerGlow;
+    float shellRim = skyShell(s, shellDir, lobeDir, mix(0.16, 0.34, r7.y), mix(0.022, 0.048, r7.z),
+                              smoothstep(0.3, 0.85, r8.x), w.z, f.x, innerGlow);
+    float shellWeight = mix(0.14, 0.28, (r6.x - 0.35) / 0.65);
+    glow += shellWeight * (shellRim * mix(cA, cC, 0.5) + 0.55 * innerGlow * cB);
+  }
+
+  // 5. Sweeping off-plane cosmic stream / ribbon (on ~65% of skies)
+  if (r7.y > 0.35) {
+    vec3 streamNorm = skySphereDir(vec2(mix(0.08, 0.42, r8.x), r8.y));
+    vec3 streamPeak = skyTangent(streamNorm, TAU * r8.z);
+    float dStream = dot(s, streamNorm) + 0.14 * (n.z - 0.5) + 0.07 * (w.z - 0.5);
+    float arcEnv = exp(-dot(s - streamPeak, s - streamPeak) / mix(0.65, 1.55, r7.x));
+    float ribbon = exp(-dStream * dStream / (2.0 * 0.065 * 0.065)) * arcEnv * (0.28 + 0.85 * w.z + 0.55 * f.y);
+    glow += mix(0.08, 0.16, r8.z) * ribbon * mix(cB, cC, f.y);
+  }
+
+  // 6. Dark Bok globules / dust silhouettes + unresolved star-cloud sparkles
+  float cloudMask = clamp(c1 + c2 + c3, 0.0, 1.0);
+  float darkGlob = smoothstep(0.56, 0.84, w.y) * smoothstep(0.50, 0.80, f.z);
+  glow *= 1.0 - 0.62 * darkGlob * clamp(band + cloudMask, 0.0, 1.0);
+
+  vec3 spark = skyNoise3(s * 54.0);
+  float dustSpark = smoothstep(0.65, 0.96, spark.x * spark.y) * (0.35 * band + 0.50 * cloudMask);
+  glow += 0.22 * dustSpark * mix(cBandWarm, vec3(0.85, 0.92, 1.0), spark.z);
+
+  // 7. Two faint distant background galaxies off the main band
+  vec3 g1 = skySphereDir(vec2(r3.y > 0.5 ? 0.82 : 0.18, r4.x));
+  vec3 g2 = skySphereDir(vec2(r3.z > 0.5 ? 0.15 : 0.85, r5.y));
+  glow += 0.16 * skyGalaxy(s, g1, skyTangent(g1, TAU * r6.z), 0.022, mix(1.6, 3.2, r7.x), fine.x) * mix(cBandWarm, cBandCool, 0.35);
+  glow += 0.13 * skyGalaxy(s, g2, skyTangent(g2, TAU * r8.x), 0.018, mix(1.8, 3.5, r8.y), fine.y) * mix(cBandCool, cC, 0.3);
+
+  // Deep-space cosmic cirrus floor + soft highlight compression to keep saturated colors rich
+  vec3 voidFloor = cVoid * (0.65 + 0.7 * n.z) + 0.011 * smoothstep(0.42, 0.88, n.y) * mix(cB, cBandCool, 0.5);
+  vec3 col = glow + voidFloor;
+  float peak = max(col.r, max(col.g, col.b));
+  col /= 1.0 + 0.25 * peak;
   return Surface(sqrt(clamp(col, 0.0, 1.0)), 1.0, 0.0);
 }
 ` },

@@ -510,30 +510,23 @@ bindTextures();
 
 // Full-window canvas, kept framed as in HW6: vertical FOV 45 deg, widened on
 // windows narrower than 16:10 so the whole orbit stays in frame. Every pixel is
-// a ray tree, so the drawing buffer is capped at about 1440p's pixel count
-// (540p's on phones), or whatever the Resolution control picks, and the
-// browser scales it up past that.
+// a ray tree, so the drawing buffer is capped at 900p's pixel count
+// (540p's on phones), and the browser scales it up past that.
 //
-// On phones, with Resolution on Auto, the cap also adapts: every ADAPT.window seconds the mean frame time
-// is checked, and the pixel budget shrinks by ADAPT.step while frames run slower
-// than ADAPT.slow, or grows back toward the cap while they run faster than
-// ADAPT.fast, never below ADAPT.floor of it.
+// On phones, the cap also adapts automatically: every ADAPT.window seconds the
+// mean frame time is checked, and the pixel budget shrinks by ADAPT.step while
+// frames run slower than ADAPT.slow, or grows back toward the cap while they
+// run faster than ADAPT.fast, never below ADAPT.floor of it.
 const BASE_FOVY = Math.PI / 4, MIN_ASPECT = 1.6;
-const AUTO_PIXELS = MOBILE ? 960 * 540 : 2560 * 1440;
-const ADAPT = { window: 1.0, slow: 45, fast: 24, step: 0.8, floor: 0.25 };
-let maxPixels = AUTO_PIXELS;
-let pixelBudget = 1;   // share of maxPixels in use
+const AUTO_PIXELS = MOBILE ? 960 * 540 : 1600 * 900;
+const ADAPT = { window: 1.0, slow: 45, fast: 30, step: 0.8, floor: 0.25 };
+const MAX_FPS = 40;
+let pixelBudget = 1;   // share of AUTO_PIXELS in use
 let projection, renderScale = 1;
-// Resolution control: 0 is Auto, otherwise the cap is that many lines of 16:9
-function setResolution(lines) {
-  maxPixels = lines ? Math.round(lines * 16 / 9) * lines : AUTO_PIXELS;
-  pixelBudget = 1;
-  resize();
-}
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const css = canvas.clientWidth * canvas.clientHeight;
-  renderScale = Math.min(dpr, Math.sqrt(maxPixels * pixelBudget / Math.max(css, 1)));
+  renderScale = Math.min(dpr, Math.sqrt(AUTO_PIXELS * pixelBudget / Math.max(css, 1)));
   canvas.width = Math.round(canvas.clientWidth * renderScale);
   canvas.height = Math.round(canvas.clientHeight * renderScale);
   gl.viewport(0, 0, canvas.width, canvas.height);
@@ -547,7 +540,7 @@ resize();
 
 const adapt = { t0: null, frames: 0, ms: 0 };
 function adaptResolution(now, frameMs) {
-  if (!MOBILE || controls.resolution || (controls.fps && 1000 / controls.fps >= ADAPT.slow)) {
+  if (!MOBILE) {
     adapt.t0 = null; adapt.frames = 0; adapt.ms = 0; return;
   }
   adapt.t0 ??= now;
@@ -775,9 +768,7 @@ const CONTROL_INPUTS = {
   shadows:     { read: el => el.checked },
   attenuation: { read: el => el.checked },
   wavy:        { read: el => el.checked },
-  stats:       { read: el => el.checked },
-  resolution:  { read: el => parseInt(el.value) || 0 },
-  fps:         { read: el => parseInt(el.value) || 0 }
+  stats:       { read: el => el.checked }
 };
 // The panel starts folded on small screens, where it would cover the scene
 if (MOBILE || innerWidth < 560) document.getElementById("controls").open = false;
@@ -804,7 +795,6 @@ for (const [id, { read, show }] of Object.entries(CONTROL_INPUTS)) {
       try { localStorage.setItem("hw7_stats", controls.stats ? "1" : "0"); } catch {}
       setStatsVisible(controls.stats);
     }
-    if (id === "resolution") setResolution(controls.resolution);
   };
   input.addEventListener("input", update);
   update();
@@ -1084,11 +1074,9 @@ function uploadScene(view, t, ship) {
 // out to it, but never runs ahead of the clock or more than a frame behind.
 let lastNow = 0, lastDrawTime = 0;
 function render(time) {
-  if (controls.fps) {
-    const interval = 1000 / controls.fps, elapsed = time - lastDrawTime;
-    if (elapsed < interval - 1) { requestAnimationFrame(render); return; }
-    lastDrawTime = Math.min(time, Math.max(lastDrawTime + interval, time - interval));
-  }
+  const interval = 1000 / MAX_FPS, elapsed = time - lastDrawTime;
+  if (elapsed < interval - 1) { requestAnimationFrame(render); return; }
+  lastDrawTime = Math.min(time, Math.max(lastDrawTime + interval, time - interval));
   const frameStart = performance.now();
   const frameDelta = lastRafTime ? Math.min(time - lastRafTime, 200) : 16.67;
   lastRafTime = time;

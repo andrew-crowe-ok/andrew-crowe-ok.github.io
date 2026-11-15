@@ -64,7 +64,7 @@ void main() {
 const textureSwitch = (call) => Array.from({ length: TEXTURE_UNITS },
   (_, i) => `    case ${i}: return ${call(`uTex[${i}]`)};`).join("\n");
 
-const RAYTRACE_FS = `#version 300 es
+const RAYTRACE_FS_PREFIX = `#version 300 es
 precision highp float;
 precision highp int;
 
@@ -1023,7 +1023,9 @@ vec3 sky(vec3 o, vec3 d, bool primary) {
 // Phong from every light, each through a shadow ray. The surface's own share
 // -- what isn't mirror or glass -- takes the ambient and diffuse terms; the
 // highlight is added in full, so glass still glints.
-vec3 shadeLocal(Surface s, vec3 d, int i) {
+`;
+
+const DEFAULT_SHADE_LOCAL_GLSL = `vec3 shadeLocal(Surface s, vec3 d, int i) {
   vec4 A = uMatA[i], B = uMatB[i];
   float body = max(1.0 - B.x - B.y, 0.0);
   vec3 V = -d;
@@ -1062,8 +1064,9 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
     color += glow * rim * day;
   }
   return color;
-}
+}`;
 
+const RAYTRACE_FS_MIDDLE = `
 // The ray through this pixel. The warp lens (camera.js) is HW6's projection
 // run backwards: a rectilinear direction, and an equisolid fisheye one with
 // its vertical stretch undone, blended as the lens opens. Outside the
@@ -1096,7 +1099,57 @@ struct Path {
 };
 
 float maxComponent(vec3 v) { return max(v.r, max(v.g, v.b)); }
+`;
 
+const DEFAULT_STEP_BOUNCE_GLSL = `bool stepBounce(inout Path p, Surface s, int id, out Path pushed, out bool hasPushed) {
+  pushed = p;
+  hasPushed = false;
+  vec4 B = uMatB[id];
+  if (p.depth >= uBounces || (B.x <= 0.0 && B.y <= 0.0)) return false;
+  p.depth++;
+
+  if (B.y > 0.0) {
+    // Glass. n faces the incoming ray; entering means going from vacuum in.
+    bool entering = dot(p.d, s.ng) < 0.0;
+    vec3 n = entering ? s.n : -s.n;
+    vec3 ng = entering ? s.ng : -s.ng;
+    float eta = entering ? 1.0 / B.z : B.z;
+    vec3 rdir = reflect(p.d, n);
+    vec3 tdir = refract(p.d, n, eta);
+    vec3 outside = s.p + ng * EPS, inside = s.p - ng * EPS;
+    if (tdir == vec3(0.0)) {
+      // Total internal reflection: stay inside glass without consuming a
+      // bounce so rays in a flat-faced prism still escape cleanly (bounded by MAX_SEGMENTS).
+      p.depth--;
+      p.o = outside; p.d = rdir; p.weight *= B.y;
+    } else {
+      // Schlick, with the angle on the vacuum side
+      float c = clamp(entering ? -dot(p.d, n) : -dot(tdir, n), 0.0, 1.0);
+      float r0 = (B.z - 1.0) / (B.z + 1.0);
+      r0 *= r0;
+      float omc = 1.0 - c;
+      float omc2 = omc * omc;
+      float F = r0 + (1.0 - r0) * omc2 * omc2 * omc;
+      // The reflected ray stays in the medium it came from; the refracted
+      // one crosses into glass, or back out of it
+      Path reflected = Path(outside, rdir, p.weight * B.y * F, p.absorb, p.travelled, p.depth);
+      Path refracted = Path(inside, tdir, p.weight * B.y * (1.0 - F),
+                            entering ? uMatD[id].rgb : vec3(0.0), p.travelled, p.depth);
+      Path weaker;
+      if (F <= 0.5) { p = refracted; weaker = reflected; }
+      else          { p = reflected; weaker = refracted; }
+      if (maxComponent(weaker.weight) > 0.01) { pushed = weaker; hasPushed = true; }
+    }
+  } else {
+    // Mirror: polished hull, copper dish
+    p.o = s.p + faceforward(s.ng, p.d, s.ng) * EPS;
+    p.d = reflect(p.d, faceforward(s.n, p.d, s.ng));
+    p.weight *= B.x;
+  }
+  return maxComponent(p.weight) >= 0.01;
+}`;
+
+const RAYTRACE_FS_SUFFIX = `
 // The recursion, as a loop. Each pass follows the current path one segment:
 // it adds that hit's local shading, then turns into the reflected or
 // refracted ray. Glass splits the path in two: the stronger branch carries
@@ -1137,53 +1190,16 @@ void main() {
     }
     color += p.weight * shadeLocal(s, p.d, h.id);
 
-    vec4 B = uMatB[h.id];
-    if (p.depth >= uBounces || (B.x <= 0.0 && B.y <= 0.0)) {
-      live = false;
-      continue;
-    }
-    p.depth++;
-
-    if (B.y > 0.0) {
-      // Glass. n faces the incoming ray; entering means going from vacuum in.
-      bool entering = dot(p.d, s.ng) < 0.0;
-      vec3 n = entering ? s.n : -s.n;
-      vec3 ng = entering ? s.ng : -s.ng;
-      float eta = entering ? 1.0 / B.z : B.z;
-      vec3 rdir = reflect(p.d, n);
-      vec3 tdir = refract(p.d, n, eta);
-      vec3 outside = s.p + ng * EPS, inside = s.p - ng * EPS;
-      if (tdir == vec3(0.0)) {
-        // Total internal reflection: stay inside glass without consuming a
-        // bounce so rays in a flat-faced prism still escape cleanly (bounded by MAX_SEGMENTS).
-        p.depth--;
-        p.o = outside; p.d = rdir; p.weight *= B.y;
-      } else {
-        // Schlick, with the angle on the vacuum side
-        float c = clamp(entering ? -dot(p.d, n) : -dot(tdir, n), 0.0, 1.0);
-        float r0 = (B.z - 1.0) / (B.z + 1.0);
-        r0 *= r0;
-        float omc = 1.0 - c;
-        float omc2 = omc * omc;
-        float F = r0 + (1.0 - r0) * omc2 * omc2 * omc;
-        // The reflected ray stays in the medium it came from; the refracted
-        // one crosses into glass, or back out of it
-        Path reflected = Path(outside, rdir, p.weight * B.y * F, p.absorb, p.travelled, p.depth);
-        Path refracted = Path(inside, tdir, p.weight * B.y * (1.0 - F),
-                              entering ? uMatD[h.id].rgb : vec3(0.0), p.travelled, p.depth);
-        Path weaker;
-        if (F <= 0.5) { p = refracted; weaker = reflected; }
-        else          { p = reflected; weaker = refracted; }
-        if (top < STACK_SIZE && maxComponent(weaker.weight) > 0.01) stack[top++] = weaker;
-      }
-    } else {
-      // Mirror: polished hull, copper dish
-      p.o = s.p + faceforward(s.ng, p.d, s.ng) * EPS;
-      p.d = reflect(p.d, faceforward(s.n, p.d, s.ng));
-      p.weight *= B.x;
-    }
-    if (maxComponent(p.weight) < 0.01) live = false;
+    Path pushed;
+    bool hasPushed;
+    live = stepBounce(p, s, h.id, pushed, hasPushed);
+    if (hasPushed && top < STACK_SIZE) stack[top++] = pushed;
   }
   fragColor = vec4(color, 1.0);
 }
 `;
+
+function buildRaytraceFS(shadeLocalGlsl = DEFAULT_SHADE_LOCAL_GLSL, stepBounceGlsl = DEFAULT_STEP_BOUNCE_GLSL) {
+  return `${RAYTRACE_FS_PREFIX}${shadeLocalGlsl}\n${RAYTRACE_FS_MIDDLE}${stepBounceGlsl}\n${RAYTRACE_FS_SUFFIX}`;
+}
+const RAYTRACE_FS = buildRaytraceFS();

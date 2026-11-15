@@ -61,13 +61,16 @@ function createProgram(vsSource, fsSource) {
   }
 }
 
-// One program does everything (raytrace.js)
-const program = createProgram(RAYTRACE_VS, RAYTRACE_FS);
+// One program does everything (raytrace.js), rebuilt on Apply from #shaderBox
+let program = createProgram(RAYTRACE_VS, RAYTRACE_FS);
 gl.useProgram(program);
+let uniformCache = {};
 const uniforms = new Proxy({}, {
-  get: (cache, name) => cache[name] ??= gl.getUniformLocation(program, name)
+  get: (_, name) => name in uniformCache ? uniformCache[name]
+    : (uniformCache[name] = gl.getUniformLocation(program, name))
 });
-gl.uniform1iv(uniforms.uTex, Array.from({ length: TEXTURE_UNITS }, (_, i) => i));
+const TEX_UNITS = Array.from({ length: TEXTURE_UNITS }, (_, i) => i);
+gl.uniform1iv(uniforms.uTex, TEX_UNITS);
 
 // Lights, fixed in the scene as in HW6: a warm sun off to the side and outside
 // the orbit, so the planet shows a terminator, and a dim cool fill opposite it
@@ -132,10 +135,15 @@ for (const [name, vec4s] of Object.entries(SCENE_BLOCK)) {
 const sceneBuffer = gl.createBuffer();
 gl.bindBuffer(gl.UNIFORM_BUFFER, sceneBuffer);
 gl.bufferData(gl.UNIFORM_BUFFER, sceneBytes.byteLength, gl.DYNAMIC_DRAW);
-const sceneBlock = gl.getUniformBlockIndex(program, "Scene");
-if (gl.getActiveUniformBlockParameter(program, sceneBlock, gl.UNIFORM_BLOCK_DATA_SIZE) !== sceneBytes.byteLength)
-  throw new Error("SCENE_BLOCK doesn't match the shader's Scene block");
-gl.uniformBlockBinding(program, sceneBlock, 0);
+function bindSceneBlock(prog) {
+  const sceneBlock = gl.getUniformBlockIndex(prog, "Scene");
+  if (sceneBlock === gl.INVALID_INDEX)
+    throw new Error("Shader is missing the Scene uniform block");
+  if (gl.getActiveUniformBlockParameter(prog, sceneBlock, gl.UNIFORM_BLOCK_DATA_SIZE) !== sceneBytes.byteLength)
+    throw new Error("SCENE_BLOCK doesn't match the shader's Scene block");
+  gl.uniformBlockBinding(prog, sceneBlock, 0);
+}
+bindSceneBlock(program);
 gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, sceneBuffer);
 
 // The three rows of an affine matrix, which is all the shader needs of it
@@ -787,13 +795,122 @@ const lightRangeBuf = new Float32Array([
   FILL.ref, FILL.reach,
   NAV.ref, NAV.reach
 ]);
-gl.uniform1f(uniforms.uFishHalfX, CHASE.fishHalfX);
-gl.uniform1f(uniforms.uFishStretch, CHASE.fishStretch);
-gl.uniform1f(uniforms.uFishPivot, CHASE.fishPivot);
-gl.uniform2fv(uniforms.uLightRange, lightRangeBuf);
-gl.uniform1f(uniforms.uShutter, STREAK.shutter);
-gl.uniform1f(uniforms.uStreakDim, STREAK.dim);
-gl.uniform1f(uniforms.uSkySeed, skySeed);
+function bindStaticUniforms() {
+  gl.uniform1f(uniforms.uFishHalfX, CHASE.fishHalfX);
+  gl.uniform1f(uniforms.uFishStretch, CHASE.fishStretch);
+  gl.uniform1f(uniforms.uFishPivot, CHASE.fishPivot);
+  gl.uniform2fv(uniforms.uLightRange, lightRangeBuf);
+  gl.uniform1f(uniforms.uShutter, STREAK.shutter);
+  gl.uniform1f(uniforms.uStreakDim, STREAK.dim);
+  gl.uniform1f(uniforms.uSkySeed, skySeed);
+}
+bindStaticUniforms();
+
+function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
+  const nextProgram = createProgram(RAYTRACE_VS, buildRaytraceFS(shadeLocalGlsl, stepBounceGlsl));
+  try {
+    bindSceneBlock(nextProgram);
+  } catch (e) {
+    gl.deleteProgram(nextProgram);
+    throw e;
+  }
+  const oldProgram = program;
+  program = nextProgram;
+  gl.useProgram(program);
+  uniformCache = {};
+  gl.uniform1iv(uniforms.uTex, TEX_UNITS);
+  bindStaticUniforms();
+  gl.deleteProgram(oldProgram);
+}
+
+// ---------------------------------------------------------------------------
+// Floating live-code GLSL editor (#shaderBox in index.html)
+// ---------------------------------------------------------------------------
+{
+  const PREFIX_LINES = RAYTRACE_FS_PREFIX.split("\n").length;
+  const MIDDLE_LINES = RAYTRACE_FS_MIDDLE.split("\n").length;
+  function formatCompileError(message, shadeLocalGlsl, stepBounceGlsl) {
+    const shadeStart = PREFIX_LINES;
+    const shadeEnd = shadeStart + shadeLocalGlsl.split("\n").length - 1;
+    const bounceStart = shadeEnd + MIDDLE_LINES;
+    const bounceEnd = bounceStart + stepBounceGlsl.split("\n").length - 1;
+    return String(message || "Shader compilation failed").trim().replace(/ERROR:\s*\d+:(\d+):/g, (match, raw) => {
+      const line = parseInt(raw, 10);
+      if (line >= shadeStart && line <= shadeEnd)
+        return `Lighting & Shadows (line ${line - shadeStart + 1}):`;
+      if (line >= bounceStart && line <= bounceEnd)
+        return `Bounces & Glass (line ${line - bounceStart + 1}):`;
+      return match;
+    });
+  }
+
+  const editor = document.getElementById("shaderEditor");
+  const applyBtn = document.getElementById("shaderApply");
+  const resetBtn = document.getElementById("shaderReset");
+  const statusEl = document.getElementById("shaderStatus");
+  const errorEl = document.getElementById("shaderError");
+  const tabBtns = [...document.querySelectorAll("#shaderBox .tab")];
+
+  const blocks = {
+    shadeLocal: DEFAULT_SHADE_LOCAL_GLSL,
+    stepBounce: DEFAULT_STEP_BOUNCE_GLSL
+  };
+  let applied = { ...blocks };
+  let activeTab = "shadeLocal";
+
+  function setStatus(text, cls = "") {
+    statusEl.textContent = text;
+    statusEl.className = cls;
+  }
+  function updateModifiedStatus() {
+    blocks[activeTab] = editor.value;
+    const dirty = blocks.shadeLocal !== applied.shadeLocal || blocks.stepBounce !== applied.stepBounce;
+    if (errorEl.hidden) setStatus(dirty ? "Modified" : "Applied", dirty ? "modified" : "");
+  }
+  function selectTab(tab) {
+    blocks[activeTab] = editor.value;
+    activeTab = tab;
+    editor.value = blocks[tab];
+    for (const btn of tabBtns) btn.setAttribute("aria-selected", String(btn.dataset.tab === tab));
+  }
+  function applyShaders() {
+    blocks[activeTab] = editor.value;
+    try {
+      rebuildProgram(blocks.shadeLocal, blocks.stepBounce);
+      applied = { ...blocks };
+      errorEl.hidden = true;
+      errorEl.textContent = "";
+      setStatus("Applied");
+    } catch (e) {
+      errorEl.textContent = formatCompileError(e.message, blocks.shadeLocal, blocks.stepBounce);
+      errorEl.hidden = false;
+      setStatus("Error", "error");
+    }
+  }
+  function resetShaders() {
+    blocks.shadeLocal = DEFAULT_SHADE_LOCAL_GLSL;
+    blocks.stepBounce = DEFAULT_STEP_BOUNCE_GLSL;
+    editor.value = blocks[activeTab];
+    applyShaders();
+  }
+
+  editor.value = blocks[activeTab];
+  tabBtns.forEach(btn => btn.addEventListener("click", () => selectTab(btn.dataset.tab)));
+  editor.addEventListener("input", updateModifiedStatus);
+  editor.addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      applyShaders();
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      const start = editor.selectionStart, end = editor.selectionEnd;
+      editor.setRangeText("  ", start, end, "end");
+      updateModifiedStatus();
+    }
+  });
+  applyBtn.addEventListener("click", applyShaders);
+  resetBtn.addEventListener("click", resetShaders);
+}
 
 // Hand this frame's scene, lights, lens and controls to the shader
 function uploadScene(view, t, ship) {

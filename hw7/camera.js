@@ -10,31 +10,24 @@
 //
 // The instant the ship jumps to warp (scene.js) a second weight starts:
 //
-//   w            = easeOutCubic(time at warp / CHASE.warpBlend)
+//   w            = smootherstep(time at warp / CHASE.warpBlend)
 //
-// w is a dolly zoom. It pulls the camera in tight behind the ship while, as
-// `lensFisheye`, it opens the lens out into the stretched fisheye, so the ship
-// holds its size on screen as the universe around it balloons outward. It
-// leaves at full speed, which is the jump, under the warp flash (main.js), and
-// settles gently. Both weights drop back to 0 at a reset.
+// w opens the lens smoothly into the stretched fisheye while the camera falls
+// monotonically behind the ship (`lag`), keeping the ship centered on screen
+// without any upward pitch or pivot jolt. Both weights drop back to 0 at a reset.
 
 const CHASE = {
   blend: 3.0,                     // s, the swing in
-  // Closer in and wider out than a plain chase view: the wider the lens, the
-  // harder it bows the scene; pulling in by the same factor keeps the ship
-  // the same size on screen while it bulges toward the lens.
   dist: 2.2,                      // units behind the ship's middle before warp,
   height: 0.7,                    //   and above it: the plain lens frames it whole
-  warpDist: 1.38,                 // initial tight pull-in right at the jump
-  warpHeight: 0.44,               // low chase stance over the nacelles
-  warpBlend: 0.48,                // s, the dolly zoom into warp
-  warpLagRate: 1.15,              // units/s the camera falls behind at warp
-  warpLagKnee: 0.55,              // s before steady fallback reaches full rate
-  warpDrop: 0.14,                 // drops slightly into the wake as it loses ground
+  warpDist: 2.2,                  // matches pre-warp dist so pull-away is purely monotonic
+  warpHeight: 0.56,               // gently settles slightly lower over the wake
+  warpBlend: 0.90,                // s, smooth C2 transition into the warp lens
+  warpLagRate: 1.25,              // units/s the camera falls behind at warp
+  warpLagKnee: 0.85,              // s before steady fallback reaches full rate
   fishHalfX: 138 * Math.PI / 180, // half the fisheye's horizontal field of view
-  fishStretch: 2.20,              // sustained vertical stretch during warp
-  fishStretchPulse: 0.35,         // extra rubber-band stretch right at the jump
-  fishPivot: -0.18                //   about this height on screen (-1 bottom, 1 top)
+  fishStretch: 2.15,              // sustained vertical stretch during warp
+  fishPivot: 0                    // centered vertically so stretching never shifts the horizon up
 };
 
 // The lens, read by the ray tracer every frame: 0 = the projection matrix's
@@ -69,8 +62,6 @@ function chaseView(ship, look, dist, height, aimY = 0) {
   return multiply(multiply(chaseEyeFrame(dist, height, aimY), look), inverseShipFrame(ship));
 }
 
-const easeOutCubic = u => u <= 0 ? 0 : u >= 1 ? 1 : 1 - (1 - u) ** 3;
-
 // Blend of two rigid views: slerp the rotation, and slide the eye along an arc
 // about the planet rather than a straight line, which would cut through it on
 // the way in. The arc keeps the eye at least as far out as the nearer of the
@@ -104,15 +95,12 @@ function updateCamera(t, ship, free, drag) {
   }
   const k = smootherstep(sincePress / CHASE.blend);
   const wt = ship.warpTau;
-  const w = lensFisheye = wt === null ? 0 : easeOutCubic(wt / CHASE.warpBlend);
+  const w = lensFisheye = wt === null ? 0 : smootherstep(wt / CHASE.warpBlend);
 
-  // Right at the jump the lens over-stretches briefly like a rubber band; then
-  // the camera falls progressively further behind and settles into the wake as
-  // it fails to keep pace with the ship.
-  const pulse = wt === null ? 0 : (wt / 0.35) * Math.exp(1 - wt / 0.35);
-  lensStretch = CHASE.fishStretch + CHASE.fishStretchPulse * pulse;
+  // Smoothly fall behind the ship as it accelerates away at warp, keeping the
+  // vertical stretch and aim steady with zero jump or rebound.
+  lensStretch = CHASE.fishStretch;
   const lag = wt === null ? 0 : CHASE.warpLagRate * (wt * wt) / (wt + CHASE.warpLagKnee);
-  const wakeDrop = wt === null ? 0 : CHASE.warpDrop * (1 - Math.exp(-wt / 2.2));
 
   // Only the dragging done since the chase took over counts, so taking the
   // mouse never snaps the view
@@ -122,8 +110,8 @@ function updateCamera(t, ship, free, drag) {
   const look = multiply(rotateY(drag.y - chaseGrab.y), rotateX(pitch));
   const chase = chaseView(ship, look,
     CHASE.dist + (CHASE.warpDist - CHASE.dist) * w + lag,
-    CHASE.height + (CHASE.warpHeight - CHASE.height) * w - wakeDrop,
-    0.05 * w);
+    CHASE.height + (CHASE.warpHeight - CHASE.height) * w,
+    0);
   return k >= 1 ? chase : blendViews(free, chase, k);
 }
 

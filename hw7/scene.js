@@ -22,13 +22,13 @@ const PLANET = { radius: 2.4, spin: 0.08 };                     // spin in rad/s
 const PLANET_MATERIAL = {
   ka: 0.03, kd: 1.0, ks: 0.05, shininess: 8, bumpScale: 1.2, atmosphere: [0.35, 0.6, 1.0]
 };
-const ORBIT = { radius: 5.8, speed: 0.4, tilt: 0.25, shipScale: 0.32 };
+const ORBIT = { radius: 5.8, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 
-// The glass cube: 1.5x the ship's largest dimension (length) on every side,
+// The glass box: 1.5x the ship's length in width/height and 3x along the orbit,
 // drifting gently along the ship's own orbit in the opposite direction so the
 // ship meets and flies straight through it. `phase` places it just ahead of
 // the ship in front of the planet's limb on load.
-const MOON = { halfSize: [1.48, 1.48, 1.48], speed: 0.05, phase: -0.75 };
+const MOON = { halfSize: [1.48, 1.48, 2.96], speed: 0.05, phase: -0.75 };
 // Crystal-clear refractive glass with a subtle blue absorption and Fresnel edge
 // gleam so the ship remains clearly visible as it flies through
 const MOON_MATERIAL = {

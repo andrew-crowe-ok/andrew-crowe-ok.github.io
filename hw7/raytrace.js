@@ -120,7 +120,7 @@ uniform vec2 uLightRange[NUM_LIGHTS];   // distance at which attenuation is 1, a
 
 // ---- controls --------------------------------------------------------------
 uniform int uBounces;
-uniform bool uShadows, uAttenuation, uWavy;
+uniform bool uShadows, uAttenuation;
 uniform float uShininessScale;
 
 uniform sampler2D uTex[TEXTURE_UNITS];
@@ -339,7 +339,7 @@ bool hitTorus(vec3 o, vec3 d, float r, float tmin, inout float t, out vec3 n) {
 
 // ---- HW3 wavy ripple (glass cube only) -------------------------------------
 bool isWavyCube(int i) {
-  return uWavy && uMatE[i].y < -0.5 && uInfo[i].x == BOX && uMatB[i].y > 0.0;
+  return uMatE[i].y < -0.5 && uInfo[i].x == BOX && uMatB[i].y > 0.0;
 }
 float wavyOffset(vec3 p) {
   return 0.12 * sin(uTime * 3.0 + p.x * 2.5 + p.z * 2.5);

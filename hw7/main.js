@@ -811,8 +811,8 @@ for (const [id, { read, show }] of Object.entries(CONTROL_INPUTS)) {
 }
 
 // Interactive controls. While the chase camera has the view, the drag angles
-// steer it around the ship instead of turning the scene, and clicks, the
-// wheel and the keys are ignored (camera.js).
+// steer it around the ship instead of turning the scene (until warp, when all
+// camera movement is locked), and clicks, the wheel and the keys are ignored (camera.js).
 let dragRotX, dragRotY;      // mouse drag
 let camX, camY;              // arrow keys; w, s and the wheel zoom (camera.js)
 // The scene's own clock starts here, so a reset restarts the orbit and the
@@ -849,8 +849,10 @@ canvas.addEventListener("pointermove", e => {
   const p = pointers.get(e.pointerId);
   if (!p) return;
   if (pointers.size === 1) {
-    dragRotY += (e.clientX - p.x) * 0.01;
-    dragRotX += (e.clientY - p.y) * 0.01;
+    if (lastShip?.warpTau == null) {
+      dragRotY += (e.clientX - p.x) * 0.01;
+      dragRotX += (e.clientY - p.y) * 0.01;
+    }
     if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > CLICK_SLOP) dragged = true;
   }
   p.x = e.clientX; p.y = e.clientY;

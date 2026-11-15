@@ -23,8 +23,8 @@ const CHASE = {
   warpDist: 2.2,                  // matches pre-warp dist so pull-away is purely monotonic
   warpHeight: 0.56,               // gently settles slightly lower over the wake
   warpBlend: 0.90,                // s, smooth C2 transition into the warp lens
-  warpLagRate: 1.85,              // units/s the camera falls behind at warp
-  warpLagKnee: 0.85,              // s before steady fallback reaches full rate
+  warpLagRate: 3.6,               // units/s the camera falls behind at warp
+  warpLagKnee: 0.6,               // s before steady fallback reaches full rate
   fishHalfX: 138 * Math.PI / 180, // half the fisheye's horizontal field of view
   fishStretch: 2.15,              // sustained vertical stretch during warp
   fishPivot: 0                    // centered vertically so stretching never shifts the horizon up
@@ -39,6 +39,7 @@ let lensFisheye = 0;
 let lensStretch = CHASE.fishStretch;
 
 let chaseGrab = null;   // the drag angles when this chase began
+let warpGrab = null;    // frozen drag angles once warp begins
 
 // The camera's own frame inside the ship's: dist behind the ship's middle and
 // height above it, pitched down toward (0, aimY, 0) in ship space. The
@@ -91,6 +92,7 @@ function updateCamera(t, ship, free, drag) {
     lensFisheye = 0;
     lensStretch = CHASE.fishStretch;
     chaseGrab = null;
+    warpGrab = null;
     return free;
   }
   const k = smootherstep(sincePress / CHASE.blend);
@@ -103,11 +105,17 @@ function updateCamera(t, ship, free, drag) {
   const lag = wt === null ? 0 : CHASE.warpLagRate * (wt * wt) / (wt + CHASE.warpLagKnee);
 
   // Only the dragging done since the chase took over counts, so taking the
-  // mouse never snaps the view
+  // mouse never snaps the view; once warp begins, lock the camera orientation.
   chaseGrab ??= { ...drag };
+  if (wt === null) {
+    warpGrab = null;
+  } else {
+    warpGrab ??= { ...drag };
+  }
+  const activeDrag = warpGrab ?? drag;
 
-  const pitch = Math.max(-1.2, Math.min(1.2, drag.x - chaseGrab.x));
-  const look = multiply(rotateY(drag.y - chaseGrab.y), rotateX(pitch));
+  const pitch = Math.max(-1.2, Math.min(1.2, activeDrag.x - chaseGrab.x));
+  const look = multiply(rotateY(activeDrag.y - chaseGrab.y), rotateX(pitch));
   const chase = chaseView(ship, look,
     CHASE.dist + (CHASE.warpDist - CHASE.dist) * w + lag,
     CHASE.height + (CHASE.warpHeight - CHASE.height) * w,

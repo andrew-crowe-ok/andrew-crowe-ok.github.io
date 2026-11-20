@@ -18,12 +18,12 @@
 
 const CHASE = {
   blend: 3.0,                     // s, the swing in
-  dist: 2.2,                      // units behind the ship's middle before warp,
-  height: 0.7,                    //   and above it: the plain lens frames it whole
-  warpDist: 2.2,                  // matches pre-warp dist so pull-away is purely monotonic
-  warpHeight: 0.56,               // gently settles slightly lower over the wake
+  dist: 1.65,                     // units behind the ship's middle before warp,
+  height: 0.52,                   //   and above it: the plain lens frames it whole
+  warpDist: 1.65,                 // matches pre-warp dist so pull-away is purely monotonic
+  warpHeight: 0.42,               // gently settles slightly lower over the wake
   warpBlend: 0.90,                // s, smooth C2 transition into the warp lens
-  warpLagRate: 3.6,               // units/s the camera falls behind at warp
+  warpLagRate: 2.7,               // units/s the camera falls behind at warp
   warpLagKnee: 0.6,               // s before steady fallback reaches full rate
   fishHalfX: 138 * Math.PI / 180, // half the fisheye's horizontal field of view
   fishStretch: 2.15,              // sustained vertical stretch during warp
@@ -157,9 +157,9 @@ const ZOOM = {
   // Nearest the camera may come. Around the planet it stays outside the ship's
   // whole sweep (orbit radius + half its length), so the ship never flies
   // through the lens; around the ship it stays outside the ship's box.
-  min: { planet: 7.4, ship: 1.2, moon: 2.8 },
-  max: 30,                        // short of the nearest stars (STAR_FIELD.clear) even from the ship
-  clearPlanet: 0.25,              // nearest the eye comes to the planet's surface
+  min: { planet: 15.4, ship: 1.0, moon: 5.6 },
+  max: 52,                        // short of the nearest stars (STAR_FIELD.clear) even from the ship
+  clearPlanet: 0.5,               // nearest the eye comes to the planet's surface
   perPixel: 0.0012,               // about 13% a wheel notch
   keyStep: 0.015,                 // log distance per w / s, about 1.5%
   ease: 0.12                      // s

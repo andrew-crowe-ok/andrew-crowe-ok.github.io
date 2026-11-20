@@ -45,7 +45,7 @@ const STREAK = { shutter: 0.3, max: 75, dim: 0.08 };
 // None within `clear` of the system, so they stay behind everything the
 // camera can frame; past `reach` from the eye they have faded into the
 // distant layer. A star `ref` away shines at its base level.
-const STAR_FIELD = { cell: 8, density: 0.06, disc: 30, clear: 36, reach: 160, ref: 60, steps: 40 };
+const STAR_FIELD = { cell: 8, density: 0.06, disc: 30, clear: 64, reach: 200, ref: 60, steps: 40 };
 // At warp the near field fills in: every cell's chance of a star rises to
 // `density` times its usual (capped at `cap`) as the ship jumps, the new stars
 // fading in over `fadeIn` seconds -- several times the streaks for no extra
@@ -124,7 +124,7 @@ uniform vec2 uLightRange[NUM_LIGHTS];   // distance at which attenuation is 1, a
 // ---- controls --------------------------------------------------------------
 uniform int uBounces;
 uniform bool uShadows, uAttenuation;
-uniform float uSpecularScale;
+uniform float uMirrorReflect, uMirrorFresnel, uMirrorWarp;
 
 uniform sampler2D uTex[TEXTURE_UNITS];
 uniform float uTime;
@@ -764,6 +764,21 @@ float height(int unit, vec2 uv, vec2 gx, vec2 gy) {
   return 1.0 - dot(sampleTex(unit, uv, gx, gy).rgb, vec3(0.299, 0.587, 0.114));
 }
 
+// Smooth multi-directional 3D ripples on the unit sphere (liquid mercury / funhouse warp)
+vec3 mirrorWarpNormal(vec3 p) {
+  float t = uTime * 1.4;
+  vec3 k1 = vec3(5.0, 3.0, 2.0);
+  vec3 k2 = vec3(-2.5, 5.5, 3.5);
+  vec3 k3 = vec3(3.0, -3.5, 6.0);
+  float c1 = cos(dot(k1, p) + t);
+  float c2 = cos(dot(k2, p) - t * 1.23);
+  float c3 = cos(dot(k3, p) + t * 0.87);
+  vec3 g = k1 * (0.045 * c1) + k2 * (0.032 * c2) + k3 * (0.022 * c3);
+  vec3 no = normalize(p);
+  vec3 gt = g - dot(g, no) * no;
+  return normalize(no - uMirrorWarp * gt);
+}
+
 // footprint: how wide a pixel's cone of rays is at the hit, in eye units. It
 // stands in for the screen derivatives the GPU filters by, which don't exist
 // inside the bounce loop: two points one footprint apart on the surface, how
@@ -783,6 +798,10 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   s.emissive = info.w == EMISSIVE;
   if (info.y < 0) {
     if (s.emissive && uMatC[i].rgb != vec3(0.0)) s.base = uMatC[i].rgb;
+    else if (uMatB[i].x > 0.0 && uMirrorWarp > 0.0) {
+      vec3 po = toObject(i, s.p, 1.0);
+      s.n = normalize(normalToEye * mirrorWarpNormal(po));
+    }
     return s;
   }
 
@@ -1093,15 +1112,12 @@ vec3 nearStars(vec3 o, vec3 d, vec3 v) {
   return light;
 }
 
-// Periodic shooting stars on the celestial sphere (visible both directly in the
+// Periodic supernovae on the celestial canopy (visible both directly in the
 // background and reflected on the mirror planet / glass prism)
-vec3 shootingStars(vec3 s, bool primary) {
-  const vec4 periods = vec4(4.4, 5.9, 7.3, 8.9);
-  const vec4 offsets = vec4(3.4, 1.8, 5.1, 0.9);
-  // Reflected rays on the convex mirror planet span ~15x more sky angle per
-  // pixel than primary rays, so widen their anti-aliased core/halo when !primary.
-  float coreW = primary ? max(0.0022, 1.5 * uPixelAngle) : 0.0095;
-  float haloW = primary ? 0.009 : 0.025;
+vec3 supernovae(vec3 s, bool primary) {
+  const vec4 periods = vec4(12.5, 17.0, 23.0, 31.0);
+  const vec4 offsets = vec4(11.0, 10.5, 11.5, 13.0);
+  float aaFloor = primary ? max(0.002, 1.4 * uPixelAngle) : 0.0065;
   vec3 total = vec3(0.0);
 
   for (int k = 0; k < 4; k++) {
@@ -1111,50 +1127,70 @@ vec3 shootingStars(vec3 s, bool primary) {
     float age = phase - cycle * period;
 
     vec3 r1 = random3(uvec3(uint(cycle) + 17u, uint(k) * 97u + 13u, 53u));
-    float dur = 1.05 + 0.35 * r1.x;
+    float dur = 5.5 + 2.0 * r1.x;
     if (age > dur) continue;
 
-    vec3 r2 = random3(uvec3(uint(cycle) + 41u, uint(k) * 131u + 29u, 89u));
+    // Position uniformly distributed on the celestial sphere
     float z0 = r1.y * 2.0 - 1.0;
     float phi0 = r1.z * TAU;
     float rr = sqrt(max(1.0 - z0 * z0, 0.0));
     vec3 p0 = vec3(rr * cos(phi0), z0, rr * sin(phi0));
+    float cs = dot(s, p0);
+    if (cs < 0.96) continue;
 
+    vec3 r2 = random3(uvec3(uint(cycle) + 41u, uint(k) * 131u + 29u, 89u));
     vec3 up = abs(p0.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3 bx = normalize(cross(up, p0));
     vec3 by = cross(p0, bx);
-    float ang = r2.x * TAU;
-    vec3 tDir = bx * cos(ang) + by * sin(ang);
+
+    vec3 diff = s - p0 * cs;
+    float x = dot(diff, bx), y = dot(diff, by);
+    float r = length(vec2(x, y));
+    float ang = atan(y, x);
 
     float u = age / dur;
-    float arc = 0.55 + 0.35 * r2.y;
-    float tailLen = 0.20 + 0.14 * r2.z;
-    float headA = u * arc;
-    float tailA = max(0.0, headA - tailLen * smoothstep(0.0, 0.18, u));
+    float su = sqrt(u);
+    float maxR = 0.085 + 0.055 * r2.y;
+    float shockR = maxR * mix(su, u, 0.25);
 
-    float theta = atan(dot(s, tDir), dot(s, p0));
-    float clamped = clamp(theta, tailA, headA);
-    vec3 closest = p0 * cos(clamped) + tDir * sin(clamped);
-    if (dot(s, closest) < 0.985) continue;
+    // 1. Blinding ignition flash & fading hot central remnant
+    float flashEnv = smoothstep(0.0, 0.07, u) * (1.0 - smoothstep(0.10, 0.55, u));
+    float coreR = max(aaFloor, mix(0.006, 0.022, flashEnv));
+    float coreGlow = (3.4 * flashEnv + 0.55 * (1.0 - smoothstep(0.25, 0.92, u)))
+      * exp(-(r * r) / (coreR * coreR));
 
-    float dist = length(s - closest);
-    float f = (clamped - tailA) / max(headA - tailA, 1e-4);
-    float taper = mix(0.32, 1.0, f);
-    float wCore = coreW * taper;
-    float wHalo = haloW * taper;
+    // 2. 4-point optical diffraction spikes during peak flash
+    float spRot = r2.x * 1.5707963;
+    float csr = cos(spRot), snr = sin(spRot);
+    float sx = abs(x * csr - y * snr);
+    float sy = abs(x * snr + y * csr);
+    float spW = max(aaFloor * 0.75, 0.0022);
+    float spLen = maxR * (0.45 + 0.55 * flashEnv);
+    float spikes = flashEnv * 1.35 * (
+      exp(-sx / spW) * exp(-sy / spLen) +
+      exp(-sy / spW) * exp(-sx / spLen)
+    );
 
-    float env = smoothstep(0.0, 0.12, u) * (1.0 - smoothstep(0.65, 1.0, u));
-    float along = f * f;
-    float core = exp(-(dist * dist) / (wCore * wCore));
-    float halo = 0.38 * exp(-(dist * dist) / (wHalo * wHalo));
+    // 3. Expanding filamentary shockwave shell & ionized ejecta nebula
+    float shellEnv = smoothstep(0.04, 0.20, u) * (1.0 - smoothstep(0.58, 1.0, u));
+    float fil = 0.68 + 0.26 * sin(ang * 5.0 + r2.x * TAU) * cos(ang * 3.0 - r2.y * TAU + u * 1.8)
+      + 0.16 * sin(ang * 11.0 + r2.z * TAU);
+    float ringR = shockR * (1.0 + 0.045 * sin(ang * 6.0 + r2.y * TAU));
+    float ringW = max(aaFloor, 0.14 * shockR + 0.003);
+    float dr = r - ringR;
+    float ring = exp(-(dr * dr) / (ringW * ringW)) * max(fil, 0.25);
 
-    vec3 headPos = p0 * cos(headA) + tDir * sin(headA);
-    float dHead = length(s - headPos);
-    float headGlow = 1.4 * exp(-(dHead * dHead) / (coreW * coreW * 2.8));
+    float innerMask = smoothstep(ringR * 1.08, 0.0, r);
+    float nebula = innerMask * innerMask * (0.28 + 0.22 * max(fil, 0.0));
 
-    vec3 tailTint = mix(vec3(0.55, 0.82, 1.25), vec3(1.20, 0.86, 0.48), r2.z);
-    vec3 col = mix(tailTint, vec3(1.0, 0.98, 0.95), along);
-    total += col * env * ((core + halo) * along * 2.4 + headGlow);
+    // 4. Color cooling from blue-white burst -> cyan shock + warm gold/rose ejecta
+    vec3 coreCol = mix(vec3(0.82, 0.92, 1.35), vec3(1.15, 0.96, 0.80), smoothstep(0.12, 0.75, u));
+    vec3 shockCol = mix(vec3(0.32, 0.82, 1.35), vec3(0.95, 0.42, 0.22), smoothstep(0.35, 0.95, u));
+    vec3 ejectaCol = mix(vec3(1.15, 0.68, 0.30), vec3(1.05, 0.36, 0.72), r2.z);
+    ejectaCol = mix(vec3(0.75, 0.92, 1.25), ejectaCol, smoothstep(0.08, 0.45, u));
+
+    total += coreCol * (coreGlow + spikes)
+      + shellEnv * (shockCol * ring * 1.35 + ejectaCol * nebula * 0.85);
   }
   return total;
 }
@@ -1164,7 +1200,7 @@ vec3 shootingStars(vec3 s, bool primary) {
 // again for a star the curved surface has smeared out of shape anyway.
 vec3 sky(vec3 o, vec3 d, bool primary) {
   vec3 s = d * uSkyRot;                                  // into the sky's own frame
-  vec3 color = backdrop(s) + distantStar(s) + shootingStars(s, primary);
+  vec3 color = backdrop(s) + distantStar(s) + supernovae(s, primary);
   if (primary)
     color += nearStars((o - uSkyCenter) * uSkyRot, s, (uStreak * uShutter) * uSkyRot);
   return color;
@@ -1183,18 +1219,26 @@ const DEFAULT_SHADE_LOCAL_GLSL = `// Direct lighting at hit s (ray dir d, primit
 // uMatA[i]: ka, kd, ks, shininess | uMatB[i]: kr, kt, ior, bump
 vec3 shadeLocal(Surface s, vec3 d, int i) {
   vec4 A = uMatA[i], B = uMatB[i];
-  // Fraction of surface not claimed by mirror (B.x) or glass (B.y)
-  float body = max(1.0 - B.x - B.y, 0.0);
   vec3 V = -d;
   // Flip shading & geometric normals to face the incoming ray
   vec3 n  = faceforward(s.n, d, s.ng);
   vec3 ng = faceforward(s.ng, d, s.ng);
 
+  // Effective mirror reflectivity (optional Schlick Fresnel falloff at normal incidence)
+  float kr = B.x * uMirrorReflect;
+  if (kr > 0.0 && uMirrorFresnel > 0.0) {
+    float omc = 1.0 - clamp(dot(n, V), 0.0, 1.0);
+    float f0 = mix(kr, kr * 0.04, uMirrorFresnel);
+    kr = f0 + (kr - f0) * omc * omc * omc * omc * omc;
+  }
+  // Fraction of surface not claimed by mirror or glass
+  float body = max(1.0 - kr - B.y, 0.0);
+
   // 1. Ambient term
   vec3 color = A.x * body * s.base;
 
   // 2. Direct Phong lighting + shadow rays across all scene lights
-  if (A.y * body > 0.0 || A.z * uSpecularScale > 0.0) {
+  if (A.y * body > 0.0 || A.z > 0.0) {
     for (int j = 0; j < NUM_LIGHTS; j++) {
       if (uLightColor[j] == vec3(0.0)) continue;
       vec3 toLight = uLightPos[j] - s.p;
@@ -1216,7 +1260,7 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
       // Specular highlight is added in full so glass still glints
       float rdotv = max(dot(V, reflect(-L, n)), 0.0);
       float spec  = rdotv > 0.0 ? pow(rdotv, A.w) : 0.0;
-      color += uLightColor[j] * vis * att * (A.y * body * s.base * diff + A.z * uSpecularScale * spec);
+      color += uLightColor[j] * vis * att * (A.y * body * s.base * diff + A.z * spec);
     }
   }
 
@@ -1275,9 +1319,10 @@ bool stepBounce(inout Path p, Surface s, int id, out Path pushed, out bool hasPu
   pushed = p;
   hasPushed = false;
   vec4 B = uMatB[id];
+  float kr = B.x * uMirrorReflect;
 
   // 1. Stop at bounce limit or on purely diffuse surfaces
-  if (p.depth >= uBounces || (B.x <= 0.0 && B.y <= 0.0)) return false;
+  if (p.depth >= uBounces || (kr <= 0.0 && B.y <= 0.0)) return false;
   p.depth++;
 
   if (B.y > 0.0) {
@@ -1315,9 +1360,18 @@ bool stepBounce(inout Path p, Surface s, int id, out Path pushed, out bool hasPu
     }
   } else {
     // 3. Mirror reflection (polished hull, mirror planet)
-    p.o = s.p + faceforward(s.ng, p.d, s.ng) * EPS;
-    p.d = reflect(p.d, faceforward(s.n, p.d, s.ng));
-    p.weight *= B.x;
+    vec3 n  = faceforward(s.n, p.d, s.ng);
+    vec3 ng = faceforward(s.ng, p.d, s.ng);
+    if (uMirrorFresnel > 0.0) {
+      float omc = 1.0 - clamp(-dot(p.d, n), 0.0, 1.0);
+      float f0 = mix(kr, kr * 0.04, uMirrorFresnel);
+      kr = f0 + (kr - f0) * omc * omc * omc * omc * omc;
+    }
+    p.o = s.p + ng * EPS;
+    p.d = reflect(p.d, n);
+    // Keep strongly warped grazing reflections above the geometric surface
+    if (dot(p.d, ng) < 0.0) p.d = normalize(p.d - 2.0 * dot(p.d, ng) * ng);
+    p.weight *= kr;
   }
 
   // 4. Prune rays whose remaining contribution is negligible

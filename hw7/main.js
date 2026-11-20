@@ -86,9 +86,9 @@ gl.uniform1iv(uniforms.uTex, TEX_UNITS);
 // attenuation leaves it at full strength -- the planet's center for the two
 // fixed ones, the ship's wingtips for its own -- and `reach` how far out it keeps
 // falling off: the ship stays lit at warp, leaving the system behind.
-const SUN = { pos: [12, 5, 3], color: [1.25, 1.19, 1.06], ref: 13.3, reach: 21 };
-const FILL = { pos: [-12, -5, -3], color: [0.12, 0.17, 0.3], ref: 13.3, reach: 21 };
-const NAV = { ref: 0.95, reach: 1e6 };
+const SUN = { pos: [24, 10, 6], color: [1.25, 1.19, 1.06], ref: 26.6, reach: 42 };
+const FILL = { pos: [-24, -10, -6], color: [0.12, 0.17, 0.3], ref: 26.6, reach: 42 };
+const NAV = { ref: 0.72, reach: 1e6 };
 
 // ---------------------------------------------------------------------------
 // The scene, as the ray tracer sees it
@@ -534,6 +534,8 @@ const ADAPT = { window: 1.0, slow: 22, fast: 19, step: 0.8, floor: MOBILE ? 0.25
 const MAX_FPS = 60;
 let pixelBudget = 1;   // share of AUTO_PIXELS in use
 let projection, renderScale = 1;
+const fpsReadout = document.getElementById("fpsReadout");
+const resReadout = document.getElementById("resReadout");
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
@@ -541,6 +543,7 @@ function resize() {
   renderScale = Math.min(dpr, Math.sqrt(AUTO_PIXELS * pixelBudget / Math.max(css, 1)));
   canvas.width = Math.max(1, Math.round(w * renderScale));
   canvas.height = Math.max(1, Math.round(h * renderScale));
+  if (resReadout) resReadout.textContent = `${Math.min(canvas.width, canvas.height)}p`;
   gl.viewport(0, 0, canvas.width, canvas.height);
   const aspect = canvas.width / canvas.height;
   const fovy = aspect >= MIN_ASPECT ? BASE_FOVY
@@ -562,6 +565,18 @@ function adaptResolution(now, frameMs) {
   if (next !== pixelBudget) { pixelBudget = next; resize(); }
 }
 
+const perf = { t0: null, frames: 0, ready: false };
+function updatePerfHud(now) {
+  perf.t0 ??= now;
+  perf.frames++;
+  const span = now - perf.t0;
+  if (span < (perf.ready ? 0.5 : 0.25)) return;
+  if (fpsReadout) fpsReadout.textContent = `${Math.round(perf.frames / span)} FPS`;
+  perf.t0 = now;
+  perf.frames = 0;
+  perf.ready = true;
+}
+
 // The angle one pixel spans mid-frame, which sizes the stars and picks
 // mipmap levels: the plain lens's, blended toward the fisheye's as it opens
 function pixelAngle() {
@@ -573,13 +588,16 @@ function pixelAngle() {
 // ---------------------------------------------------------------------------
 // Ray tracer controls (index.html)
 // ---------------------------------------------------------------------------
+const ENABLE_MIRROR_FRESNEL = false;
 const controls = {};
 const CONTROL_INPUTS = {
-  bounces:     { read: el => parseInt(el.value), show: v => `${v}` },
-  specular:    { read: el => parseFloat(el.value), show: v => `×${v.toFixed(2)}` },
-  ior:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
-  shadows:     { read: el => el.checked },
-  attenuation: { read: el => el.checked }
+  bounces:       { read: el => parseInt(el.value), show: v => `${v}` },
+  mirrorReflect: { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
+  mirrorFresnel: { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
+  mirrorWarp:    { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
+  ior:           { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
+  shadows:       { read: el => el.checked },
+  attenuation:   { read: el => el.checked }
 };
 // The panel starts folded on small screens, where it would cover the scene
 if (MOBILE || innerWidth < 560) document.getElementById("controls").open = false;
@@ -588,6 +606,11 @@ if (MOBILE || innerWidth < 560) document.getElementById("controls").open = false
 const presets = new URLSearchParams(location.search);
 for (const [id, { read, show }] of Object.entries(CONTROL_INPUTS)) {
   const input = document.getElementById(id);
+  if (id === "mirrorFresnel" && !ENABLE_MIRROR_FRESNEL) {
+    if (input) input.closest(".row").hidden = true;
+    controls.mirrorFresnel = 0;
+    continue;
+  }
   const output = document.querySelector(`output[for="${id}"]`);
   if (MOBILE && id === "bounces" && !presets.has(id)) input.value = "2";
   if (presets.has(id)) {
@@ -857,7 +880,8 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
   const GLSL_BI = new Set(["dot", "cross", "normalize", "length", "distance", "reflect", "refract",
     "faceforward", "clamp", "max", "min", "mix", "pow", "exp", "sqrt", "abs", "smoothstep", "step",
     "maxComponent", "transmittance", "uMatA", "uMatB", "uMatC", "uMatD", "uMatE",
-    "uLightPos", "uLightColor", "uLightRange", "uShadows", "uAttenuation", "uSpecularScale",
+    "uLightPos", "uLightColor", "uLightRange", "uShadows", "uAttenuation",
+    "uMirrorReflect", "uMirrorFresnel", "uMirrorWarp",
     "uBounces", "NUM_LIGHTS", "EPS", "STACK_SIZE"]);
   const GLSL_TOKEN = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|^[ \t]*#[^\n]*|(?:\b\d+\.\d*(?:[eE][+-]?\d+)?[fF]?|\B\.\d+(?:[eE][+-]?\d+)?[fF]?|\b\d+(?:[eE][+-]?\d+)?[uUfF]?\b)|\b[A-Za-z_]\w*\b)/gm;
 
@@ -882,8 +906,8 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
   }
 
   const TAB_HINTS = {
-    shadeLocal: "Direct Phong lighting, shadow rays, distance falloff, emission &amp; limb glow. Uniforms: <code>uShadows</code> <code>uAttenuation</code> <code>uSpecularScale</code> <code>uMatA..E</code>",
-    stepBounce: "Ray-tree recursion step: mirror reflection, Snell refraction, TIR &amp; Schlick Fresnel. Uniforms: <code>uBounces</code> <code>B.x</code> (mirror) <code>B.y</code> (glass) <code>B.z</code> (IOR) <code>uMatD</code> (absorb)"
+    shadeLocal: "Direct Phong lighting, shadow rays, distance falloff, emission &amp; limb glow. Uniforms: <code>uShadows</code> <code>uAttenuation</code> <code>uMirrorReflect</code> <code>uMirrorFresnel</code> <code>uMatA..E</code>",
+    stepBounce: "Ray-tree recursion step: mirror reflection, Snell refraction, TIR &amp; Schlick Fresnel. Uniforms: <code>uBounces</code> <code>uMirrorReflect</code> <code>uMirrorFresnel</code> <code>B.x</code> (mirror) <code>B.y</code> (glass) <code>B.z</code> (IOR) <code>uMatD</code> (absorb)"
   };
 
   const editor = document.getElementById("shaderEditor");
@@ -1021,7 +1045,9 @@ function uploadScene(view, t, ship) {
   gl.uniform1i(u.uBounces, controls.bounces);
   gl.uniform1i(u.uShadows, controls.shadows);
   gl.uniform1i(u.uAttenuation, controls.attenuation);
-  gl.uniform1f(u.uSpecularScale, controls.specular);
+  gl.uniform1f(u.uMirrorReflect, controls.mirrorReflect);
+  gl.uniform1f(u.uMirrorFresnel, ENABLE_MIRROR_FRESNEL ? controls.mirrorFresnel : 0);
+  gl.uniform1f(u.uMirrorWarp, controls.mirrorWarp);
   gl.uniform1f(u.uTime, t);
 
   gl.uniform3fv(u.uSkyCenter, scene.sky.center);
@@ -1079,6 +1105,7 @@ function render(time) {
   engageButton.disabled = offOrbit();
 
   adaptResolution(now, frameDelta);
+  updatePerfHud(now);
 
   requestAnimationFrame(render);
 }

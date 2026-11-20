@@ -14,24 +14,25 @@
 // smooth departure onto the straight line it was flying when "Engage" was
 // pressed.
 
-const PLANET = { radius: 2.4, spin: 0.08 };                     // spin in rad/s
+const PLANET = { radius: 4.8, spin: 0.08 };                     // spin in rad/s
 
-// Perfect mirror sphere: 100% specular reflection, no diffuse, ambient, bump or atmosphere
+// Mirror sphere: at default 100% reflectivity the dark slate body vanishes;
+// lowering reflectivity or adding Fresnel reveals the shaded surface beneath
 const PLANET_MATERIAL = {
-  ka: 0, kd: 0, ks: 0, shininess: 1, bumpScale: 0, atmosphere: [0, 0, 0], kr: 1.0
+  ka: 0.04, kd: 0.45, ks: 0, shininess: 64, bumpScale: 0, atmosphere: [0, 0, 0], kr: 1.0
 };
-const ORBIT = { radius: 5.8, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
+const ORBIT = { radius: 11.6, speed: 0.25, tilt: 0.25, shipScale: 0.24 };
 
-// The glass box: 1.5x the ship's length in width/height and 3x along the orbit,
-// drifting gently along the ship's own orbit in the opposite direction so the
-// ship meets and flies straight through it. `phase` places it just ahead of
-// the ship in front of the planet's limb on load.
-const MOON = { halfSize: [1.48, 1.48, 2.96], speed: 0.05, phase: -0.75, spin: 0.6 };
+// The glass hex prism: doubled in cross-section and length alongside the planet
+// and orbit, drifting gently along the ship's own orbit in the opposite
+// direction so the ship meets and flies straight through it. `phase` places it
+// just ahead of the ship in front of the planet's limb on load.
+const MOON = { halfSize: [2.96, 2.96, 5.92], speed: 0.05, phase: -0.75, spin: 0.6 };
 // Crystal-clear refractive glass with a subtle blue absorption and Fresnel edge
 // gleam so the ship remains clearly visible as it flies through
 const MOON_MATERIAL = {
   ka: 0.02, kd: 0.05, ks: 0.95, shininess: 220, bumpScale: 0, atmosphere: [0.18, 0.42, 0.90],
-  kt: 0.94, absorb: [0.09, 0.03, 0.01]
+  kt: 0.94, absorb: [0.045, 0.015, 0.005]
 };
 
 // Fresh random galactic orientation on every run

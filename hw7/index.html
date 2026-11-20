@@ -123,7 +123,19 @@
     #controls[open] summary::after, #shaderBox[open] summary::after { content: "\2212"; }
     #controls[open] summary, #shaderBox[open] summary { margin-bottom: 0.7em; }
     #controls .row { display: grid; grid-template-columns: 1fr auto; gap: 0.15em 0.5em; margin: 0.5em 0; }
+    #controls .row[hidden] { display: none; }
     #controls .row input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: rgb(var(--glow)); }
+    #perfHud {
+      position: fixed;
+      top: calc(20px + env(safe-area-inset-top));
+      left: calc(16px + min(250px, calc(100vw - 32px)) + 12px + env(safe-area-inset-left));
+      display: flex; flex-direction: column; gap: 2px;
+      pointer-events: none; user-select: none;
+      font: 500 12px / 1.25 ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+      color: rgba(228, 246, 255, 0.85);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+    }
     /* Finger-sized targets on touch screens */
     @media (pointer: coarse) {
       #controls, #shaderBox { font-size: 14px; }
@@ -254,8 +266,12 @@
     <summary>Ray tracer</summary>
     <label class="row">Bounces <output for="bounces"></output>
       <input type="range" id="bounces" min="0" max="6" step="1" value="3"></label>
-    <label class="row">Specular reflectivity <output for="specular"></output>
-      <input type="range" id="specular" min="0" max="2" step="0.05" value="1"></label>
+    <label class="row">Mirror reflectivity <output for="mirrorReflect"></output>
+      <input type="range" id="mirrorReflect" min="0" max="1" step="0.01" value="1"></label>
+    <label class="row" hidden>Mirror Fresnel <output for="mirrorFresnel"></output>
+      <input type="range" id="mirrorFresnel" min="0" max="1" step="0.01" value="0"></label>
+    <label class="row">Mirror warp <output for="mirrorWarp"></output>
+      <input type="range" id="mirrorWarp" min="0" max="1" step="0.01" value="0"></label>
     <label class="row">Glass index of refraction <output for="ior"></output>
       <input type="range" id="ior" min="1" max="2.4" step="0.01" value="1.5"></label>
     <div class="checks">
@@ -263,6 +279,10 @@
       <label><input type="checkbox" id="attenuation" checked> Attenuation</label>
     </div>
   </details>
+  <div id="perfHud" aria-live="off">
+    <span id="fpsReadout">-- FPS</span>
+    <span id="resReadout"></span>
+  </div>
 
   <details id="shaderBox">
     <summary>GLSL Shader</summary>
@@ -289,13 +309,13 @@
 
   <!-- ?v= changes with each deploy, so a browser never runs a cached script
        from the last one alongside new ones -->
-  <script src="transforms.js?v=38"></script>
-  <script src="raytrace.js?v=38"></script>
-  <script src="textures.js?v=38"></script>
-  <script src="ship.js?v=38"></script>
-  <script src="camera.js?v=38"></script>
-  <script src="scene.js?v=38"></script>
-  <script src="main.js?v=38"></script>
+  <script src="transforms.js?v=40"></script>
+  <script src="raytrace.js?v=40"></script>
+  <script src="textures.js?v=40"></script>
+  <script src="ship.js?v=40"></script>
+  <script src="camera.js?v=40"></script>
+  <script src="scene.js?v=40"></script>
+  <script src="main.js?v=40"></script>
 </body>
 
 </html>

@@ -81,14 +81,14 @@ gl.uniform1iv(uniforms.uTex, TEX_UNITS);
 
 // Lights, fixed in the scene as in HW6: a warm sun off to the side and outside
 // the orbit, so the planet shows a terminator, and a dim cool fill opposite it
-// to lift the night side. The third rides the ship (ship.js). Each light's
-// intensity is folded into its color; `ref` is the distance at which
+// to lift the night side. Two more blinking wingtip lights ride the ship (ship.js).
+// Each light's intensity is folded into its color; `ref` is the distance at which
 // attenuation leaves it at full strength -- the planet's center for the two
-// fixed ones, the ship's hull for its own -- and `reach` how far out it keeps
+// fixed ones, the ship's wingtips for its own -- and `reach` how far out it keeps
 // falling off: the ship stays lit at warp, leaving the system behind.
 const SUN = { pos: [12, 5, 3], color: [1.25, 1.19, 1.06], ref: 13.3, reach: 21 };
 const FILL = { pos: [-12, -5, -3], color: [0.12, 0.17, 0.3], ref: 13.3, reach: 21 };
-const NAV = { color: [0.35, 0.62, 1.0], ref: 0.85, reach: 1e6 };
+const NAV = { ref: 0.95, reach: 1e6 };
 
 // ---------------------------------------------------------------------------
 // The scene, as the ray tracer sees it
@@ -103,6 +103,7 @@ const NAV = { color: [0.35, 0.62, 1.0], ref: 0.85, reach: 1e6 };
 // The meshes are now just which unit shape to intersect. `repeats` is how many
 // times the texture wraps around (models.js's uRepeat), `tube` the torus's.
 const cubeMesh = { shape: BOX, repeats: 1 };
+const hexPrismMesh = { shape: HEX_PRISM, repeats: 1 };
 const cylinderMesh = { shape: CYLINDER, repeats: 3 };
 const hullMesh = { shape: CYLINDER, repeats: 1 };   // once around, to line up with the hull's caps
 const torusMesh = { shape: TORUS, repeats: 1, tube: 0.04 };   // saucer rim
@@ -129,7 +130,7 @@ const sceneBytes = new ArrayBuffer(16 * Object.values(SCENE_BLOCK).reduce((a, n)
 const scene = {
   count: 0,
   groupCount: 0,
-  nav: [0, 0, 0],
+  nav: [{ pos: [0, 0, 0], color: [0, 0, 0] }, { pos: [0, 0, 0], color: [0, 0, 0] }],
   sky: { center: [0, 0, 0], rot: new Float32Array(9), streak: [0, 0, 0] }
 };
 let blockAt = 0;
@@ -239,13 +240,14 @@ function fitGroup(mesh, modelView) {
   const cy = a1 * b12 + a5 * b13 + a9 * b14 + a13;
   const cz = a2 * b12 + a6 * b13 + a10 * b14 + a14;
 
-  const r = mesh.shape === TORUS ? 1 + mesh.tube : 1;
-  const h = mesh.shape === TORUS ? mesh.tube : 1;
+  const rx = mesh.shape === TORUS ? 1 + mesh.tube : mesh.shape === HEX_PRISM ? 2 / Math.sqrt(3) : 1;
+  const ry = mesh.shape === TORUS ? mesh.tube : 1;
+  const rz = mesh.shape === TORUS ? 1 + mesh.tube : 1;
 
   // Arvo's transformed AABB extents along x, y, z
-  const ex = Math.abs(m0) * r + Math.abs(m4) * h + Math.abs(m8) * r;
-  const ey = Math.abs(m1) * r + Math.abs(m5) * h + Math.abs(m9) * r;
-  const ez = Math.abs(m2) * r + Math.abs(m6) * h + Math.abs(m10) * r;
+  const ex = Math.abs(m0) * rx + Math.abs(m4) * ry + Math.abs(m8) * rz;
+  const ey = Math.abs(m1) * rx + Math.abs(m5) * ry + Math.abs(m9) * rz;
+  const ez = Math.abs(m2) * rx + Math.abs(m6) * ry + Math.abs(m10) * rz;
 
   const min = group.min, max = group.max;
   const minX = cx - ex, maxX = cx + ex;
@@ -290,8 +292,8 @@ function endGroup() {
   group = null;
 }
 
-// The ship's own light, in eye space (ship.js)
-function setNavLight(pos) { scene.nav = pos; }
+// The ship's own lights, in eye space (ship.js)
+function setNavLight(index, pos, color) { scene.nav[index].pos = pos; scene.nav[index].color = color; }
 
 // The sky's frame (scene.js): where its center is and how it is turned, in
 // eye space, and the stars' velocity past the eye at warp
@@ -574,7 +576,7 @@ function pixelAngle() {
 const controls = {};
 const CONTROL_INPUTS = {
   bounces:     { read: el => parseInt(el.value), show: v => `${v}` },
-  shininess:   { read: el => 2 ** parseFloat(el.value), show: v => `×${v.toFixed(2)}` },
+  specular:    { read: el => parseFloat(el.value), show: v => `×${v.toFixed(2)}` },
   ior:         { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
   shadows:     { read: el => el.checked },
   attenuation: { read: el => el.checked }
@@ -790,11 +792,12 @@ function resetScene(time) {
 }
 resetScene(null);
 
-const lightPosBuf = new Float32Array(9);
-const lightColorBuf = new Float32Array(9);
+const lightPosBuf = new Float32Array(3 * NUM_LIGHTS);
+const lightColorBuf = new Float32Array(3 * NUM_LIGHTS);
 const lightRangeBuf = new Float32Array([
   SUN.ref, SUN.reach,
   FILL.ref, FILL.reach,
+  NAV.ref, NAV.reach,
   NAV.ref, NAV.reach
 ]);
 function bindStaticUniforms() {
@@ -854,7 +857,7 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
   const GLSL_BI = new Set(["dot", "cross", "normalize", "length", "distance", "reflect", "refract",
     "faceforward", "clamp", "max", "min", "mix", "pow", "exp", "sqrt", "abs", "smoothstep", "step",
     "maxComponent", "transmittance", "uMatA", "uMatB", "uMatC", "uMatD", "uMatE",
-    "uLightPos", "uLightColor", "uLightRange", "uShadows", "uAttenuation", "uShininessScale",
+    "uLightPos", "uLightColor", "uLightRange", "uShadows", "uAttenuation", "uSpecularScale",
     "uBounces", "NUM_LIGHTS", "EPS", "STACK_SIZE"]);
   const GLSL_TOKEN = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|^[ \t]*#[^\n]*|(?:\b\d+\.\d*(?:[eE][+-]?\d+)?[fF]?|\B\.\d+(?:[eE][+-]?\d+)?[fF]?|\b\d+(?:[eE][+-]?\d+)?[uUfF]?\b)|\b[A-Za-z_]\w*\b)/gm;
 
@@ -879,7 +882,7 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
   }
 
   const TAB_HINTS = {
-    shadeLocal: "Direct Phong lighting, shadow rays, distance falloff, emission &amp; limb glow. Uniforms: <code>uShadows</code> <code>uAttenuation</code> <code>uShininessScale</code> <code>uMatA..E</code>",
+    shadeLocal: "Direct Phong lighting, shadow rays, distance falloff, emission &amp; limb glow. Uniforms: <code>uShadows</code> <code>uAttenuation</code> <code>uSpecularScale</code> <code>uMatA..E</code>",
     stepBounce: "Ray-tree recursion step: mirror reflection, Snell refraction, TIR &amp; Schlick Fresnel. Uniforms: <code>uBounces</code> <code>B.x</code> (mirror) <code>B.y</code> (glass) <code>B.z</code> (IOR) <code>uMatD</code> (absorb)"
   };
 
@@ -991,7 +994,7 @@ function uploadScene(view, t, ship) {
   gl.bindBuffer(gl.UNIFORM_BUFFER, sceneBuffer);
   gl.bufferSubData(gl.UNIFORM_BUFFER, 0, sceneBytes);
 
-  // The fixed lights ride whatever the view is now; the nav light was placed
+  // The fixed lights ride whatever the view is now; the nav lights were placed
   // in eye space by the ship itself
   const sx = SUN.pos[0], sy = SUN.pos[1], sz = SUN.pos[2];
   lightPosBuf[0] = view[0] * sx + view[4] * sy + view[8] * sz + view[12];
@@ -1003,13 +1006,14 @@ function uploadScene(view, t, ship) {
   lightPosBuf[4] = view[1] * fx + view[5] * fy + view[9] * fz + view[13];
   lightPosBuf[5] = view[2] * fx + view[6] * fy + view[10] * fz + view[14];
 
-  lightPosBuf[6] = scene.nav[0];
-  lightPosBuf[7] = scene.nav[1];
-  lightPosBuf[8] = scene.nav[2];
-
   lightColorBuf[0] = SUN.color[0];  lightColorBuf[1] = SUN.color[1];  lightColorBuf[2] = SUN.color[2];
   lightColorBuf[3] = FILL.color[0]; lightColorBuf[4] = FILL.color[1]; lightColorBuf[5] = FILL.color[2];
-  lightColorBuf[6] = NAV.color[0];  lightColorBuf[7] = NAV.color[1];  lightColorBuf[8] = NAV.color[2];
+  for (let k = 0; k < 2; k++) {
+    const off = 6 + k * 3;
+    const p = scene.nav[k].pos, c = scene.nav[k].color;
+    lightPosBuf[off]   = p[0]; lightPosBuf[off + 1] = p[1]; lightPosBuf[off + 2] = p[2];
+    lightColorBuf[off] = c[0]; lightColorBuf[off + 1] = c[1]; lightColorBuf[off + 2] = c[2];
+  }
 
   gl.uniform3fv(u.uLightPos, lightPosBuf);
   gl.uniform3fv(u.uLightColor, lightColorBuf);
@@ -1017,7 +1021,7 @@ function uploadScene(view, t, ship) {
   gl.uniform1i(u.uBounces, controls.bounces);
   gl.uniform1i(u.uShadows, controls.shadows);
   gl.uniform1i(u.uAttenuation, controls.attenuation);
-  gl.uniform1f(u.uShininessScale, controls.shininess);
+  gl.uniform1f(u.uSpecularScale, controls.specular);
   gl.uniform1f(u.uTime, t);
 
   gl.uniform3fv(u.uSkyCenter, scene.sky.center);

@@ -130,7 +130,7 @@ function updateCamera(t, ship, free, drag) {
 //
 //   view = translate(pan, -dist) * rotation * translate(-focus)
 //
-// The focus starts on the planet. Clicking the ship, the planet or the moon slides it
+// The focus starts on the ship. Clicking the ship, the planet or the moon slides it
 // onto that object over FOCUS.blend (smootherstep), from wherever it was; on
 // the ship or the moon it then rides along. The arrow-key pan eases back to zero
 // over the same slide, so the object ends up dead center.
@@ -169,8 +169,9 @@ const ZOOM = {
 // away; `from` and `fromPan` are what they were when the slide began
 let camFocus, zoom;
 function resetFreeCamera() {
-  camFocus = { on: "planet", from: [0, 0, 0], fromPan: [0, 0], t0: -Infinity,
-               pivot: [0, 0, 0], panLeft: [0, 0] };
+  const start = focusPoint("ship", { pos: orbitPoint(orbitAngle(0)) }, null);
+  camFocus = { on: "ship", from: start, fromPan: [0, 0], t0: -Infinity,
+               pivot: start, panLeft: [0, 0] };
   zoom = { dist: ZOOM.start, goal: ZOOM.start };
 }
 
@@ -227,6 +228,26 @@ function rayHitsBox(o, d, half) {
   return near;
 }
 
+const HEX_S3 = Math.sqrt(3) / 2;
+function rayHitsHexPrism(o, d, half) {
+  const ox = o[0] / half[0], oy = o[1] / half[1], oz = o[2] / half[2];
+  const dx = d[0] / half[0], dy = d[1] / half[1], dz = d[2] / half[2];
+  const os = [oy, HEX_S3 * ox + 0.5 * oy, -HEX_S3 * ox + 0.5 * oy, oz];
+  const ds = [dy, HEX_S3 * dx + 0.5 * dy, -HEX_S3 * dx + 0.5 * dy, dz];
+  let near = 0, far = Infinity;
+  for (let i = 0; i < 4; i++) {
+    if (Math.abs(ds[i]) < 1e-12) {
+      if (Math.abs(os[i]) > 1) return null;
+      continue;
+    }
+    const a = (-1 - os[i]) / ds[i], b = (1 - os[i]) / ds[i];
+    near = Math.max(near, Math.min(a, b));
+    far = Math.min(far, Math.max(a, b));
+    if (near > far) return null;
+  }
+  return near;
+}
+
 // The same for the sphere |p| <= r about the origin: the smaller root of
 // |o + t d|^2 = r^2, or the larger if the ray starts inside
 function rayHitsSphere(o, d, r) {
@@ -252,7 +273,7 @@ function pickObject(x, y, view, ship, t) {
     ["ship", rayHitsBox(transformPoint(toShip, o), transformVector(toShip, d),
       vmul(SHIP_HALF_EXTENT, ORBIT.shipScale))],
     ["planet", rayHitsSphere(o, d, PLANET.radius)],
-    ["moon", rayHitsBox(transformPoint(toMoon, o), transformVector(toMoon, d), MOON.halfSize)]
+    ["moon", rayHitsHexPrism(transformPoint(toMoon, o), transformVector(toMoon, d), MOON.halfSize)]
   ].filter(([, t]) => t !== null);
   if (!hits.length) return null;
   return hits.reduce((a, b) => b[1] < a[1] ? b : a)[0];

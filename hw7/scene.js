@@ -16,11 +16,9 @@
 
 const PLANET = { radius: 2.4, spin: 0.08 };                     // spin in rad/s
 
-// Matte rock: almost no ambient (dark night side, sharp terminator), full
-// diffuse, a faint broad specular, gentler bumps than the ship, and a blue
-// atmosphere glow on the sunlit limb
+// Perfect mirror sphere: 100% specular reflection, no diffuse, ambient, bump or atmosphere
 const PLANET_MATERIAL = {
-  ka: 0.03, kd: 1.0, ks: 0.05, shininess: 8, bumpScale: 1.2, atmosphere: [0.35, 0.6, 1.0]
+  ka: 0, kd: 0, ks: 0, shininess: 1, bumpScale: 0, atmosphere: [0, 0, 0], kr: 1.0
 };
 const ORBIT = { radius: 5.8, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 
@@ -28,7 +26,7 @@ const ORBIT = { radius: 5.8, speed: 0.25, tilt: 0.25, shipScale: 0.32 };
 // drifting gently along the ship's own orbit in the opposite direction so the
 // ship meets and flies straight through it. `phase` places it just ahead of
 // the ship in front of the planet's limb on load.
-const MOON = { halfSize: [1.48, 1.48, 2.96], speed: 0.05, phase: -0.75 };
+const MOON = { halfSize: [1.48, 1.48, 2.96], speed: 0.05, phase: -0.75, spin: 0.6 };
 // Crystal-clear refractive glass with a subtle blue absorption and Fresnel edge
 // gleam so the ship remains clearly visible as it flies through
 const MOON_MATERIAL = {
@@ -57,26 +55,28 @@ function drawSystem(parent, t, ship) {
   drawOrbit(plane, ship);
 }
 
-// Planet: a fine sphere wearing the antelope photo, bump-mapped from its luminance
+// Planet: a smooth perfect-mirror sphere reflecting the ship, glass tube and sky
 function drawPlanet(parent, t) {
   const r = PLANET.radius;
-  drawPrimitive(planetMesh, planetTexture, BUMP_MAPPING,
+  drawPrimitive(planetMesh, null, BUMP_MAPPING,
     multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r))), PLANET_MATERIAL);
 }
 
-// The glass cube's frame at scene time t (inside the ship's orbital plane
-// at radius ORBIT.radius, +z along the orbital tangent), its center, and its inverse
+// The glass hex prism's frame at scene time t (inside the ship's orbital plane
+// at radius ORBIT.radius, +z along the orbital tangent and spinning about it),
+// its center, and its inverse
 const moonAngle = t => MOON.phase + MOON.speed * t;
+const moonSpin = t => MOON.spin * t;
 const moonFrame = t => multiply(rotateX(ORBIT.tilt),
-  multiply(rotateY(moonAngle(t)), translate(ORBIT.radius, 0, 0)));
-const inverseMoonFrame = t => multiply(translate(-ORBIT.radius, 0, 0),
-  multiply(rotateY(-moonAngle(t)), rotateX(-ORBIT.tilt)));
+  multiply(rotateY(moonAngle(t)), multiply(translate(ORBIT.radius, 0, 0), rotateZ(moonSpin(t)))));
+const inverseMoonFrame = t => multiply(rotateZ(-moonSpin(t)),
+  multiply(translate(-ORBIT.radius, 0, 0), multiply(rotateY(-moonAngle(t)), rotateX(-ORBIT.tilt))));
 const moonCenter = t => transformPoint(moonFrame(t), [0, 0, 0]);
 
-// Glass cube: one refractive box, no texture -- what it shows is what's behind or inside it
+// Glass hexagonal prism: one refractive hex tube, no texture -- what it shows is what's behind or inside it
 function drawMoon(parent, t) {
   const [hx, hy, hz] = MOON.halfSize;
-  drawPrimitive(cubeMesh, null, BUMP_MAPPING, multiply(parent, multiply(moonFrame(t), scale(hx, hy, hz))),
+  drawPrimitive(hexPrismMesh, null, BUMP_MAPPING, multiply(parent, multiply(moonFrame(t), scale(hx, hy, hz))),
     MOON_MATERIAL);
 }
 

@@ -38,7 +38,7 @@ const PYLON = [[0.35, -0.75, -1.85], [0.95, -0.86, -2.05], [1.17, -0.42, -2.2]];
 const SHIP_CENTER = [0, -0.29, -0.055];
 // Half the size of a box about that middle that holds the whole ship -- the
 // rim reaches x 2.22 -- for clicking on it (camera.js)
-const SHIP_HALF_EXTENT = [2.22, 0.65, 3.07];
+const SHIP_HALF_EXTENT = [2.28, 0.65, 3.07];
 
 // Painted plating: a touch more ambient than the planet so the panel lines stay
 // readable on the night side, a tight specular for the clearcoat, and a little
@@ -56,11 +56,21 @@ const HULL_MATERIAL = { ka: 0.2, kd: 0.85, ks: 0.35, shininess: 64, bumpScale: 1
 const DOME_MATERIAL = { ka: 0.05, kd: 0.2, ks: 0.9, shininess: 160, bumpScale: 0, atmosphere: [0, 0, 0],
   kt: 0.88, absorb: [2.0, 0.8, 0.3] };
 
-// Nav light: a blue floodlight in a small glowing bulb under the saucer's
-// leading edge, lighting the neck, hull and deflector from above and in front,
-// so they throw shadows on each other. The light sits just below the bulb, so
-// the bulb's own shell doesn't hide it.
-const NAV_LIGHT = { pos: [0, -0.17, 2.4], bulb: [0, -0.1, 2.4], radius: 0.05 };
+// Wingtip navigation strobes: two small lights on the saucer's port (-x, red)
+// and starboard (+x, green) tips that blink in a synchronized commercial-
+// airliner double-flash pattern (blip-blip ... pause). Each point light sits
+// just outside its bulb so the bulb's own shell doesn't shadow it.
+const NAV_LIGHTS = {
+  radius: 0.06,
+  period: 1.35,
+  pulses: [[0.0, 0.085], [0.19, 0.275]],
+  wings: [
+    { pos: [-2.36, 0.06, 1.16], bulb: [-2.22, 0.0, 1.16],
+      color: [1.0, 0.14, 0.08], flashTint: [1.0, 0.72, 0.62], light: [1.05, 0.18, 0.10] },
+    { pos: [ 2.36, 0.06, 1.16], bulb: [ 2.22, 0.0, 1.16],
+      color: [0.16, 1.0, 0.36], flashTint: [0.72, 1.0, 0.80], light: [0.18, 1.05, 0.38] }
+  ]
+};
 
 // Engines, animated with the flight (updateEngines, once a frame). In orbit
 // the impulse engines run at cruise and the warp coils tick over, breathing
@@ -79,10 +89,21 @@ const ENGINES = {
   breathe: [0.1, 0.4], // shimmer on the coils and Bussards: depth, Hz
   maxRate: 3.5         // fastest the Bussards' plasma video plays
 };
-const engines = { impulse: 1, coils: 1, bussard: 1, scroll: 0, plasmaRate: 1 };
+const engines = { impulse: 1, coils: 1, bussard: 1, scroll: 0, plasmaRate: 1, navBlink: 0 };
 
 const lerp = (a, b, k) => a + (b - a) * k;
 const lerpLevels = (a, b, k) => Object.fromEntries(Object.keys(a).map(key => [key, lerp(a[key], b[key], k)]));
+
+function strobeLevel(t) {
+  const phase = ((t % NAV_LIGHTS.period) + NAV_LIGHTS.period) % NAV_LIGHTS.period;
+  for (const [start, end] of NAV_LIGHTS.pulses) {
+    if (phase >= start && phase <= end) {
+      const u = (phase - start) / (end - start);
+      return u < 0.18 ? u / 0.18 : u > 0.65 ? (1 - u) / 0.35 : 1;
+    }
+  }
+  return 0;
+}
 
 // t is the scene clock, dt the frame's step (for the grilles' flow, whose
 // speed changes along the way)
@@ -116,6 +137,7 @@ function updateEngines(t, dt) {
   // The plasma spins faster with the Bussards' power, in quarter steps
   const rate = Math.min(level.bussard / orbit.bussard, ENGINES.maxRate);
   engines.plasmaRate = Math.round(rate * 4) / 4;
+  engines.navBlink = strobeLevel(t);
 }
 // An EMISSIVE part's material at power p (and texture scroll)
 const glowAt = (power, scroll = 0) => ({ ...DEFAULT_MATERIAL, power, scroll });
@@ -148,19 +170,22 @@ function drawShip(parent) {
   const ship = multiply(parent, translate(...vsub([0, 0, 0], SHIP_CENTER)));
   beginGroup(ship);
   drawSaucer(multiply(ship, translate(...SAUCER.pos)));
-  drawNavLight(ship);
+  drawNavLights(ship);
   endGroup();
   drawEngineering(multiply(ship, translate(...HULL.pos)));
 }
 
-// Level 2: the nav light, and the glowing bulb that shows where it is
-const BEACON_MATERIAL = { ka: 0, kd: 0, ks: 0, shininess: 1, bumpScale: 0,
-  atmosphere: [150 / 255, 205 / 255, 255 / 255] };
-function drawNavLight(ship) {
-  setNavLight(transformPoint(ship, NAV_LIGHT.pos));
-  const r = NAV_LIGHT.radius;
-  drawPrimitive(sphereMesh, null, EMISSIVE,
-    multiply(ship, multiply(translate(...NAV_LIGHT.bulb), scale(r, r, r))), BEACON_MATERIAL);
+// Level 2: blinking port/starboard wingtip lights and their glowing bulbs
+function drawNavLights(ship) {
+  const blink = engines.navBlink;
+  const r = NAV_LIGHTS.radius;
+  NAV_LIGHTS.wings.forEach((w, idx) => {
+    setNavLight(idx, transformPoint(ship, w.pos), w.light.map(c => c * blink));
+    const bulbColor = w.color.map((c, i) => lerp(c, w.flashTint[i], blink * 0.45));
+    drawPrimitive(sphereMesh, null, EMISSIVE,
+      multiply(ship, multiply(translate(...w.bulb), scale(r, r, r))),
+      { ka: 0, kd: 0, ks: 0, shininess: 1, bumpScale: 0, atmosphere: bulbColor, power: 0.12 + 3.2 * blink });
+  });
 }
 
 // Level 2: saucer section, three stacked squashed spheres -- a thin lens out to

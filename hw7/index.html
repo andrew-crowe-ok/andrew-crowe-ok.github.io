@@ -254,8 +254,8 @@
     <summary>Ray tracer</summary>
     <label class="row">Bounces <output for="bounces"></output>
       <input type="range" id="bounces" min="0" max="6" step="1" value="3"></label>
-    <label class="row">Shininess <output for="shininess"></output>
-      <input type="range" id="shininess" min="-2" max="2" step="0.1" value="0"></label>
+    <label class="row">Specular reflectivity <output for="specular"></output>
+      <input type="range" id="specular" min="0" max="2" step="0.05" value="1"></label>
     <label class="row">Glass index of refraction <output for="ior"></output>
       <input type="range" id="ior" min="1" max="2.4" step="0.01" value="1.5"></label>
     <div class="checks">
@@ -289,13 +289,13 @@
 
   <!-- ?v= changes with each deploy, so a browser never runs a cached script
        from the last one alongside new ones -->
-  <script src="transforms.js?v=35"></script>
-  <script src="raytrace.js?v=35"></script>
-  <script src="textures.js?v=35"></script>
-  <script src="ship.js?v=35"></script>
-  <script src="camera.js?v=35"></script>
-  <script src="scene.js?v=35"></script>
-  <script src="main.js?v=35"></script>
+  <script src="transforms.js?v=38"></script>
+  <script src="raytrace.js?v=38"></script>
+  <script src="textures.js?v=38"></script>
+  <script src="ship.js?v=38"></script>
+  <script src="camera.js?v=38"></script>
+  <script src="scene.js?v=38"></script>
+  <script src="main.js?v=38"></script>
 </body>
 
 </html>

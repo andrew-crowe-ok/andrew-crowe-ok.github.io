@@ -2,7 +2,8 @@
 //
 // The scene arrives as a list of primitives, each a unit shape (models.js's
 // conventions from HW6: sphere of radius 1, cylinder and cone along y in
-// [-1, 1], box [-1, 1]^3, torus of ring radius 1 in the xz plane) plus the
+// [-1, 1], box [-1, 1]^3, torus of ring radius 1 in the xz plane, plus a
+// flat-top hexagonal prism of apothem 1 in xy and |z| <= 1) plus the
 // inverse of the model-view matrix that placed it. Everything happens in eye
 // space, the camera at the origin: a ray is carried into a primitive's own
 // space by that inverse, intersected with the unit shape there, and the normal
@@ -20,12 +21,12 @@
 // followed on, and the weaker one waits on a small stack until the current
 // path ends.
 
-const MAX_PRIMS = 32;      // the scene has 32: 30 ship parts, the planet, the moon
+const MAX_PRIMS = 33;      // the scene has 33: 31 ship parts, the planet, the moon
 const MAX_GROUPS = 4;      // the ship uses 4: saucer, hull, and each pylon with its nacelle
 const MAX_SEGMENTS = 12;   // ray segments traced per pixel, across all branches
 const STACK_SIZE = 4;      // glass branches waiting their turn
-const NUM_LIGHTS = 3;
-const SPHERE = 0, CYLINDER = 1, CONE = 2, BOX = 3, TORUS = 4;
+const NUM_LIGHTS = 4;
+const SPHERE = 0, CYLINDER = 1, CONE = 2, BOX = 3, TORUS = 4, HEX_PRISM = 5;
 // The mapping modes, as in HW6
 const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
 // Texture units in use (main.js binds them); the shader samples each by a
@@ -79,6 +80,7 @@ precision highp int;
 #define CONE ${CONE}
 #define BOX ${BOX}
 #define TORUS ${TORUS}
+#define HEX_PRISM ${HEX_PRISM}
 #define BUMP_MAPPING ${BUMP_MAPPING}
 #define NORMAL_MAPPING ${NORMAL_MAPPING}
 #define EMISSIVE ${EMISSIVE}
@@ -87,6 +89,7 @@ precision highp int;
 #define EPS 2e-4        // how far a new ray starts off the surface it leaves
 #define PI 3.14159265
 #define TAU 6.28318531
+#define HEX_S3 0.86602540378
 
 // ---- camera ----------------------------------------------------------------
 uniform vec2 uResolution;
@@ -121,7 +124,7 @@ uniform vec2 uLightRange[NUM_LIGHTS];   // distance at which attenuation is 1, a
 // ---- controls --------------------------------------------------------------
 uniform int uBounces;
 uniform bool uShadows, uAttenuation;
-uniform float uShininessScale;
+uniform float uSpecularScale;
 
 uniform sampler2D uTex[TEXTURE_UNITS];
 uniform float uTime;
@@ -300,6 +303,47 @@ bool hitBox(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part)
   return true;
 }
 
+// Four-slab test for a flat-top regular hexagonal prism along z (apothem 1 in xy):
+// |y| <= lim.x, |s3*x + 0.5*y| <= lim.y, |-s3*x + 0.5*y| <= lim.z, |z| <= lim.w
+vec2 hexSpan(vec3 o, vec3 d, vec4 lim) {
+  vec4 op = vec4(o.y, HEX_S3 * o.x + 0.5 * o.y, -HEX_S3 * o.x + 0.5 * o.y, o.z);
+  vec4 dp = vec4(d.y, HEX_S3 * d.x + 0.5 * d.y, -HEX_S3 * d.x + 0.5 * d.y, d.z);
+  vec4 inv = 1.0 / (dp + vec4(equal(dp, vec4(0.0))) * 1e-12);
+  vec4 ta = (-lim - op) * inv, tb = (lim - op) * inv;
+  vec4 tn = min(ta, tb), tf = max(ta, tb);
+  return vec2(max(max(tn.x, tn.y), max(tn.z, tn.w)), min(min(tf.x, tf.y), min(tf.z, tf.w)));
+}
+float hexPrismEval(vec3 q) {
+  float dY = abs(q.y);
+  return max(max(dY, HEX_S3 * abs(q.x) + 0.5 * dY), abs(q.z)) - 1.0;
+}
+vec3 hexPrismNormal(vec3 q, out int part) {
+  float dY = abs(q.y);
+  float dH = HEX_S3 * abs(q.x) + 0.5 * dY;
+  float dZ = abs(q.z);
+  if (dZ >= dY && dZ >= dH) {
+    part = q.z >= 0.0 ? 0 : 1;
+    return vec3(0.0, 0.0, q.z >= 0.0 ? 1.0 : -1.0);
+  }
+  if (dY >= dH) {
+    part = q.y >= 0.0 ? 2 : 3;
+    return vec3(0.0, q.y >= 0.0 ? 1.0 : -1.0, 0.0);
+  }
+  float sx = q.x >= 0.0 ? 1.0 : -1.0;
+  float sy = q.y >= 0.0 ? 1.0 : -1.0;
+  part = q.x >= 0.0 ? (q.y >= 0.0 ? 4 : 5) : (q.y >= 0.0 ? 6 : 7);
+  return vec3(HEX_S3 * sx, 0.5 * sy, 0.0);
+}
+bool hitHexPrism(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
+  vec2 span = hexSpan(o, d, vec4(1.0));
+  if (span.x > span.y) return false;
+  float th = span.x > tmin ? span.x : span.y;
+  if (th <= tmin || th >= t) return false;
+  t = th;
+  n = hexPrismNormal(o + d * th, part);
+  return true;
+}
+
 // Torus, ring radius 1 and tube radius r. The tube is thin (r = 0.04), and the
 // quartic for it loses most of its digits in single precision, so this one is
 // sphere traced instead -- marched along the ray by the distance to the
@@ -339,40 +383,36 @@ bool hitTorus(vec3 o, vec3 d, float r, float tmin, inout float t, out vec3 n) {
   return false;
 }
 
-// ---- HW3 wavy ripple (glass cube only) -------------------------------------
-bool isWavyCube(int i) {
-  return uMatE[i].y < -0.5 && uInfo[i].x == BOX && uMatB[i].y > 0.0;
+// ---- HW3 wavy ripple (glass hexagonal prism only) --------------------------
+bool isWavyHex(int i) {
+  return uMatE[i].y < -0.5 && uInfo[i].x == HEX_PRISM && uMatB[i].y > 0.0;
 }
 float wavyOffset(vec3 p) {
   return 0.12 * sin(uTime * 3.0 + p.x * 2.5 + p.z * 2.5);
 }
-float wavyBoxEval(vec3 p) {
-  vec3 q = vec3(p.x, p.y - wavyOffset(p), p.z);
-  return max(abs(q.x), max(abs(q.y), abs(q.z))) - 1.0;
+float wavyHexEval(vec3 p) {
+  return hexPrismEval(vec3(p.x, p.y - wavyOffset(p), p.z));
 }
-vec3 wavyBoxNormal(vec3 p, out int part) {
+vec3 wavyHexNormal(vec3 p, out int part) {
   vec3 q = vec3(p.x, p.y - wavyOffset(p), p.z);
-  vec3 aq = abs(q), g;
-  if (aq.x >= aq.y && aq.x >= aq.z) { part = q.x > 0.0 ? 4 : 5; g = vec3(sign(q.x), 0.0, 0.0); }
-  else if (aq.y >= aq.z)            { part = q.y > 0.0 ? 2 : 3; g = vec3(0.0, sign(q.y), 0.0); }
-  else                              { part = q.z > 0.0 ? 0 : 1; g = vec3(0.0, 0.0, sign(q.z)); }
+  vec3 g = hexPrismNormal(q, part);
   float dw = 0.12 * 2.5 * cos(uTime * 3.0 + p.x * 2.5 + p.z * 2.5);
   return vec3(g.x - g.y * dw, g.y, g.z - g.y * dw);
 }
 
-// Coarse scan + bisection/secant inside the displaced cube's tight bounding slab
-bool hitWavyBox(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
-  vec2 span = boxSpan(o, d, vec3(1.0, 1.12, 1.0) + vec3(2e-3));
+// Coarse scan + bisection/secant inside the displaced hex prism's tight bounding prism
+bool hitWavyHex(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
+  vec2 span = hexSpan(o, d, vec4(1.122, 1.062, 1.062, 1.002));
   float t0 = max(span.x, tmin), t1 = min(span.y, t);
   if (t0 >= t1) return false;
 
-  float prevT = t0, prevV = wavyBoxEval(o + d * t0);
+  float prevT = t0, prevV = wavyHexEval(o + d * t0);
   bool startIn = prevV <= 0.0;
   float dt = (t1 - t0) / 32.0;
 
   for (int s = 1; s <= 32; s++) {
     float curT = t0 + dt * float(s);
-    float curV = wavyBoxEval(o + d * curT);
+    float curV = wavyHexEval(o + d * curT);
     if ((curV <= 0.0) != startIn) {
       float a = prevT, b = curT, va = prevV, vb = curV;
       for (int k = 0; k < 12; k++) {
@@ -380,14 +420,14 @@ bool hitWavyBox(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int p
         float m = (k < 8 || abs(denom) < 1e-12)
           ? 0.5 * (a + b)
           : mix(a, b, clamp(-va / denom, 0.1, 0.9));
-        float vm = wavyBoxEval(o + d * m);
+        float vm = wavyHexEval(o + d * m);
         if ((vm <= 0.0) == (va <= 0.0)) { a = m; va = vm; }
         else { b = m; vb = vm; }
       }
       float denom = vb - va;
       float th = abs(denom) > 1e-12 ? mix(a, b, clamp(-va / denom, 0.0, 1.0)) : 0.5 * (a + b);
       t = th;
-      n = wavyBoxNormal(o + d * th, part);
+      n = wavyHexNormal(o + d * th, part);
       return true;
     }
     prevT = curT; prevV = curV;
@@ -395,15 +435,15 @@ bool hitWavyBox(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int p
   return false;
 }
 
-float wavyBoxChord(vec3 o, vec3 d, float tmin, float tmax) {
-  vec2 span = boxSpan(o, d, vec3(1.0, 1.12, 1.0) + vec3(2e-3));
+float wavyHexChord(vec3 o, vec3 d, float tmin, float tmax) {
+  vec2 span = hexSpan(o, d, vec4(1.122, 1.062, 1.062, 1.002));
   float t0 = max(span.x, tmin), t1 = min(span.y, tmax);
   if (t0 >= t1) return 0.0;
   float dt = (t1 - t0) / 16.0;
-  float prevV = wavyBoxEval(o + d * t0);
+  float prevV = wavyHexEval(o + d * t0);
   float chord = 0.0;
   for (int s = 1; s <= 16; s++) {
-    float curV = wavyBoxEval(o + d * (t0 + dt * float(s)));
+    float curV = wavyHexEval(o + d * (t0 + dt * float(s)));
     if (prevV <= 0.0 && curV <= 0.0) {
       chord += dt;
     } else if ((prevV <= 0.0) != (curV <= 0.0)) {
@@ -419,12 +459,13 @@ float wavyBoxChord(vec3 o, vec3 d, float tmin, float tmax) {
 bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
   vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
   part = 0;
-  if (isWavyCube(i))     return hitWavyBox(oo, dd, tmin, t, n, part);
+  if (isWavyHex(i))      return hitWavyHex(oo, dd, tmin, t, n, part);
   int shape = uInfo[i].x;
   if (shape == SPHERE)   return hitSphere(oo, dd, tmin, t, n);
   if (shape == CYLINDER) return hitCylinder(oo, dd, tmin, t, n, part);
   if (shape == CONE)     return hitCone(oo, dd, tmin, t, n, part);
   if (shape == BOX)      return hitBox(oo, dd, tmin, t, n, part);
+  if (shape == HEX_PRISM) return hitHexPrism(oo, dd, tmin, t, n, part);
   return hitTorus(oo, dd, uMatC[i].w, tmin, t, n);
 }
 
@@ -513,6 +554,13 @@ bool shadowBox(vec3 o, vec3 d, float tmin, float tmax) {
   return th > tmin && th < tmax;
 }
 
+bool shadowHexPrism(vec3 o, vec3 d, float tmin, float tmax) {
+  vec2 span = hexSpan(o, d, vec4(1.0));
+  if (span.x > span.y) return false;
+  float th = span.x > tmin ? span.x : span.y;
+  return th > tmin && th < tmax;
+}
+
 bool shadowTorus(vec3 o, vec3 d, float r, float tmin, float tmax) {
   float len = length(d);
   vec3 u = d / len;
@@ -541,10 +589,11 @@ bool shadowTorus(vec3 o, vec3 d, float r, float tmin, float tmax) {
 bool shadowHit(int i, vec3 o, vec3 d, float tmin, float tmax) {
   vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
   int shape = uInfo[i].x;
-  if (shape == BOX)      return shadowBox(oo, dd, tmin, tmax);
-  if (shape == SPHERE)   return shadowSphere(oo, dd, tmin, tmax);
-  if (shape == CYLINDER) return shadowCylinder(oo, dd, tmin, tmax);
-  if (shape == CONE)     return shadowCone(oo, dd, tmin, tmax);
+  if (shape == BOX)       return shadowBox(oo, dd, tmin, tmax);
+  if (shape == HEX_PRISM) return shadowHexPrism(oo, dd, tmin, tmax);
+  if (shape == SPHERE)    return shadowSphere(oo, dd, tmin, tmax);
+  if (shape == CYLINDER)  return shadowCylinder(oo, dd, tmin, tmax);
+  if (shape == CONE)      return shadowCone(oo, dd, tmin, tmax);
   return shadowTorus(oo, dd, uMatC[i].w, tmin, tmax);
 }
 
@@ -592,10 +641,14 @@ float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
   return max(min((-b + s) * invA, tmax) - max((-b - s) * invA, tmin), 0.0);
 }
 
-// How much of (tmin, tmax) the ray spends inside primitive i (glass box or sphere)
+// How much of (tmin, tmax) the ray spends inside primitive i (glass hex prism, box, or sphere)
 float glassChord(int i, vec3 o, vec3 d, float tmin, float tmax) {
   vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
-  if (isWavyCube(i)) return wavyBoxChord(oo, dd, tmin, tmax);
+  if (isWavyHex(i)) return wavyHexChord(oo, dd, tmin, tmax);
+  if (uInfo[i].x == HEX_PRISM) {
+    vec2 span = hexSpan(oo, dd, vec4(1.0));
+    return max(min(span.y, tmax) - max(span.x, tmin), 0.0);
+  }
   if (uInfo[i].x == BOX) {
     vec2 span = boxSpan(oo, dd, vec3(1.0));
     return max(min(span.y, tmax) - max(span.x, tmin), 0.0);
@@ -657,6 +710,12 @@ vec2 uvAt(int shape, int part, vec3 p, float repeats) {
     if (part == 4) return vec2(1.0 - p.z, p.y + 1.0) * 0.5;
     return vec2(p.z + 1.0, p.y + 1.0) * 0.5;
   }
+  if (shape == HEX_PRISM) {
+    if (part < 2) return vec2(part == 0 ? p.x : -p.x, p.y) * 0.5 + 0.5;
+    float ang = atan(p.y, p.x);
+    if (ang < 0.0) ang += TAU;
+    return vec2(repeats * ang / TAU, (p.z + 1.0) * 0.5);
+  }
   // Caps: planar mapping of x and z
   if (shape == CYLINDER && part > 0) return vec2(0.5 + 0.5 * p.x, 0.5 - 0.5 * (part == 1 ? p.z : -p.z));
   if (shape == CONE && part > 0) return vec2(0.5 + 0.5 * p.x, 0.5 + 0.5 * p.z);
@@ -678,6 +737,11 @@ vec3 tangentAt(int shape, int part, vec3 p) {
     if (part == 4) return vec3(0.0, 0.0, -1.0);
     if (part == 5) return vec3(0.0, 0.0, 1.0);
     return vec3(1.0, 0.0, 0.0);
+  }
+  if (shape == HEX_PRISM) {
+    if (part < 2) return vec3(part == 0 ? 1.0 : -1.0, 0.0, 0.0);
+    vec3 t = vec3(-p.y, p.x, 0.0);
+    return dot(t, t) > 1e-12 ? t : vec3(1.0, 0.0, 0.0);
   }
   if ((shape == CYLINDER || shape == CONE) && part > 0) return vec3(1.0, 0.0, 0.0);
   // Around the y axis; the sphere's u runs the other way, but so does its
@@ -1029,12 +1093,78 @@ vec3 nearStars(vec3 o, vec3 d, vec3 v) {
   return light;
 }
 
+// Periodic shooting stars on the celestial sphere (visible both directly in the
+// background and reflected on the mirror planet / glass prism)
+vec3 shootingStars(vec3 s, bool primary) {
+  const vec4 periods = vec4(4.4, 5.9, 7.3, 8.9);
+  const vec4 offsets = vec4(3.4, 1.8, 5.1, 0.9);
+  // Reflected rays on the convex mirror planet span ~15x more sky angle per
+  // pixel than primary rays, so widen their anti-aliased core/halo when !primary.
+  float coreW = primary ? max(0.0022, 1.5 * uPixelAngle) : 0.0095;
+  float haloW = primary ? 0.009 : 0.025;
+  vec3 total = vec3(0.0);
+
+  for (int k = 0; k < 4; k++) {
+    float period = periods[k];
+    float phase = uTime + offsets[k];
+    float cycle = floor(phase / period);
+    float age = phase - cycle * period;
+
+    vec3 r1 = random3(uvec3(uint(cycle) + 17u, uint(k) * 97u + 13u, 53u));
+    float dur = 1.05 + 0.35 * r1.x;
+    if (age > dur) continue;
+
+    vec3 r2 = random3(uvec3(uint(cycle) + 41u, uint(k) * 131u + 29u, 89u));
+    float z0 = r1.y * 2.0 - 1.0;
+    float phi0 = r1.z * TAU;
+    float rr = sqrt(max(1.0 - z0 * z0, 0.0));
+    vec3 p0 = vec3(rr * cos(phi0), z0, rr * sin(phi0));
+
+    vec3 up = abs(p0.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 bx = normalize(cross(up, p0));
+    vec3 by = cross(p0, bx);
+    float ang = r2.x * TAU;
+    vec3 tDir = bx * cos(ang) + by * sin(ang);
+
+    float u = age / dur;
+    float arc = 0.55 + 0.35 * r2.y;
+    float tailLen = 0.20 + 0.14 * r2.z;
+    float headA = u * arc;
+    float tailA = max(0.0, headA - tailLen * smoothstep(0.0, 0.18, u));
+
+    float theta = atan(dot(s, tDir), dot(s, p0));
+    float clamped = clamp(theta, tailA, headA);
+    vec3 closest = p0 * cos(clamped) + tDir * sin(clamped);
+    if (dot(s, closest) < 0.985) continue;
+
+    float dist = length(s - closest);
+    float f = (clamped - tailA) / max(headA - tailA, 1e-4);
+    float taper = mix(0.32, 1.0, f);
+    float wCore = coreW * taper;
+    float wHalo = haloW * taper;
+
+    float env = smoothstep(0.0, 0.12, u) * (1.0 - smoothstep(0.65, 1.0, u));
+    float along = f * f;
+    float core = exp(-(dist * dist) / (wCore * wCore));
+    float halo = 0.38 * exp(-(dist * dist) / (wHalo * wHalo));
+
+    vec3 headPos = p0 * cos(headA) + tDir * sin(headA);
+    float dHead = length(s - headPos);
+    float headGlow = 1.4 * exp(-(dHead * dHead) / (coreW * coreW * 2.8));
+
+    vec3 tailTint = mix(vec3(0.55, 0.82, 1.25), vec3(1.20, 0.86, 0.48), r2.z);
+    vec3 col = mix(tailTint, vec3(1.0, 0.98, 0.95), along);
+    total += col * env * ((core + halo) * along * 2.4 + headGlow);
+  }
+  return total;
+}
+
 // Everything a ray that leaves the scene sees. Only rays straight from the eye
 // look for near stars: a reflected or refracted one would cost the whole walk
 // again for a star the curved surface has smeared out of shape anyway.
 vec3 sky(vec3 o, vec3 d, bool primary) {
   vec3 s = d * uSkyRot;                                  // into the sky's own frame
-  vec3 color = backdrop(s) + distantStar(s);
+  vec3 color = backdrop(s) + distantStar(s) + shootingStars(s, primary);
   if (primary)
     color += nearStars((o - uSkyCenter) * uSkyRot, s, (uStreak * uShutter) * uSkyRot);
   return color;
@@ -1064,28 +1194,30 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
   vec3 color = A.x * body * s.base;
 
   // 2. Direct Phong lighting + shadow rays across all scene lights
-  for (int j = 0; j < NUM_LIGHTS; j++) {
-    if (uLightColor[j] == vec3(0.0)) continue;
-    vec3 toLight = uLightPos[j] - s.p;
-    float dist = length(toLight);
-    vec3 L = toLight / dist;
-    float diff = dot(n, L);
-    if (diff <= 0.0 || dot(ng, L) <= 0.0) continue;
+  if (A.y * body > 0.0 || A.z * uSpecularScale > 0.0) {
+    for (int j = 0; j < NUM_LIGHTS; j++) {
+      if (uLightColor[j] == vec3(0.0)) continue;
+      vec3 toLight = uLightPos[j] - s.p;
+      float dist = length(toLight);
+      vec3 L = toLight / dist;
+      float diff = dot(n, L);
+      if (diff <= 0.0 || dot(ng, L) <= 0.0) continue;
 
-    // Shadow ray: transmittance() attenuates through glass & blocks opaque hits
-    vec3 vis = uShadows ? transmittance(s.p + ng * EPS, L, dist) : vec3(1.0);
-    if (vis == vec3(0.0)) continue;
+      // Shadow ray: transmittance() attenuates through glass & blocks opaque hits
+      vec3 vis = uShadows ? transmittance(s.p + ng * EPS, L, dist) : vec3(1.0);
+      if (vis == vec3(0.0)) continue;
 
-    // Inverse-square attenuation normalized to 1 at light ref distance,
-    // clamped beyond reach so the ship stays lit during warp
-    float ref2 = uLightRange[j].x * uLightRange[j].x;
-    float dAtt = min(dist, uLightRange[j].y);
-    float att  = uAttenuation ? 2.0 * ref2 / (ref2 + dAtt * dAtt) : 1.0;
+      // Inverse-square attenuation normalized to 1 at light ref distance,
+      // clamped beyond reach so the ship stays lit during warp
+      float ref2 = uLightRange[j].x * uLightRange[j].x;
+      float dAtt = min(dist, uLightRange[j].y);
+      float att  = uAttenuation ? 2.0 * ref2 / (ref2 + dAtt * dAtt) : 1.0;
 
-    // Specular highlight is added in full so glass still glints
-    float rdotv = max(dot(V, reflect(-L, n)), 0.0);
-    float spec  = rdotv > 0.0 ? pow(rdotv, A.w * uShininessScale) : 0.0;
-    color += uLightColor[j] * vis * att * (A.y * body * s.base * diff + A.z * spec);
+      // Specular highlight is added in full so glass still glints
+      float rdotv = max(dot(V, reflect(-L, n)), 0.0);
+      float spec  = rdotv > 0.0 ? pow(rdotv, A.w) : 0.0;
+      color += uLightColor[j] * vis * att * (A.y * body * s.base * diff + A.z * uSpecularScale * spec);
+    }
   }
 
   // 3. Self-lit windows/lights stay bright on the night side
@@ -1182,7 +1314,7 @@ bool stepBounce(inout Path p, Surface s, int id, out Path pushed, out bool hasPu
       if (maxComponent(weaker.weight) > 0.01) { pushed = weaker; hasPushed = true; }
     }
   } else {
-    // 3. Mirror reflection (polished hull, copper dish)
+    // 3. Mirror reflection (polished hull, mirror planet)
     p.o = s.p + faceforward(s.ng, p.d, s.ng) * EPS;
     p.d = reflect(p.d, faceforward(s.n, p.d, s.ng));
     p.weight *= B.x;
@@ -1211,8 +1343,9 @@ void main() {
   for (int i = 0; i < ungrouped; i++) {
     if (uMatB[i].y <= 0.0) continue;
     vec3 po = toObject(i, vec3(0.0), 1.0);
-    bool inside = isWavyCube(i) ? wavyBoxEval(po) < 0.0
-      : (uInfo[i].x == BOX ? max(abs(po.x), max(abs(po.y), abs(po.z))) < 1.0 : dot(po, po) < 1.0);
+    bool inside = isWavyHex(i) ? wavyHexEval(po) < 0.0
+      : (uInfo[i].x == HEX_PRISM ? hexPrismEval(po) < 0.0
+      : (uInfo[i].x == BOX ? max(abs(po.x), max(abs(po.y), abs(po.z))) < 1.0 : dot(po, po) < 1.0));
     if (inside) { initAbsorb = uMatD[i].rgb; break; }
   }
   Path p = Path(vec3(0.0), d0, vec3(1.0), initAbsorb, 0.0, 0);

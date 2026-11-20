@@ -125,6 +125,10 @@
     #controls .row { display: grid; grid-template-columns: 1fr auto; gap: 0.15em 0.5em; margin: 0.5em 0; }
     #controls .row[hidden] { display: none; }
     #controls .row input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: rgb(var(--glow)); }
+    #controls .row select {
+      grid-column: 1 / -1; width: 100%; margin: 0; padding: 0.2em 0.3em; font: inherit; color: var(--ink);
+      background: rgba(8, 22, 40, 0.75); border: 1px solid rgba(var(--glow), 0.35); border-radius: 4px;
+    }
     #perfHud {
       position: fixed;
       top: calc(20px + env(safe-area-inset-top));
@@ -274,9 +278,17 @@
       <input type="range" id="mirrorWarp" min="0" max="1" step="0.01" value="0"></label>
     <label class="row">Glass index of refraction <output for="ior"></output>
       <input type="range" id="ior" min="1" max="2.4" step="0.01" value="1.5"></label>
+    <label class="row">Texture filtering
+      <select id="filter">
+        <option value="nearest">Nearest</option>
+        <option value="linear">Linear</option>
+        <option value="trilinear">Mipmap (trilinear)</option>
+        <option value="aniso" selected>Mipmap + anisotropic</option>
+      </select></label>
     <div class="checks">
       <label><input type="checkbox" id="shadows" checked> Shadows</label>
       <label><input type="checkbox" id="attenuation" checked> Attenuation</label>
+      <label><input type="checkbox" id="showLod"> Show mip levels</label>
     </div>
   </details>
   <div id="perfHud" aria-live="off">

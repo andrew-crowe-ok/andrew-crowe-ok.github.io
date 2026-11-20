@@ -879,6 +879,7 @@ function createSkinGenerator(gl, { scale = 1 } = {}) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, clampV ? gl.CLAMP_TO_EDGE : gl.REPEAT);
     if (aniso && mipmapped) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, maxAniso);
+    tex._mipmapped = mipmapped;   // main.js's filter switch only touches these
     return tex;
   }
 

@@ -124,6 +124,7 @@ uniform vec2 uLightRange[NUM_LIGHTS];   // distance at which attenuation is 1, a
 // ---- controls --------------------------------------------------------------
 uniform int uBounces;
 uniform bool uShadows, uAttenuation;
+uniform bool uShowLod;          // tint textured surfaces by mip level
 uniform float uMirrorReflect, uMirrorFresnel, uMirrorWarp;
 
 uniform sampler2D uTex[TEXTURE_UNITS];
@@ -156,6 +157,22 @@ vec2 texSize(int unit) {
 ${textureSwitch(s => `vec2(textureSize(${s}, 0))`)}
   }
   return vec2(1.0);
+}
+// The mip level isotropic filtering picks: log2 of the footprint's longer axis
+// in texels. Below 0 the texture is magnified; GLSL ES has no textureQueryLod.
+float mipLevel(int unit, vec2 gx, vec2 gy) {
+  vec2 size = texSize(unit);
+  return log2(max(length(gx * size), length(gy * size)));
+}
+// Show-mip-levels overlay colors: magnified (level 0 and below) white, then
+// 1 red, 2 orange, 3 yellow, 4 green, 5 cyan, 6 blue, 7+ violet, blended
+// between levels the way trilinear filtering blends them
+vec3 mipTint(float lod) {
+  const vec3 C[8] = vec3[8](vec3(1.0), vec3(1.0, 0.15, 0.1), vec3(1.0, 0.55, 0.1), vec3(1.0, 0.95, 0.15),
+    vec3(0.2, 0.9, 0.25), vec3(0.15, 0.85, 0.95), vec3(0.2, 0.35, 1.0), vec3(0.8, 0.25, 1.0));
+  float l = clamp(lod, 0.0, 7.0);
+  int k = int(l);
+  return mix(C[k], C[min(k + 1, 7)], fract(l));
 }
 
 // ============================================================================
@@ -821,6 +838,8 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   vec4 tex = sampleTex(info.y, uv, d1, d2);
   s.base = tex.rgb;
   s.emit = tex.a;
+  // The texture's detail as brightness, its mip level as hue
+  if (uShowLod) s.base = mipTint(mipLevel(info.y, d1, d2)) * (0.25 + 0.75 * dot(s.base, vec3(0.3, 0.59, 0.11)));
   if (s.emissive) return s;
 
   if (info.w == BUMP_MAPPING) {
@@ -830,7 +849,7 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
       T = normalize(T - dot(T, s.ng) * s.ng);
       vec3 B = cross(s.ng, T);
       vec2 size = texSize(info.y);
-      float lod = max(log2(max(length(d1 * size), length(d2 * size))), 0.0);
+      float lod = max(mipLevel(info.y, d1, d2), 0.0);
       float scaleExp = exp2(lod);
       vec2 texel = scaleExp / size;
       vec2 du = vec2(texel.x, 0.0), dv = vec2(0.0, texel.y);

@@ -541,28 +541,35 @@ function resize() {
   const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
   const css = w * h;
   renderScale = Math.min(dpr, Math.sqrt(AUTO_PIXELS * pixelBudget / Math.max(css, 1)));
-  canvas.width = Math.max(1, Math.round(w * renderScale));
-  canvas.height = Math.max(1, Math.round(h * renderScale));
+  const nextW = Math.max(1, Math.round(w * renderScale));
+  const nextH = Math.max(1, Math.round(h * renderScale));
+  if (canvas.width !== nextW || canvas.height !== nextH) {
+    canvas.width = nextW;
+    canvas.height = nextH;
+  }
   if (resReadout) resReadout.textContent = `${Math.min(canvas.width, canvas.height)}p`;
   gl.viewport(0, 0, canvas.width, canvas.height);
-  const aspect = canvas.width / canvas.height;
+  const aspect = w / h;
   const fovy = aspect >= MIN_ASPECT ? BASE_FOVY
     : 2 * Math.atan(Math.tan(BASE_FOVY / 2) * MIN_ASPECT / aspect);
   projection = perspective(fovy, aspect, 0.1, 150);   // only its x and y scales matter now
 }
-window.addEventListener("resize", resize);
+let needsResize = false;
+window.addEventListener("resize", () => { needsResize = true; });
 resize();
 
 const adapt = { t0: null, frames: 0, ms: 0 };
 function adaptResolution(now, frameMs) {
   adapt.t0 ??= now;
   adapt.frames++; adapt.ms += frameMs;
-  if (now - adapt.t0 < ADAPT.window) return;
+  if (now - adapt.t0 < ADAPT.window) return false;
   const mean = adapt.ms / adapt.frames;
   adapt.t0 = now; adapt.frames = 0; adapt.ms = 0;
   const next = mean > ADAPT.slow ? Math.max(ADAPT.floor, pixelBudget * ADAPT.step)
     : mean < ADAPT.fast ? Math.min(1, pixelBudget / ADAPT.step) : pixelBudget;
-  if (next !== pixelBudget) { pixelBudget = next; resize(); }
+  if (next === pixelBudget) return false;
+  pixelBudget = next;
+  return true;
 }
 
 const perf = { t0: null, frames: 0, ready: false };
@@ -1073,6 +1080,10 @@ function render(time) {
   lastRafTime = time;
 
   const now = time / 1000;
+  if (adaptResolution(now, frameDelta) || needsResize) {
+    needsResize = false;
+    resize();
+  }
   if (sceneStart === null) { sceneStart = now; lastNow = now; }
   const dt = Math.min(Math.max(now - lastNow, 0), 0.1);   // capped, so a stalled tab doesn't lurch
   lastNow = now;
@@ -1104,7 +1115,6 @@ function render(time) {
   updateReveal(t);
   engageButton.disabled = offOrbit();
 
-  adaptResolution(now, frameDelta);
   updatePerfHud(now);
 
   requestAnimationFrame(render);

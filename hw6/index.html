@@ -74,12 +74,10 @@
       #engageButton:not(.revealed) { translate: none; }
     }
 
-    /* Live GLSL editor: a small glass panel in the top-right corner, in the
-       Engage button's style, folded away with summary (as in HW7) */
-    #shaderBox {
+    /* Texture-mapping controls and live GLSL editor: small glass panels in the
+       top corners, in the Engage button's style, folded away with summary (as in HW7) */
+    #texPanel, #shaderBox {
       position: fixed; top: calc(16px + env(safe-area-inset-top));
-      right: calc(16px + env(safe-area-inset-right));
-      max-width: calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right));
       max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
       overflow-y: auto; overscroll-behavior: contain;
       box-sizing: border-box; padding: 0.7em 0.95em;
@@ -89,8 +87,16 @@
       box-shadow: 0 0 12px rgba(var(--glow), 0.2);
       backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
     }
+    #texPanel {
+      left: calc(16px + env(safe-area-inset-left));
+      width: min(250px, calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    }
+    #shaderBox {
+      right: calc(16px + env(safe-area-inset-right));
+      max-width: calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right));
+    }
     #shaderBox[open] { width: min(560px, calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right))); }
-    #shaderBox summary {
+    #texPanel summary, #shaderBox summary {
       display: flex; align-items: center; justify-content: space-between; gap: 0.9em;
       white-space: nowrap;
       cursor: pointer; list-style: none; user-select: none;
@@ -98,13 +104,63 @@
       letter-spacing: 0.25em; text-transform: uppercase;
       text-shadow: 0 0 8px rgba(var(--glow), 0.8);
     }
+    #texPanel summary::-webkit-details-marker,
     #shaderBox summary::-webkit-details-marker { display: none; }
-    #shaderBox summary::after { content: "+"; letter-spacing: 0; }
-    #shaderBox[open] summary::after { content: "\2212"; }
-    #shaderBox[open] summary { margin-bottom: 0.7em; }
-    /* No editing on phones and narrow screens */
+    #texPanel summary::after, #shaderBox summary::after { content: "+"; letter-spacing: 0; }
+    #texPanel[open] summary::after, #shaderBox[open] summary::after { content: "\2212"; }
+    #texPanel[open] summary, #shaderBox[open] summary { margin-bottom: 0.7em; }
+
+    #texPanel form { margin: 0; }
+    #texPanel .row { display: grid; grid-template-columns: 1fr auto; align-items: center;
+                     gap: 0.15em 0.5em; margin: 0.5em 0; }
+    #texPanel .row[hidden] { display: none; }
+    #texPanel .row input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: rgb(var(--glow)); }
+    #texPanel .row input:disabled { opacity: 0.35; }
+    #texPanel output { font-variant-numeric: tabular-nums; opacity: 0.8; }
+    #texPanel select {
+      font: 500 12px / 1.2 "Segoe UI", system-ui, sans-serif; color: var(--ink);
+      background: rgba(8, 22, 40, 0.85); border: 1px solid rgba(var(--glow), 0.35);
+      border-radius: 6px; padding: 0.2em 0.35em; cursor: pointer; outline: none;
+    }
+    #texPanel select:hover, #texPanel select:focus-visible { border-color: rgba(var(--glow), 0.85); }
+    #texPanel h3 {
+      margin: 0.9em 0 0.2em; font: 600 10px / 1 "Segoe UI", system-ui, sans-serif;
+      letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.6;
+    }
+    #texPanel .checks { display: flex; flex-wrap: wrap; gap: 0.5em 1.1em; margin-top: 0.7em; }
+    #texPanel .checks label { display: flex; align-items: center; gap: 0.4em; cursor: pointer; }
+    #texPanel .checks input { margin: 0; accent-color: rgb(var(--glow)); }
+    #texReset {
+      margin-top: 0.8em; width: 100%;
+      font: 600 11px / 1.2 "Segoe UI", system-ui, sans-serif; color: var(--ink);
+      background: rgba(8, 22, 40, 0.75); border: 1px solid rgba(var(--glow), 0.35);
+      border-radius: 7px; padding: 0.42em 0.8em; cursor: pointer;
+    }
+    #texReset:hover, #texReset:focus-visible {
+      border-color: rgba(var(--glow), 0.85); background: rgba(18, 44, 76, 0.85); outline: none;
+    }
+
+    /* Phones and narrow screens: no GLSL editor, and the texture panel starts
+       compact in the corner */
     @media (pointer: coarse), (max-width: 600px) {
       #shaderBox { display: none; }
+      #texPanel {
+        top: calc(12px + env(safe-area-inset-top));
+        left: calc(12px + env(safe-area-inset-left));
+        width: auto;
+        max-width: calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right));
+        max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+      }
+      #texPanel[open] {
+        width: min(250px, calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+      }
+    }
+    /* Finger-sized targets on touch screens */
+    @media (pointer: coarse) {
+      #texPanel { font-size: 14px; }
+      #texPanel summary { padding: 0.4em 0; }
+      #texPanel .row input[type=range] { height: 28px; }
+      #texPanel .checks input { width: 20px; height: 20px; }
     }
 
     #shaderBox .tabs { display: flex; gap: 0.4em; margin-bottom: 0.45em; }
@@ -220,6 +276,58 @@
   <div id="warpFlash" class="wash"></div>
   <div id="fade" class="wash"></div>
   <button id="engageButton">Engage</button>
+
+  <details id="texPanel" open>
+    <summary>Texture mapping</summary>
+    <form id="texForm" onsubmit="return false">
+      <label class="row">View
+        <select id="texView" name="view">
+          <option value="0" selected>Shaded</option>
+          <option value="1">Texture only</option>
+          <option value="2">UV coordinates</option>
+          <option value="3">Height field</option>
+          <option value="4">Normals</option>
+        </select></label>
+      <label class="row">Relief
+        <select id="texRelief" name="relief">
+          <option value="0" selected>As designed</option>
+          <option value="1">Bump map all</option>
+          <option value="2">Flat</option>
+        </select></label>
+
+      <h3>Coordinates</h3>
+      <label class="row">Tiling <output for="texTiling"></output>
+        <input type="range" id="texTiling" name="tiling" min="0.25" max="8" step="0.25" value="1"></label>
+      <label class="row">Scroll <output for="texScroll"></output>
+        <input type="range" id="texScroll" name="scroll" min="-0.5" max="0.5" step="0.01" value="0"></label>
+      <label class="row">Warp <output for="texWarp"></output>
+        <input type="range" id="texWarp" name="warp" min="0" max="0.05" step="0.001" value="0"></label>
+
+      <h3>Relief</h3>
+      <label class="row">Bump strength <output for="texBumpGain"></output>
+        <input type="range" id="texBumpGain" name="bumpGain" min="0" max="5" step="0.05" value="1"></label>
+      <label class="row">Bump sample width <output for="texBumpWidth"></output>
+        <input type="range" id="texBumpWidth" name="bumpWidth" min="1" max="8" step="0.5" value="1"></label>
+      <label class="row">Normal-map strength <output for="texNormalGain"></output>
+        <input type="range" id="texNormalGain" name="normalGain" min="0" max="5" step="0.05" value="1"></label>
+      <div class="checks">
+        <label><input type="checkbox" id="texInvert" name="invertHeight"> Invert height</label>
+        <label><input type="checkbox" id="texFlipGreen" name="flipGreen"> Flip green</label>
+      </div>
+
+      <h3>Filtering</h3>
+      <label class="row">Minify
+        <select id="texFilter" name="filter">
+          <option value="0">Nearest</option>
+          <option value="1">Bilinear</option>
+          <option value="2" selected>Trilinear (mipmaps)</option>
+        </select></label>
+      <label class="row">Anisotropy <output for="texAniso"></output>
+        <input type="range" id="texAniso" name="aniso" min="1" max="16" step="1" value="1"></label>
+
+      <button type="button" id="texReset">Reset</button>
+    </form>
+  </details>
 
   <details id="shaderBox">
     <summary>GLSL Shader</summary>

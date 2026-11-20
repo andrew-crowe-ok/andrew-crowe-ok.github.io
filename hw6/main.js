@@ -56,12 +56,24 @@ uniform sampler2D uNormalMap;
 // 2 = emissive: uTexture's color, unlit
 uniform int uMapping;
 
+// Texture-mapping panel (top left), uploaded every frame by main.js
+uniform float uTiling;       // UV repeats
+uniform vec2 uUVOffset;      // UV scroll, advanced each frame
+uniform float uUVWarp;       // amplitude of a sine ripple in the UVs
+uniform int uView;           // 0 shaded, 1 texture only, 2 UVs, 3 height, 4 normals
+uniform int uRelief;         // 0 as designed, 1 bump map everything, 2 flat
+uniform float uBumpGain;     // multiplies each material's uBumpScale
+uniform float uBumpWidth;    // bump finite-difference step, in texels
+uniform bool uInvertHeight;  // bright is high instead of dark
+uniform float uNormalGain;   // tilt of the normal-map normals
+uniform bool uFlipGreen;     // DirectX (-Y) normal-map convention
+
 out vec4 fragColor;
 
 // Bump height: dark is high (1 - Rec. 601 luminance); a negative uBumpScale flips it
 float height(vec2 uv) {
-  vec3 c = texture(uTexture, uv).rgb;
-  return 1.0 - dot(c, vec3(0.299, 0.587, 0.114));
+  float luma = dot(texture(uTexture, uv).rgb, vec3(0.299, 0.587, 0.114));
+  return uInvertHeight ? luma : 1.0 - luma;
 }
 
 // Phong diffuse + specular from one light; ambient is added once in main()
@@ -74,9 +86,21 @@ vec3 phong(vec3 N, vec3 V, vec3 lightPos, vec3 lightColor, vec3 baseColor) {
 }
 
 void main() {
+  // The texture coordinates, tiled, scrolled and rippled by the panel
+  vec2 uv = vTexCoord * uTiling + uUVOffset + uUVWarp * sin(vTexCoord.yx * 40.0);
+  if (uView == 2) {
+    fragColor = vec4(fract(uv), 0.0, 1.0);
+    return;
+  }
+  vec3 baseColor = texture(uTexture, uv).rgb;
+
   // Emissive: the surface gives off its own light, so skip lighting entirely
-  if (uMapping == 2) {
-    fragColor = vec4(texture(uTexture, vTexCoord).rgb, 1.0);
+  if (uMapping == 2 || uView == 1) {
+    fragColor = vec4(baseColor, 1.0);
+    return;
+  }
+  if (uView == 3) {
+    fragColor = vec4(vec3(height(uv)), 1.0);
     return;
   }
 
@@ -86,26 +110,35 @@ void main() {
   vec3 B = cross(N, T);
   mat3 TBN = mat3(T, B, N);
 
-  vec3 baseColor;
-  vec3 n;
+  // Which relief: the part's own, bump mapping for all, or none
+  int relief = uRelief == 1 ? 0 : uRelief == 2 ? -1 : uMapping;
+  vec3 n = vec3(0.0, 0.0, 1.0);
 
-  if (uMapping == 0) {
-    // Bump mapping: tilt the normal against the gradient of the height field
-    vec2 du = vec2(1.0 / float(textureSize(uTexture, 0).x), 0.0);
-    vec2 dv = vec2(0.0, 1.0 / float(textureSize(uTexture, 0).y));
-    float dhdu = (height(vTexCoord + du) - height(vTexCoord - du)) * 0.5;
-    float dhdv = (height(vTexCoord + dv) - height(vTexCoord - dv)) * 0.5;
-    n = normalize(vec3(-uBumpScale * dhdu, -uBumpScale * dhdv, 1.0));
-    baseColor = texture(uTexture, vTexCoord).rgb;
-  } else {
+  if (relief == 0) {
+    // Bump mapping: tilt the normal against the gradient of the height field.
+    // A wider step averages the slope over more texels; dividing by it keeps
+    // the slope per texel, so width softens the relief without deepening it.
+    vec2 texel = 1.0 / vec2(textureSize(uTexture, 0));
+    vec2 du = vec2(uBumpWidth * texel.x, 0.0);
+    vec2 dv = vec2(0.0, uBumpWidth * texel.y);
+    float dhdu = (height(uv + du) - height(uv - du)) * 0.5 / uBumpWidth;
+    float dhdv = (height(uv + dv) - height(uv - dv)) * 0.5 / uBumpWidth;
+    float k = uBumpScale * uBumpGain;
+    n = normalize(vec3(-k * dhdu, -k * dhdv, 1.0));
+  } else if (relief == 1) {
     // Normal mapping: uNormalMap stores the tangent-space normal in [0, 1],
     // baked from the same height field as uTexture's paint (textures.js)
-    n = normalize(texture(uNormalMap, vTexCoord).rgb * 2.0 - 1.0);
-    baseColor = texture(uTexture, vTexCoord).rgb;
+    n = texture(uNormalMap, uv).rgb * 2.0 - 1.0;
+    if (uFlipGreen) n.y = -n.y;
+    n = normalize(vec3(n.xy * uNormalGain, n.z));
   }
 
   vec3 Ngeom = N;              // smooth surface normal, before bump/normal mapping
   N = normalize(TBN * n);
+  if (uView == 4) {
+    fragColor = vec4(N * 0.5 + 0.5, 1.0);
+    return;
+  }
   vec3 V = normalize(-vPosition);
 
   vec3 color = uKa * baseColor
@@ -178,7 +211,7 @@ const FILL = { pos: [-12, -5, -3], color: [0.12, 0.17, 0.3] };
 const VS_PREFIX = `#version 300 es\n${LENS_GLSL}\n`;
 const FS_PREFIX = `#version 300 es\n`;
 let program = null;
-let uModelView, uProjection, uLightPos, uLight2Pos, uMapping, uMaterial, setLens;
+let uModelView, uProjection, uLightPos, uLight2Pos, uMapping, uMaterial, uTexPanel, setLens;
 function useSceneProgram(vsBody, fsBody) {
   const next = createProgram(VS_PREFIX + vsBody, FS_PREFIX + fsBody);
   if (program) gl.deleteProgram(program);
@@ -192,6 +225,8 @@ function useSceneProgram(vsBody, fsBody) {
   uMapping = loc("uMapping");
   uMaterial = Object.fromEntries(["uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere"]
     .map(name => [name, loc(name)]));
+  uTexPanel = Object.fromEntries(["uTiling", "uUVOffset", "uUVWarp", "uView", "uRelief", "uBumpGain",
+    "uBumpWidth", "uInvertHeight", "uNormalGain", "uFlipGreen"].map(name => [name, loc(name)]));
   setLens = lensUniforms(program);
   gl.uniform1i(loc("uTexture"), 0);
   gl.uniform1i(loc("uNormalMap"), 1);
@@ -256,6 +291,35 @@ const torusMesh = createMesh(createTorus(0.04, 96, 16, 24));  // saucer rim: thi
 const sphereMesh = createMesh(createSphere(28, 28));
 const planetMesh = createMesh(createSphere(64, 64));  // finer than sphereMesh: it fills the view
 
+// The texture-mapping panel's settings (#texPanel), read from its inputs by
+// syncTexPanel below. These are the defaults, which leave the scene as designed.
+const texPanel = {
+  view: 0, relief: 0, tiling: 1, scroll: 0, warp: 0,
+  bumpGain: 1, bumpWidth: 1, invertHeight: false, normalGain: 1, flipGreen: false,
+  filter: 2, aniso: 1
+};
+let uvScroll = 0;   // u offset, advanced by texPanel.scroll repeats a second
+
+// Filtering for every mipmapped texture: 0 nearest, 1 bilinear (no mipmaps),
+// 2 trilinear; anisotropy where the extension is offered. The video texture
+// has no mipmaps and keeps its own LINEAR filter.
+const anisoExt = gl.getExtension("EXT_texture_filter_anisotropic");
+const MAX_ANISO = anisoExt ? gl.getParameter(anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 1;
+const mipmappedTextures = [];
+function applyFiltering(texture) {
+  // Unit 0 is rebound by every draw, so borrowing it here is harmless
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  const f = texPanel.filter;
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, [gl.NEAREST, gl.LINEAR, gl.LINEAR_MIPMAP_LINEAR][f]);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f === 0 ? gl.NEAREST : gl.LINEAR);
+  if (anisoExt) gl.texParameterf(gl.TEXTURE_2D, anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, texPanel.aniso);
+}
+function addMipmapped(texture) {
+  mipmappedTextures.push(texture);
+  applyFiltering(texture);
+}
+
 // An image file: a 1x1 gray placeholder until it decodes, then the image with mipmaps
 function loadTexture(url) {
   const texture = gl.createTexture();
@@ -270,7 +334,7 @@ function loadTexture(url) {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);  // images start at the top row, texture coordinates at the bottom
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
     gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    addMipmapped(texture);
   };
   image.src = url;
   return texture;
@@ -287,7 +351,7 @@ function createDataTexture({ color, size }) {
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, color);
   gl.generateMipmap(gl.TEXTURE_2D);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  addMipmapped(texture);
   return texture;
 }
 
@@ -395,7 +459,8 @@ window.addEventListener("mousemove", e => {
 
 const CONTROL_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "s"];
 document.addEventListener("keydown", e => {
-  if (!CONTROL_KEYS.includes(e.key) || e.target instanceof HTMLTextAreaElement) return;
+  if (!CONTROL_KEYS.includes(e.key) || e.target instanceof HTMLTextAreaElement ||
+      e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   e.preventDefault();         // arrows would scroll the page even when ignored
   if (offOrbit()) return;
   const step = 0.2;
@@ -537,6 +602,7 @@ function render(time) {
 
   gl.uniformMatrix4fv(uProjection, false, projection);
   setLens();
+  uploadTexPanel(dt);
   // The lights are fixed in the scene, so they ride whatever the view is now
   gl.uniform3fv(uLightPos, transformPoint(view, SUN.pos));
   gl.uniform3fv(uLight2Pos, transformPoint(view, FILL.pos));
@@ -549,6 +615,68 @@ function render(time) {
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
+
+// ---------------------------------------------------------------------------
+// Texture-mapping panel (#texPanel in index.html)
+// ---------------------------------------------------------------------------
+
+// Sent every frame rather than on change, so a program relinked from the
+// GLSL editor picks the settings up without being told
+function uploadTexPanel(dt) {
+  const u = uTexPanel, p = texPanel;
+  uvScroll = (uvScroll + p.scroll * dt) % 1;
+  gl.uniform1f(u.uTiling, p.tiling);
+  gl.uniform2f(u.uUVOffset, uvScroll, 0);
+  gl.uniform1f(u.uUVWarp, p.warp);
+  gl.uniform1i(u.uView, p.view);
+  gl.uniform1i(u.uRelief, p.relief);
+  gl.uniform1f(u.uBumpGain, p.bumpGain);
+  gl.uniform1f(u.uBumpWidth, p.bumpWidth);
+  gl.uniform1i(u.uInvertHeight, p.invertHeight);
+  gl.uniform1f(u.uNormalGain, p.normalGain);
+  gl.uniform1i(u.uFlipGreen, p.flipGreen);
+}
+
+{
+  const form = document.getElementById("texForm");
+  const fmt = {
+    tiling: v => v.toFixed(2) + "×",
+    scroll: v => (v > 0 ? "+" : "") + v.toFixed(2) + " /s",
+    warp: v => v.toFixed(3),
+    bumpGain: v => v.toFixed(2) + "×",
+    bumpWidth: v => v + (v === 1 ? " texel" : " texels"),
+    normalGain: v => v.toFixed(2) + "×",
+    aniso: v => v + "×"
+  };
+  const anisoInput = form.elements.aniso;
+  anisoInput.max = MAX_ANISO;
+  if (!anisoExt) anisoInput.closest(".row").hidden = true;
+
+  // Read every input into texPanel and its readout; refilter on a change
+  function syncTexPanel() {
+    const before = texPanel.filter + "/" + texPanel.aniso;
+    for (const el of form.elements) {
+      if (!(el.name in texPanel)) continue;
+      const v = el.type === "checkbox" ? el.checked : Number(el.value);
+      texPanel[el.name] = v;
+      const out = form.querySelector(`output[for="${el.id}"]`);
+      if (out && fmt[el.name]) out.textContent = fmt[el.name](v);
+    }
+    // Anisotropy only matters on top of mipmapped (trilinear) filtering
+    anisoInput.disabled = texPanel.filter !== 2;
+    if (texPanel.filter !== 2) texPanel.aniso = 1;
+    if (texPanel.filter + "/" + texPanel.aniso !== before) mipmappedTextures.forEach(applyFiltering);
+  }
+
+  form.addEventListener("input", syncTexPanel);
+  form.addEventListener("change", syncTexPanel);
+  document.getElementById("texReset").addEventListener("click", () => {
+    form.reset();       // back to each input's value in the HTML
+    uvScroll = 0;
+    syncTexPanel();
+  });
+  syncTexPanel();
+}
 
 // ---------------------------------------------------------------------------
 // Floating live-code GLSL editor (#shaderBox in index.html)
@@ -584,7 +712,9 @@ requestAnimationFrame(render);
     "sin", "cos", "acos", "fract", "floor", "texture", "textureSize", "transpose", "inverse",
     "gl_Position", "project", "phong", "height",
     "uModelView", "uProjection", "uLightPos", "uLight2Pos", "uLightColor", "uLight2Color",
-    "uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere", "uTexture", "uNormalMap", "uMapping"]);
+    "uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere", "uTexture", "uNormalMap", "uMapping",
+    "uTiling", "uUVOffset", "uUVWarp", "uView", "uRelief", "uBumpGain", "uBumpWidth", "uInvertHeight",
+    "uNormalGain", "uFlipGreen"]);
   const GLSL_TOKEN = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|^[ \t]*#[^\n]*|(?:\b\d+\.\d*(?:[eE][+-]?\d+)?[fF]?|\B\.\d+(?:[eE][+-]?\d+)?[fF]?|\b\d+(?:[eE][+-]?\d+)?[uUfF]?\b)|\b[A-Za-z_]\w*\b)/gm;
 
   function highlightGLSL(src) {
@@ -609,7 +739,7 @@ requestAnimationFrame(render);
 
   const TAB_HINTS = {
     vertex: "Model-view transform, inverse-transpose normals, tangents &amp; the lens. <code>#version</code> and <code>project()</code> are prepended. Uniforms: <code>uModelView</code> <code>uProjection</code>",
-    fragment: "Bump/normal mapping, two-light Phong &amp; the planet's rim glow. Uniforms: <code>uMapping</code> (0 bump, 1 normal, 2 emissive) <code>uKa..uShininess</code> <code>uBumpScale</code> <code>uAtmosphere</code>"
+    fragment: "Bump/normal mapping, two-light Phong &amp; the planet's rim glow. Uniforms: <code>uMapping</code> (0 bump, 1 normal, 2 emissive) <code>uKa..uShininess</code> <code>uBumpScale</code> <code>uAtmosphere</code>, plus the Texture mapping panel's <code>uTiling</code> <code>uView</code> <code>uRelief</code> &hellip;"
   };
 
   const editor = document.getElementById("shaderEditor");

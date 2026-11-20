@@ -255,13 +255,15 @@ bool hitCone(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part
   if (t0 > tmin && t0 < t) {
     vec3 p = o + d * t0;
     if (abs(p.y) <= 1.0) {
-      t = t0; n = vec3(p.x, k * (1.0 - p.y), p.z); part = 0; found = true;
+      vec3 cn = vec3(p.x, k * (1.0 - p.y), p.z);
+      t = t0; n = dot(cn, cn) > 1e-12 ? cn : vec3(0.0, 1.0, 0.0); part = 0; found = true;
     }
   }
   if (!found && t1 > tmin && t1 < t) {
     vec3 p = o + d * t1;
     if (abs(p.y) <= 1.0) {
-      t = t1; n = vec3(p.x, k * (1.0 - p.y), p.z); part = 0; found = true;
+      vec3 cn = vec3(p.x, k * (1.0 - p.y), p.z);
+      t = t1; n = dot(cn, cn) > 1e-12 ? cn : vec3(0.0, 1.0, 0.0); part = 0; found = true;
     }
   }
   if (abs(d.y) > 1e-12) {
@@ -391,6 +393,27 @@ bool hitWavyBox(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int p
     prevT = curT; prevV = curV;
   }
   return false;
+}
+
+float wavyBoxChord(vec3 o, vec3 d, float tmin, float tmax) {
+  vec2 span = boxSpan(o, d, vec3(1.0, 1.12, 1.0) + vec3(2e-3));
+  float t0 = max(span.x, tmin), t1 = min(span.y, tmax);
+  if (t0 >= t1) return 0.0;
+  float dt = (t1 - t0) / 16.0;
+  float prevV = wavyBoxEval(o + d * t0);
+  float chord = 0.0;
+  for (int s = 1; s <= 16; s++) {
+    float curV = wavyBoxEval(o + d * (t0 + dt * float(s)));
+    if (prevV <= 0.0 && curV <= 0.0) {
+      chord += dt;
+    } else if ((prevV <= 0.0) != (curV <= 0.0)) {
+      float denom = curV - prevV;
+      float frac = abs(denom) > 1e-12 ? clamp(-prevV / denom, 0.0, 1.0) : 0.5;
+      chord += dt * (prevV <= 0.0 ? frac : 1.0 - frac);
+    }
+    prevV = curV;
+  }
+  return chord;
 }
 
 bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
@@ -572,6 +595,7 @@ float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
 // How much of (tmin, tmax) the ray spends inside primitive i (glass box or sphere)
 float glassChord(int i, vec3 o, vec3 d, float tmin, float tmax) {
   vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
+  if (isWavyCube(i)) return wavyBoxChord(oo, dd, tmin, tmax);
   if (uInfo[i].x == BOX) {
     vec2 span = boxSpan(oo, dd, vec3(1.0));
     return max(min(span.y, tmax) - max(span.x, tmin), 0.0);
@@ -1182,7 +1206,16 @@ void main() {
 
   Path stack[STACK_SIZE];
   int top = 0;
-  Path p = Path(vec3(0.0), d0, vec3(1.0), vec3(0.0), 0.0, 0);
+  vec3 initAbsorb = vec3(0.0);
+  int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
+  for (int i = 0; i < ungrouped; i++) {
+    if (uMatB[i].y <= 0.0) continue;
+    vec3 po = toObject(i, vec3(0.0), 1.0);
+    bool inside = isWavyCube(i) ? wavyBoxEval(po) < 0.0
+      : (uInfo[i].x == BOX ? max(abs(po.x), max(abs(po.y), abs(po.z))) < 1.0 : dot(po, po) < 1.0);
+    if (inside) { initAbsorb = uMatD[i].rgb; break; }
+  }
+  Path p = Path(vec3(0.0), d0, vec3(1.0), initAbsorb, 0.0, 0);
   bool live = true;
   vec3 color = vec3(0.0);
 
@@ -1194,7 +1227,7 @@ void main() {
     }
     Hit h = trace(p.o, p.d, INF);
     if (h.id < 0) {
-      color += p.weight * sky(p.o, p.d, p.depth == 0);
+      color += p.weight * sky(p.o, p.d, segment == 0);
       live = false;
       continue;
     }

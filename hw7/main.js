@@ -14,9 +14,13 @@ function showError(message) {
   el.textContent = message;
   el.hidden = false;
 }
+let contextLost = false;
 window.addEventListener("error", e => showError(`The ray tracer stopped: ${e.message}`));
-canvas.addEventListener("webglcontextlost", () =>
-  showError("The GPU dropped the WebGL context. Reload the page, or lower the bounces with ?bounces=1."));
+canvas.addEventListener("webglcontextlost", e => {
+  e.preventDefault();
+  contextLost = true;
+  showError("The GPU dropped the WebGL context. Reload the page, or lower the bounces with ?bounces=2.");
+});
 
 const gl = canvas.getContext("webgl2", {
   alpha: false,
@@ -25,7 +29,10 @@ const gl = canvas.getContext("webgl2", {
   antialias: false,
   powerPreference: "high-performance"
 });
-if (!gl) showError("This browser has no WebGL 2, which the ray tracer needs.");
+if (!gl) {
+  showError("This browser has no WebGL 2, which the ray tracer needs.");
+  throw new Error("WebGL 2 unavailable");
+}
 
 function compile(type, source) {
   const shader = gl.createShader(type);
@@ -98,7 +105,6 @@ const NAV = { color: [0.35, 0.62, 1.0], ref: 0.85, reach: 1e6 };
 const cubeMesh = { shape: BOX, repeats: 1 };
 const cylinderMesh = { shape: CYLINDER, repeats: 3 };
 const hullMesh = { shape: CYLINDER, repeats: 1 };   // once around, to line up with the hull's caps
-const coneMesh = { shape: CONE, repeats: 1 };
 const torusMesh = { shape: TORUS, repeats: 1, tube: 0.04 };   // saucer rim
 const sphereMesh = { shape: SPHERE, repeats: 1 };
 const saucerMesh = sphereMesh, planetMesh = sphereMesh;
@@ -145,13 +151,6 @@ function bindSceneBlock(prog) {
 }
 bindSceneBlock(program);
 gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, sceneBuffer);
-
-// The three rows of an affine matrix, which is all the shader needs of it
-function affineRows(m, out, at) {
-  out[at]     = m[0]; out[at + 1] = m[4]; out[at + 2] = m[8];  out[at + 3] = m[12];
-  out[at + 4] = m[1]; out[at + 5] = m[5]; out[at + 6] = m[9];  out[at + 7] = m[13];
-  out[at + 8] = m[2]; out[at + 9] = m[6]; out[at + 10] = m[10]; out[at + 11] = m[14];
-}
 
 const unitOf = texture => texture ? (texture._unitIndex ?? -1) : -1;
 
@@ -325,6 +324,7 @@ function loadTexture(urls, thumbUrl) {
 
   let fullLoaded = false;
   function upload(img, isFlipped = false) {
+    if (contextLost || gl.isContextLost()) return;
     const unit = texture._unitIndex ?? 0;
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -481,6 +481,7 @@ function loadVideoTexture(sources) {
 
   let lastVideoTime = -1;
   function update() {
+    if (contextLost || gl.isContextLost()) return;
     if (video.readyState < video.HAVE_CURRENT_DATA || video.currentTime === lastVideoTime) return;
     lastVideoTime = video.currentTime;
     gl.activeTexture(gl.TEXTURE0 + (texture._unitIndex ?? 14));
@@ -533,10 +534,11 @@ let pixelBudget = 1;   // share of AUTO_PIXELS in use
 let projection, renderScale = 1;
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  const css = canvas.clientWidth * canvas.clientHeight;
+  const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
+  const css = w * h;
   renderScale = Math.min(dpr, Math.sqrt(AUTO_PIXELS * pixelBudget / Math.max(css, 1)));
-  canvas.width = Math.round(canvas.clientWidth * renderScale);
-  canvas.height = Math.round(canvas.clientHeight * renderScale);
+  canvas.width = Math.max(1, Math.round(w * renderScale));
+  canvas.height = Math.max(1, Math.round(h * renderScale));
   gl.viewport(0, 0, canvas.width, canvas.height);
   const aspect = canvas.width / canvas.height;
   const fovy = aspect >= MIN_ASPECT ? BASE_FOVY
@@ -603,9 +605,9 @@ for (const [id, { read, show }] of Object.entries(CONTROL_INPUTS)) {
 // camera movement is locked), and clicks, the wheel and the keys are ignored (camera.js).
 let dragRotX, dragRotY;      // mouse drag
 let camX, camY;              // arrow keys; w, s and the wheel zoom (camera.js)
-// The scene's own clock starts here, so a reset restarts the orbit and the
+// The scene's own clock starts on frame 1, so a reset restarts the orbit and the
 // planet's spin along with everything else
-let sceneStart = 0;
+let sceneStart = null;
 
 // Pointer input, mouse and touch alike. One pointer down drags the view
 // around. Two (fingers) pinch to zoom, as the wheel does, and move together to
@@ -786,7 +788,7 @@ function resetScene(time) {
   resetFlight();
   resetReveal();
 }
-resetScene(0);
+resetScene(null);
 
 const lightPosBuf = new Float32Array(9);
 const lightColorBuf = new Float32Array(9);
@@ -854,7 +856,7 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
     "maxComponent", "transmittance", "uMatA", "uMatB", "uMatC", "uMatD", "uMatE",
     "uLightPos", "uLightColor", "uLightRange", "uShadows", "uAttenuation", "uShininessScale",
     "uBounces", "NUM_LIGHTS", "EPS", "STACK_SIZE"]);
-  const GLSL_TOKEN = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|^[ \t]*#[^\n]*|\b(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[uUfF]?\b|\b[A-Za-z_]\w*\b)/gm;
+  const GLSL_TOKEN = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|^[ \t]*#[^\n]*|(?:\b\d+\.\d*(?:[eE][+-]?\d+)?[fF]?|\B\.\d+(?:[eE][+-]?\d+)?[fF]?|\b\d+(?:[eE][+-]?\d+)?[uUfF]?\b)|\b[A-Za-z_]\w*\b)/gm;
 
   function highlightGLSL(src) {
     let out = "", pos = 0;
@@ -919,7 +921,7 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
     renderCodeOverlay();
     const dirty = blocks.shadeLocal !== applied.shadeLocal || blocks.stepBounce !== applied.stepBounce;
     applyBtn.classList.toggle("pending", dirty);
-    if (errorEl.hidden) setStatus(dirty ? "Modified" : "Applied", dirty ? "modified" : "");
+    setStatus(dirty ? "Modified" : "Applied", dirty ? "modified" : "");
   }
   function selectTab(tab) {
     blocks[activeTab] = editor.value;
@@ -1033,14 +1035,16 @@ function uploadScene(view, t, ship) {
 // out to it, but never runs ahead of the clock or more than a frame behind.
 let lastNow = 0, lastDrawTime = 0, lastRafTime = 0;
 function render(time) {
+  if (contextLost) return;
   const interval = 1000 / MAX_FPS, elapsed = time - lastDrawTime;
-  if (elapsed < interval - 1) { requestAnimationFrame(render); return; }
-  lastDrawTime = Math.min(time, Math.max(lastDrawTime + interval, time - interval));
+  if (lastRafTime && elapsed < interval - 1) { requestAnimationFrame(render); return; }
+  lastDrawTime = lastRafTime ? Math.min(time, Math.max(lastDrawTime + interval, time - interval)) : time;
   const frameDelta = lastRafTime ? Math.min(time - lastRafTime, 200) : 16.67;
   lastRafTime = time;
 
   const now = time / 1000;
-  const dt = Math.min(now - lastNow, 0.1);   // capped, so a stalled tab doesn't lurch
+  if (sceneStart === null) { sceneStart = now; lastNow = now; }
+  const dt = Math.min(Math.max(now - lastNow, 0), 0.1);   // capped, so a stalled tab doesn't lurch
   lastNow = now;
   if (engageExpired(now - sceneStart)) resetScene(now);
   const t = now - sceneStart;   // scene clock

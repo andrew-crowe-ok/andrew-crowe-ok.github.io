@@ -312,6 +312,33 @@ function setSky(frame, streak) {
 const ANISO = gl.getExtension("EXT_texture_filter_anisotropic");
 const MAX_ANISO = ANISO ? gl.getParameter(ANISO.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 1;
 
+// Texture filtering (Week 11-1), switchable from the panel to compare:
+//   nearest    point sampling -- blocky up close, shimmering far away
+//   linear     bilinear blend of the 4 nearest texels, mip level 0 only, so
+//              still aliases under minification
+//   trilinear  bilinear within the two nearest mip levels, blended between them
+//   aniso      trilinear, plus up to MAX_ANISO taps along the footprint's long
+//              axis, so surfaces at a slant stay sharp
+// Only mipmapped textures (tagged _mipmapped) are switched: the video frame
+// and the sky backdrop have no mip chain, and the backdrop is sampled at level 0.
+const FILTER_MODES = {
+  nearest:   { min: gl.NEAREST, mag: gl.NEAREST, aniso: 1 },
+  linear:    { min: gl.LINEAR, mag: gl.LINEAR, aniso: 1 },
+  trilinear: { min: gl.LINEAR_MIPMAP_LINEAR, mag: gl.LINEAR, aniso: 1 },
+  aniso:     { min: gl.LINEAR_MIPMAP_LINEAR, mag: gl.LINEAR, aniso: MAX_ANISO }
+};
+let textureFilter = "aniso";
+// Binds to the texture's own unit, which keeps every unit's binding intact
+function applyFilter(texture) {
+  if (!texture?._mipmapped || texture._unitIndex === undefined) return;
+  const mode = FILTER_MODES[textureFilter];
+  gl.activeTexture(gl.TEXTURE0 + texture._unitIndex);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mode.min);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, mode.mag);
+  if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT, mode.aniso);
+}
+
 // Antelope canyon thumbnail (64x48) as an immediate placeholder on frame 1
 const ANTELOPE_THUMB = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAsICAoIBwsKCQoNDAsNERwSEQ8PESIZGhQcKSQrKigkJyctMkA3LTA9MCcnOEw5PUNFSElIKzZPVU5GVEBHSEX/2wBDAQwNDREPESESEiFFLicuRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUX/wAARCAAwAEADASIAAhEBAxEB/8QAGgABAAMBAQEAAAAAAAAAAAAABAIDBQABBv/EADEQAAIBAwICBwYHAAAAAAAAAAECAwAEESExEmETQUJRcYGRIiOCkqHBBTIzQ3Ki0f/EABgBAQEBAQEAAAAAAAAAAAAAAAECAAME/8QAGREBAQEBAQEAAAAAAAAAAAAAAAERAmES/9oADAMBAAIRAxEAPwD5SEMdnpaJLjR1z4UGN4u/WlI8O3HXrlbDEjlxqwPw1PDDfHy1SvQndyPOrlWMaiQ+ANdNOPeKQbIPUiq3lfrTJ5NUmVcaufWqHiGvvG9a2ixXLcMN0/tRJJ8jUEedWTIg2kOfGgSrJn2SSOdRerBhUUdu26rTI7e2xqn1rCSNSci6xS40I/fIPXpXKdeLkbaW1sNejAFTMNrkDoyTyrKUpsbxge4jH2pCSxxKQLkBj14GlX9RWGvb247JB8aNNDbKNSQObUWRYiMteEcwKFJa25yReyZovXjYTJBatrxE93tUaQRKMK2B/Kiy2UWdLts8hRnhCb3JxzWud68TYUktsu5HoKvWeFiBG2vdpWdGsYP6KfLSozGv5Y08lFEpjRW4gA94VB8RXLcfh6niReJz2qIJFJx0YPLgH+VcJWAyIzywAPtVaogz2wOOIA+NRa4tsaajlVBmlHY+oqDyyYyQB8dOhOS5hGyMfKiyzq2iofE7VzTnY49dqO8y9pgam0Y//9k=";
 
@@ -337,8 +364,8 @@ function loadTexture(urls, thumbUrl) {
     }
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
     gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT, MAX_ANISO);
+    texture._mipmapped = true;
+    applyFilter(texture);   // the panel's current mode, not just the default
   }
 
   if (thumbUrl) {
@@ -507,6 +534,11 @@ const TEXTURES = [planetTexture, saucerTexture, saucerNormalMap, deckTexture, de
   deflectorGlow, grilleGlow, impulseGlow, plasma.texture, backdropTexture];
 if (TEXTURES.length !== TEXTURE_UNITS) throw new Error("TEXTURE_UNITS is out of date");
 TEXTURES.forEach((texture, i) => { if (texture) texture._unitIndex = i; });
+function setTextureFilter(mode) {
+  if (!(mode in FILTER_MODES) || mode === textureFilter) return;
+  textureFilter = mode;
+  TEXTURES.forEach(applyFilter);
+}
 function bindTextures() {
   TEXTURES.forEach((texture, i) => {
     gl.activeTexture(gl.TEXTURE0 + i);
@@ -662,14 +694,16 @@ const CONTROL_INPUTS = {
   mirrorWarp:    { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
   ior:           { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
   shadows:       { read: el => el.checked },
-  attenuation:   { read: el => el.checked }
+  attenuation:   { read: el => el.checked },
+  filter:        { read: el => el.value, apply: setTextureFilter },
+  showLod:       { read: el => el.checked }
 };
 // The panel starts folded on small screens, where it would cover the scene
 if (MOBILE || innerWidth < 560) document.getElementById("controls").open = false;
 
 // The page's query string can preset any of them, e.g. ?bounces=0&shadows=0
 const presets = new URLSearchParams(location.search);
-for (const [id, { read, show }] of Object.entries(CONTROL_INPUTS)) {
+for (const [id, { read, show, apply }] of Object.entries(CONTROL_INPUTS)) {
   const input = document.getElementById(id);
   if (id === "mirrorFresnel" && !ENABLE_MIRROR_FRESNEL) {
     if (input) input.closest(".row").hidden = true;
@@ -685,6 +719,7 @@ for (const [id, { read, show }] of Object.entries(CONTROL_INPUTS)) {
   const update = () => {
     controls[id] = read(input);
     if (output && show) output.textContent = show(controls[id]);
+    apply?.(controls[id]);
   };
   input.addEventListener("input", update);
   update();
@@ -1110,6 +1145,7 @@ function uploadScene(view, t, ship) {
   gl.uniform1i(u.uBounces, controls.bounces);
   gl.uniform1i(u.uShadows, controls.shadows);
   gl.uniform1i(u.uAttenuation, controls.attenuation);
+  gl.uniform1i(u.uShowLod, controls.showLod);
   gl.uniform1f(u.uMirrorReflect, controls.mirrorReflect);
   gl.uniform1f(u.uMirrorFresnel, ENABLE_MIRROR_FRESNEL ? controls.mirrorFresnel : 0);
   gl.uniform1f(u.uMirrorWarp, controls.mirrorWarp);

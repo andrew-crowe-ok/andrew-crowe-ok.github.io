@@ -240,9 +240,10 @@ function fitGroup(mesh, modelView) {
   const cy = a1 * b12 + a5 * b13 + a9 * b14 + a13;
   const cz = a2 * b12 + a6 * b13 + a10 * b14 + a14;
 
-  const rx = mesh.shape === TORUS ? 1 + mesh.tube : mesh.shape === HEX_PRISM ? 2 / Math.sqrt(3) : 1;
-  const ry = mesh.shape === TORUS ? mesh.tube : 1;
-  const rz = mesh.shape === TORUS ? 1 + mesh.tube : 1;
+  const hexBound = 1.27 * MOON.apothem;
+  const rx = mesh.shape === TORUS ? 1 + mesh.tube : mesh.shape === HEX_PRISM ? ORBIT.radius + hexBound : 1;
+  const ry = mesh.shape === TORUS ? mesh.tube : mesh.shape === HEX_PRISM ? hexBound : 1;
+  const rz = mesh.shape === TORUS ? 1 + mesh.tube : mesh.shape === HEX_PRISM ? ORBIT.radius + hexBound : 1;
 
   // Arvo's transformed AABB extents along x, y, z
   const ex = Math.abs(m0) * rx + Math.abs(m4) * ry + Math.abs(m8) * rz;
@@ -685,12 +686,10 @@ function pixelAngle() {
 // ---------------------------------------------------------------------------
 // Ray tracer controls (index.html)
 // ---------------------------------------------------------------------------
-const ENABLE_MIRROR_FRESNEL = false;
 const controls = {};
 const CONTROL_INPUTS = {
   bounces:       { read: el => parseInt(el.value), show: v => `${v}` },
   mirrorReflect: { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
-  mirrorFresnel: { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
   mirrorWarp:    { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
   ior:           { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
   shadows:       { read: el => el.checked },
@@ -699,17 +698,12 @@ const CONTROL_INPUTS = {
   showLod:       { read: el => el.checked }
 };
 // The panel starts folded on small screens, where it would cover the scene
-if (MOBILE || innerWidth < 560) document.getElementById("controls").open = false;
+if (MOBILE || innerWidth <= 600) document.getElementById("controls").open = false;
 
 // The page's query string can preset any of them, e.g. ?bounces=0&shadows=0
 const presets = new URLSearchParams(location.search);
 for (const [id, { read, show, apply }] of Object.entries(CONTROL_INPUTS)) {
   const input = document.getElementById(id);
-  if (id === "mirrorFresnel" && !ENABLE_MIRROR_FRESNEL) {
-    if (input) input.closest(".row").hidden = true;
-    controls.mirrorFresnel = 0;
-    continue;
-  }
   const output = document.querySelector(`output[for="${id}"]`);
   if (MOBILE && id === "bounces" && !presets.has(id)) input.value = "2";
   if (presets.has(id)) {
@@ -981,7 +975,7 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
     "faceforward", "clamp", "max", "min", "mix", "pow", "exp", "sqrt", "abs", "smoothstep", "step",
     "maxComponent", "transmittance", "uMatA", "uMatB", "uMatC", "uMatD", "uMatE",
     "uLightPos", "uLightColor", "uLightRange", "uShadows", "uAttenuation",
-    "uMirrorReflect", "uMirrorFresnel", "uMirrorWarp",
+    "uMirrorReflect", "uMirrorWarp",
     "uBounces", "NUM_LIGHTS", "EPS", "STACK_SIZE"]);
   const GLSL_TOKEN = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|^[ \t]*#[^\n]*|(?:\b\d+\.\d*(?:[eE][+-]?\d+)?[fF]?|\B\.\d+(?:[eE][+-]?\d+)?[fF]?|\b\d+(?:[eE][+-]?\d+)?[uUfF]?\b)|\b[A-Za-z_]\w*\b)/gm;
 
@@ -1006,8 +1000,8 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
   }
 
   const TAB_HINTS = {
-    shadeLocal: "Direct Phong lighting, shadow rays, distance falloff, emission &amp; limb glow. Uniforms: <code>uShadows</code> <code>uAttenuation</code> <code>uMirrorReflect</code> <code>uMirrorFresnel</code> <code>uMatA..E</code>",
-    stepBounce: "Ray-tree recursion step: mirror reflection, Snell refraction, TIR &amp; Schlick Fresnel. Uniforms: <code>uBounces</code> <code>uMirrorReflect</code> <code>uMirrorFresnel</code> <code>B.x</code> (mirror) <code>B.y</code> (glass) <code>B.z</code> (IOR) <code>uMatD</code> (absorb)"
+    shadeLocal: "Direct Phong lighting, shadow rays, distance falloff, emission &amp; edge gleam. Uniforms: <code>uShadows</code> <code>uAttenuation</code> <code>uMirrorReflect</code> <code>uMatA..E</code>",
+    stepBounce: "Ray-tree recursion step: mirror reflection, Snell refraction, TIR &amp; Schlick Fresnel. Uniforms: <code>uBounces</code> <code>uMirrorReflect</code> <code>uMatB</code> (kr, kt, IOR) <code>uMatD</code> (absorb)"
   };
 
   const editor = document.getElementById("shaderEditor");
@@ -1147,9 +1141,9 @@ function uploadScene(view, t, ship) {
   gl.uniform1i(u.uAttenuation, controls.attenuation);
   gl.uniform1i(u.uShowLod, controls.showLod);
   gl.uniform1f(u.uMirrorReflect, controls.mirrorReflect);
-  gl.uniform1f(u.uMirrorFresnel, ENABLE_MIRROR_FRESNEL ? controls.mirrorFresnel : 0);
   gl.uniform1f(u.uMirrorWarp, controls.mirrorWarp);
   gl.uniform1f(u.uTime, t);
+  gl.uniform4f(u.uHexTorus, ORBIT.radius, MOON.apothem, MOON.halfAngle, moonSpin(t));
 
   gl.uniform3fv(u.uSkyCenter, scene.sky.center);
   gl.uniformMatrix3fv(u.uSkyRot, false, scene.sky.rot);
@@ -1188,7 +1182,7 @@ function render(time) {
   // where the ship is before anything is drawn.
   const ship = shipState(t);
   const moon = moonCenter(t);
-  const view = updateCamera(t, ship, freeView(now, dt, ship, moon, rotation, [camX, camY]),
+  const view = updateCamera(t, ship, freeView(now, dt, t, ship, moon, rotation, [camX, camY]),
     { x: dragRotX, y: dragRotY });
   lastView = view; lastShip = ship; lastTime = t;
 

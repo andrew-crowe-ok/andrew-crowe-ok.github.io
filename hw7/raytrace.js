@@ -3,7 +3,7 @@
 // The scene arrives as a list of primitives, each a unit shape (models.js's
 // conventions from HW6: sphere of radius 1, cylinder and cone along y in
 // [-1, 1], box [-1, 1]^3, torus of ring radius 1 in the xz plane, plus a
-// flat-top hexagonal prism of apothem 1 in xy and |z| <= 1) plus the
+// curved hexagonal torus section along the orbit in xz parameterized by uHexTorus) plus the
 // inverse of the model-view matrix that placed it. Everything happens in eye
 // space, the camera at the origin: a ray is carried into a primitive's own
 // space by that inverse, intersected with the unit shape there, and the normal
@@ -107,7 +107,7 @@ layout(std140) uniform Scene {
   ivec4 uInfo[MAX_PRIMS];         // shape, texture unit, normal map unit (-1 = none), mapping
   vec4 uMatA[MAX_PRIMS];          // ka, kd, ks, shininess
   vec4 uMatB[MAX_PRIMS];          // kr (mirror), kt (glass), index of refraction, bump scale
-  vec4 uMatC[MAX_PRIMS];          // atmosphere color, torus tube radius
+  vec4 uMatC[MAX_PRIMS];          // edge gleam color, torus tube radius
   vec4 uMatD[MAX_PRIMS];          // glass absorption per unit length, texture repeats around u
   vec4 uMatE[MAX_PRIMS];          // glow (emission's strength), group (-1 = none),
                                   //   an EMISSIVE part's power, and how far its texture slides along z
@@ -125,10 +125,11 @@ uniform vec2 uLightRange[NUM_LIGHTS];   // distance at which attenuation is 1, a
 uniform int uBounces;
 uniform bool uShadows, uAttenuation;
 uniform bool uShowLod;          // tint textured surfaces by mip level
-uniform float uMirrorReflect, uMirrorFresnel, uMirrorWarp;
+uniform float uMirrorReflect, uMirrorWarp;
 
 uniform sampler2D uTex[TEXTURE_UNITS];
 uniform float uTime;
+uniform vec4 uHexTorus;   // major radius R, minor apothem r, half arc angle, poloidal spin
 
 // ---- sky -------------------------------------------------------------------
 uniform vec3 uSkyCenter;      // the system's center, eye space
@@ -320,47 +321,6 @@ bool hitBox(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part)
   return true;
 }
 
-// Four-slab test for a flat-top regular hexagonal prism along z (apothem 1 in xy):
-// |y| <= lim.x, |s3*x + 0.5*y| <= lim.y, |-s3*x + 0.5*y| <= lim.z, |z| <= lim.w
-vec2 hexSpan(vec3 o, vec3 d, vec4 lim) {
-  vec4 op = vec4(o.y, HEX_S3 * o.x + 0.5 * o.y, -HEX_S3 * o.x + 0.5 * o.y, o.z);
-  vec4 dp = vec4(d.y, HEX_S3 * d.x + 0.5 * d.y, -HEX_S3 * d.x + 0.5 * d.y, d.z);
-  vec4 inv = 1.0 / (dp + vec4(equal(dp, vec4(0.0))) * 1e-12);
-  vec4 ta = (-lim - op) * inv, tb = (lim - op) * inv;
-  vec4 tn = min(ta, tb), tf = max(ta, tb);
-  return vec2(max(max(tn.x, tn.y), max(tn.z, tn.w)), min(min(tf.x, tf.y), min(tf.z, tf.w)));
-}
-float hexPrismEval(vec3 q) {
-  float dY = abs(q.y);
-  return max(max(dY, HEX_S3 * abs(q.x) + 0.5 * dY), abs(q.z)) - 1.0;
-}
-vec3 hexPrismNormal(vec3 q, out int part) {
-  float dY = abs(q.y);
-  float dH = HEX_S3 * abs(q.x) + 0.5 * dY;
-  float dZ = abs(q.z);
-  if (dZ >= dY && dZ >= dH) {
-    part = q.z >= 0.0 ? 0 : 1;
-    return vec3(0.0, 0.0, q.z >= 0.0 ? 1.0 : -1.0);
-  }
-  if (dY >= dH) {
-    part = q.y >= 0.0 ? 2 : 3;
-    return vec3(0.0, q.y >= 0.0 ? 1.0 : -1.0, 0.0);
-  }
-  float sx = q.x >= 0.0 ? 1.0 : -1.0;
-  float sy = q.y >= 0.0 ? 1.0 : -1.0;
-  part = q.x >= 0.0 ? (q.y >= 0.0 ? 4 : 5) : (q.y >= 0.0 ? 6 : 7);
-  return vec3(HEX_S3 * sx, 0.5 * sy, 0.0);
-}
-bool hitHexPrism(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
-  vec2 span = hexSpan(o, d, vec4(1.0));
-  if (span.x > span.y) return false;
-  float th = span.x > tmin ? span.x : span.y;
-  if (th <= tmin || th >= t) return false;
-  t = th;
-  n = hexPrismNormal(o + d * th, part);
-  return true;
-}
-
 // Torus, ring radius 1 and tube radius r. The tube is thin (r = 0.04), and the
 // quartic for it loses most of its digits in single precision, so this one is
 // sphere traced instead -- marched along the ray by the distance to the
@@ -400,89 +360,258 @@ bool hitTorus(vec3 o, vec3 d, float r, float tmin, inout float t, out vec3 n) {
   return false;
 }
 
-// ---- HW3 wavy ripple (glass hexagonal prism only) --------------------------
+// ---- Curved hexagonal torus section (glass moon along the orbit) ----------
 bool isWavyHex(int i) {
   return uMatE[i].y < -0.5 && uInfo[i].x == HEX_PRISM && uMatB[i].y > 0.0;
 }
-float wavyOffset(vec3 p) {
-  return 0.12 * sin(uTime * 3.0 + p.x * 2.5 + p.z * 2.5);
-}
-float wavyHexEval(vec3 p) {
-  return hexPrismEval(vec3(p.x, p.y - wavyOffset(p), p.z));
-}
-vec3 wavyHexNormal(vec3 p, out int part) {
-  vec3 q = vec3(p.x, p.y - wavyOffset(p), p.z);
-  vec3 g = hexPrismNormal(q, part);
-  float dw = 0.12 * 2.5 * cos(uTime * 3.0 + p.x * 2.5 + p.z * 2.5);
-  return vec3(g.x - g.y * dw, g.y, g.z - g.y * dw);
+
+float hexTorusSideEval(vec3 p, bool wavy) {
+  float R = uHexTorus.x, r = uHexTorus.y, spin = uHexTorus.w;
+  float rho = length(p.xz);
+  float dr = rho - R;
+  float cs = cos(spin), sn = sin(spin);
+  float u = cs * dr + sn * p.y;
+  float v = -sn * dr + cs * p.y;
+  if (wavy) {
+    float theta = rho > 1e-6 ? atan(p.z, p.x) : 0.0;
+    v -= 0.12 * r * sin(uTime * 3.0 + (u / r) * 2.5 + theta * 5.0);
+  }
+  float dY = abs(v);
+  return max(dY, HEX_S3 * abs(u) + 0.5 * dY) - r;
 }
 
-// Coarse scan + bisection/secant inside the displaced hex prism's tight bounding prism
-bool hitWavyHex(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
-  vec2 span = hexSpan(o, d, vec4(1.122, 1.062, 1.062, 1.002));
-  float t0 = max(span.x, tmin), t1 = min(span.y, t);
-  if (t0 >= t1) return false;
+float hexTorusEval(vec3 p, bool wavy) {
+  float halfA = uHexTorus.z;
+  float dCap = cos(halfA) * abs(p.z) - sin(halfA) * p.x;
+  if (dCap >= 0.0 || dot(p.xz, p.xz) < 1e-6) return max(dCap, 1.0);
+  return hexTorusSideEval(p, wavy);
+}
 
-  float prevT = t0, prevV = wavyHexEval(o + d * t0);
-  bool startIn = prevV <= 0.0;
-  float dt = (t1 - t0) / 32.0;
+vec3 hexTorusSideNormal(vec3 p, bool wavy, out int part) {
+  float R = uHexTorus.x, r = uHexTorus.y, spin = uHexTorus.w;
+  float rho = max(length(p.xz), 1e-6);
+  float dr = rho - R;
+  float cs = cos(spin), sn = sin(spin);
+  float u = cs * dr + sn * p.y;
+  float v = -sn * dr + cs * p.y;
+  float ph = 0.0;
+  if (wavy) {
+    float theta = atan(p.z, p.x);
+    ph = uTime * 3.0 + (u / r) * 2.5 + theta * 5.0;
+    v -= 0.12 * r * sin(ph);
+  }
+  float dY = abs(v);
+  float dH = HEX_S3 * abs(u) + 0.5 * dY;
+  float gu, gv;
+  if (dY >= dH) {
+    part = v >= 0.0 ? 2 : 3;
+    gu = 0.0;
+    gv = v >= 0.0 ? 1.0 : -1.0;
+  } else {
+    float sx = u >= 0.0 ? 1.0 : -1.0;
+    float sy = v >= 0.0 ? 1.0 : -1.0;
+    part = u >= 0.0 ? (v >= 0.0 ? 4 : 5) : (v >= 0.0 ? 6 : 7);
+    gu = HEX_S3 * sx;
+    gv = 0.5 * sy;
+  }
+  float dfDu = gu, dfDv = gv, dfDth = 0.0;
+  if (wavy) {
+    float cph = cos(ph);
+    dfDu -= gv * (0.30 * cph);
+    dfDth = -gv * (0.60 * r * cph);
+  }
+  float dfDr = dfDu * cs - dfDv * sn;
+  float dfDy = dfDu * sn + dfDv * cs;
+  vec2 er = p.xz / rho;
+  vec2 et = vec2(-er.y, er.x);
+  vec2 gxz = dfDr * er + (dfDth / rho) * et;
+  return vec3(gxz.x, dfDy, gxz.y);
+}
 
-  for (int s = 1; s <= 32; s++) {
-    float curT = t0 + dt * float(s);
-    float curV = wavyHexEval(o + d * curT);
-    if ((curV <= 0.0) != startIn) {
-      float a = prevT, b = curT, va = prevV, vb = curV;
-      for (int k = 0; k < 12; k++) {
+// Analytical bound for a convex wedge |atan(z, x)| <= halfA, |y| <= rBound,
+// and annular cylinder R - rBound <= length(p.xz) <= R + rBound (0 < halfA < PI/2)
+bool hexTorusBound(vec3 o, vec3 u, float tmin, float tmax, float rBound,
+                   out float w0, out float w1, out int cap0, out int cap1,
+                   out float hole0, out float hole1) {
+  w0 = tmin; w1 = tmax;
+  cap0 = 0; cap1 = 0;
+  hole0 = INF; hole1 = -INF;
+
+  float halfA = uHexTorus.z;
+  float sinA = sin(halfA), cosA = cos(halfA);
+  for (int cid = 1; cid <= 2; cid++) {
+    float nz = cid == 1 ? cosA : -cosA;
+    float op = -sinA * o.x + nz * o.z;
+    float dp = -sinA * u.x + nz * u.z;
+    if (abs(dp) < 1e-12) {
+      if (op > 0.0) return false;
+    } else {
+      float tc = -op / dp;
+      if (dp < 0.0) {
+        if (tc > w0) { w0 = tc; cap0 = cid; }
+      } else {
+        if (tc < w1) { w1 = tc; cap1 = cid; }
+      }
+    }
+  }
+  if (w0 >= w1) return false;
+
+  if (abs(u.y) < 1e-12) {
+    if (abs(o.y) > rBound) return false;
+  } else {
+    float ya = (-rBound - o.y) / u.y, yb = (rBound - o.y) / u.y;
+    float s0 = min(ya, yb), s1 = max(ya, yb);
+    if (s0 > w0) { w0 = s0; cap0 = 0; }
+    if (s1 < w1) { w1 = s1; cap1 = 0; }
+    if (w0 >= w1) return false;
+  }
+
+  float rOut = uHexTorus.x + rBound;
+  float rIn = max(uHexTorus.x - rBound, 0.0);
+  float a = dot(u.xz, u.xz);
+  float b = dot(o.xz, u.xz);
+  float oo2 = dot(o.xz, o.xz);
+  float cOut = oo2 - rOut * rOut;
+  if (a < 1e-12) {
+    if (cOut > 0.0 || (rIn > 0.0 && oo2 < rIn * rIn)) return false;
+  } else {
+    float discOut = b * b - a * cOut;
+    if (discOut < 0.0) return false;
+    float sqOut = sqrt(discOut);
+    float c0 = (-b - sqOut) / a, c1 = (-b + sqOut) / a;
+    if (c0 > w0) { w0 = c0; cap0 = 0; }
+    if (c1 < w1) { w1 = c1; cap1 = 0; }
+    if (w0 >= w1) return false;
+
+    if (rIn > 0.0) {
+      float cIn = oo2 - rIn * rIn;
+      float discIn = b * b - a * cIn;
+      if (discIn > 0.0) {
+        float sqIn = sqrt(discIn);
+        float i0 = (-b - sqIn) / a, i1 = (-b + sqIn) / a;
+        if (i0 <= w0 && i1 >= w1) return false;
+        if (i0 <= w0 && i1 > w0) { w0 = i1; cap0 = 0; }
+        else if (i1 >= w1 && i0 < w1) { w1 = i0; cap1 = 0; }
+        else if (i0 > w0 && i1 < w1) { hole0 = i0; hole1 = i1; }
+      }
+    }
+  }
+  return w0 < w1;
+}
+
+vec3 hexTorusCapNormal(int cap) {
+  float halfA = uHexTorus.z;
+  return vec3(-sin(halfA), 0.0, cap == 1 ? cos(halfA) : -cos(halfA));
+}
+
+bool hitHexTorus(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part, bool wavy) {
+  float len = length(d);
+  vec3 u = d / len;
+  float rBound = (wavy ? 1.27 : 1.16) * uHexTorus.y;
+  float w0, w1, hole0, hole1;
+  int cap0, cap1;
+  if (!hexTorusBound(o, u, tmin * len, t * len, rBound, w0, w1, cap0, cap1, hole0, hole1))
+    return false;
+
+  float prevX = w0;
+  float prevV = hexTorusSideEval(o + u * prevX, wavy);
+  if (cap0 != 0 && prevV <= 0.0) {
+    t = w0 / len;
+    part = cap0 - 1;
+    n = hexTorusCapNormal(cap0);
+    return true;
+  }
+
+  bool startIn = prevV < 0.0;
+  float invL = wavy ? (1.0 / 1.2) : 1.0;
+
+  for (int k = 0; k < 64; k++) {
+    if (!startIn && prevX >= hole0 && prevX < hole1) {
+      prevX = hole1;
+      prevV = hexTorusSideEval(o + u * prevX, wavy);
+    }
+    float ms = k == 0 ? 0.004 : (k < 20 ? 0.025 : (k < 40 ? 0.07 : 0.18));
+    float x = prevX + max(abs(prevV) * invL, ms);
+    if (!startIn && prevX < hole0 && x > hole0) x = hole0;
+    bool atEnd = x >= w1;
+    if (atEnd) x = w1;
+
+    float v = hexTorusSideEval(o + u * x, wavy);
+    if ((v < 0.0) != startIn) {
+      float a = prevX, b = x, va = prevV, vb = v;
+      for (int j = 0; j < 10; j++) {
         float denom = vb - va;
-        float m = (k < 8 || abs(denom) < 1e-12)
+        float m = (j < 6 || abs(denom) < 1e-12)
           ? 0.5 * (a + b)
           : mix(a, b, clamp(-va / denom, 0.1, 0.9));
-        float vm = wavyHexEval(o + d * m);
-        if ((vm <= 0.0) == (va <= 0.0)) { a = m; va = vm; }
+        float vm = hexTorusSideEval(o + u * m, wavy);
+        if ((vm < 0.0) == (va < 0.0)) { a = m; va = vm; }
         else { b = m; vb = vm; }
       }
       float denom = vb - va;
       float th = abs(denom) > 1e-12 ? mix(a, b, clamp(-va / denom, 0.0, 1.0)) : 0.5 * (a + b);
-      t = th;
-      n = wavyHexNormal(o + d * th, part);
+      t = th / len;
+      n = hexTorusSideNormal(o + u * th, wavy, part);
       return true;
     }
-    prevT = curT; prevV = curV;
+    if (atEnd) {
+      if (startIn && cap1 != 0) {
+        t = w1 / len;
+        part = cap1 - 1;
+        n = hexTorusCapNormal(cap1);
+        return true;
+      }
+      return false;
+    }
+    prevX = x;
+    prevV = v;
   }
   return false;
 }
 
-float wavyHexChord(vec3 o, vec3 d, float tmin, float tmax) {
-  vec2 span = hexSpan(o, d, vec4(1.122, 1.062, 1.062, 1.002));
-  float t0 = max(span.x, tmin), t1 = min(span.y, tmax);
-  if (t0 >= t1) return 0.0;
-  float dt = (t1 - t0) / 16.0;
-  float prevV = wavyHexEval(o + d * t0);
+float hexTorusChord(vec3 o, vec3 d, float tmin, float tmax, bool wavy) {
+  float len = length(d);
+  vec3 u = d / len;
+  float rBound = (wavy ? 1.27 : 1.16) * uHexTorus.y;
+  float w0, w1, hole0, hole1;
+  int cap0, cap1;
+  if (!hexTorusBound(o, u, tmin * len, tmax * len, rBound, w0, w1, cap0, cap1, hole0, hole1))
+    return 0.0;
+  bool hasHole = hole0 < hole1;
   float chord = 0.0;
-  for (int s = 1; s <= 16; s++) {
-    float curV = wavyHexEval(o + d * (t0 + dt * float(s)));
-    if (prevV <= 0.0 && curV <= 0.0) {
-      chord += dt;
-    } else if ((prevV <= 0.0) != (curV <= 0.0)) {
-      float denom = curV - prevV;
-      float frac = abs(denom) > 1e-12 ? clamp(-prevV / denom, 0.0, 1.0) : 0.5;
-      chord += dt * (prevV <= 0.0 ? frac : 1.0 - frac);
+  for (int pass = 0; pass < 2; pass++) {
+    if (pass == 1 && !hasHole) break;
+    float s0 = pass == 0 ? w0 : hole1;
+    float s1 = (pass == 0 && hasHole) ? hole0 : w1;
+    if (s0 >= s1) continue;
+    int steps = hasHole ? 12 : 24;
+    float dt = (s1 - s0) / float(steps);
+    float prevV = hexTorusSideEval(o + u * s0, wavy);
+    for (int s = 1; s <= 24; s++) {
+      if (s > steps) break;
+      float curV = hexTorusSideEval(o + u * (s0 + dt * float(s)), wavy);
+      if (prevV <= 0.0 && curV <= 0.0) {
+        chord += dt;
+      } else if ((prevV <= 0.0) != (curV <= 0.0)) {
+        float denom = curV - prevV;
+        float frac = abs(denom) > 1e-12 ? clamp(-prevV / denom, 0.0, 1.0) : 0.5;
+        chord += dt * (prevV <= 0.0 ? frac : 1.0 - frac);
+      }
+      prevV = curV;
     }
-    prevV = curV;
   }
-  return chord;
+  return chord / len;
 }
 
 bool intersect(int i, vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part) {
   vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
   part = 0;
-  if (isWavyHex(i))      return hitWavyHex(oo, dd, tmin, t, n, part);
   int shape = uInfo[i].x;
   if (shape == SPHERE)   return hitSphere(oo, dd, tmin, t, n);
   if (shape == CYLINDER) return hitCylinder(oo, dd, tmin, t, n, part);
   if (shape == CONE)     return hitCone(oo, dd, tmin, t, n, part);
   if (shape == BOX)      return hitBox(oo, dd, tmin, t, n, part);
-  if (shape == HEX_PRISM) return hitHexPrism(oo, dd, tmin, t, n, part);
+  if (shape == HEX_PRISM) return hitHexTorus(oo, dd, tmin, t, n, part, isWavyHex(i));
   return hitTorus(oo, dd, uMatC[i].w, tmin, t, n);
 }
 
@@ -571,11 +700,31 @@ bool shadowBox(vec3 o, vec3 d, float tmin, float tmax) {
   return th > tmin && th < tmax;
 }
 
-bool shadowHexPrism(vec3 o, vec3 d, float tmin, float tmax) {
-  vec2 span = hexSpan(o, d, vec4(1.0));
-  if (span.x > span.y) return false;
-  float th = span.x > tmin ? span.x : span.y;
-  return th > tmin && th < tmax;
+bool shadowHexTorus(vec3 o, vec3 d, float tmin, float tmax) {
+  float len = length(d);
+  vec3 u = d / len;
+  float w0, w1, hole0, hole1;
+  int cap0, cap1;
+  if (!hexTorusBound(o, u, tmin * len, tmax * len, 1.16 * uHexTorus.y, w0, w1, cap0, cap1, hole0, hole1))
+    return false;
+  float prevX = w0;
+  float prevV = hexTorusSideEval(o + u * prevX, false);
+  if (prevV <= 0.0) return true;
+  for (int k = 0; k < 32; k++) {
+    if (prevX >= hole0 && prevX < hole1) {
+      prevX = hole1;
+      prevV = hexTorusSideEval(o + u * prevX, false);
+    }
+    float ms = k < 12 ? 0.03 : 0.12;
+    float x = prevX + max(abs(prevV), ms);
+    if (prevX < hole0 && x > hole0) x = hole0;
+    if (x >= w1) return hexTorusSideEval(o + u * w1, false) <= 0.0;
+    float v = hexTorusSideEval(o + u * x, false);
+    if (v <= 0.0) return true;
+    prevX = x;
+    prevV = v;
+  }
+  return false;
 }
 
 bool shadowTorus(vec3 o, vec3 d, float r, float tmin, float tmax) {
@@ -607,7 +756,7 @@ bool shadowHit(int i, vec3 o, vec3 d, float tmin, float tmax) {
   vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
   int shape = uInfo[i].x;
   if (shape == BOX)       return shadowBox(oo, dd, tmin, tmax);
-  if (shape == HEX_PRISM) return shadowHexPrism(oo, dd, tmin, tmax);
+  if (shape == HEX_PRISM) return shadowHexTorus(oo, dd, tmin, tmax);
   if (shape == SPHERE)    return shadowSphere(oo, dd, tmin, tmax);
   if (shape == CYLINDER)  return shadowCylinder(oo, dd, tmin, tmax);
   if (shape == CONE)      return shadowCone(oo, dd, tmin, tmax);
@@ -661,11 +810,7 @@ float sphereChord(vec3 o, vec3 d, float tmin, float tmax) {
 // How much of (tmin, tmax) the ray spends inside primitive i (glass hex prism, box, or sphere)
 float glassChord(int i, vec3 o, vec3 d, float tmin, float tmax) {
   vec3 oo = toObject(i, o, 1.0), dd = toObject(i, d, 0.0);
-  if (isWavyHex(i)) return wavyHexChord(oo, dd, tmin, tmax);
-  if (uInfo[i].x == HEX_PRISM) {
-    vec2 span = hexSpan(oo, dd, vec4(1.0));
-    return max(min(span.y, tmax) - max(span.x, tmin), 0.0);
-  }
+  if (uInfo[i].x == HEX_PRISM) return hexTorusChord(oo, dd, tmin, tmax, isWavyHex(i));
   if (uInfo[i].x == BOX) {
     vec2 span = boxSpan(oo, dd, vec3(1.0));
     return max(min(span.y, tmax) - max(span.x, tmin), 0.0);
@@ -728,10 +873,16 @@ vec2 uvAt(int shape, int part, vec3 p, float repeats) {
     return vec2(p.z + 1.0, p.y + 1.0) * 0.5;
   }
   if (shape == HEX_PRISM) {
-    if (part < 2) return vec2(part == 0 ? p.x : -p.x, p.y) * 0.5 + 0.5;
-    float ang = atan(p.y, p.x);
+    float rho = length(p.xz);
+    float dr = rho - uHexTorus.x;
+    float cs = cos(uHexTorus.w), sn = sin(uHexTorus.w);
+    float u = cs * dr + sn * p.y;
+    float v = -sn * dr + cs * p.y;
+    if (part < 2) return vec2(part == 0 ? u : -u, v) / (2.0 * uHexTorus.y) + 0.5;
+    float ang = (abs(u) > 1e-6 || abs(v) > 1e-6) ? atan(v, u) : 0.0;
     if (ang < 0.0) ang += TAU;
-    return vec2(repeats * ang / TAU, (p.z + 1.0) * 0.5);
+    float theta = rho > 1e-6 ? atan(p.z, p.x) : 0.0;
+    return vec2(repeats * ang / TAU, (theta / uHexTorus.z + 1.0) * 0.5);
   }
   // Caps: planar mapping of x and z
   if (shape == CYLINDER && part > 0) return vec2(0.5 + 0.5 * p.x, 0.5 - 0.5 * (part == 1 ? p.z : -p.z));
@@ -756,9 +907,12 @@ vec3 tangentAt(int shape, int part, vec3 p) {
     return vec3(1.0, 0.0, 0.0);
   }
   if (shape == HEX_PRISM) {
-    if (part < 2) return vec3(part == 0 ? 1.0 : -1.0, 0.0, 0.0);
-    vec3 t = vec3(-p.y, p.x, 0.0);
-    return dot(t, t) > 1e-12 ? t : vec3(1.0, 0.0, 0.0);
+    vec2 er = length(p.xz) > 1e-6 ? normalize(p.xz) : vec2(1.0, 0.0);
+    float cs = cos(uHexTorus.w), sn = sin(uHexTorus.w);
+    vec3 eU = vec3(cs * er.x, sn, cs * er.y);
+    if (part < 2) return part == 0 ? eU : -eU;
+    vec3 t = vec3(-p.y * er.x, length(p.xz) - uHexTorus.x, -p.y * er.y);
+    return dot(t, t) > 1e-12 ? t : eU;
   }
   if ((shape == CYLINDER || shape == CONE) && part > 0) return vec3(1.0, 0.0, 0.0);
   // Around the y axis; the sphere's u runs the other way, but so does its
@@ -1243,14 +1397,8 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
   vec3 n  = faceforward(s.n, d, s.ng);
   vec3 ng = faceforward(s.ng, d, s.ng);
 
-  // Effective mirror reflectivity (optional Schlick Fresnel falloff at normal incidence)
+  // Effective mirror reflectivity and fraction of surface not claimed by mirror or glass
   float kr = B.x * uMirrorReflect;
-  if (kr > 0.0 && uMirrorFresnel > 0.0) {
-    float omc = 1.0 - clamp(dot(n, V), 0.0, 1.0);
-    float f0 = mix(kr, kr * 0.04, uMirrorFresnel);
-    kr = f0 + (kr - f0) * omc * omc * omc * omc * omc;
-  }
-  // Fraction of surface not claimed by mirror or glass
   float body = max(1.0 - kr - B.y, 0.0);
 
   // 1. Ambient term
@@ -1286,12 +1434,11 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
   // 3. Self-lit windows/lights stay bright on the night side
   color += uMatE[i].x * s.emit * s.base;
 
-  // 4. Atmospheric limb glow on the sunlit side of the planet
-  vec3 glow = uMatC[i].rgb;
-  if (glow != vec3(0.0)) {
+  // 4. Grazing edge gleam (glass hex torus)
+  vec3 rimColor = uMatC[i].rgb;
+  if (rimColor != vec3(0.0)) {
     float rim = pow(1.0 - max(dot(ng, V), 0.0), 3.0);
-    float day = smoothstep(-0.25, 0.5, dot(ng, normalize(uLightPos[0] - s.p)));
-    color += glow * rim * day;
+    color += rimColor * rim;
   }
   return color;
 }`;
@@ -1352,12 +1499,13 @@ bool stepBounce(inout Path p, Surface s, int id, out Path pushed, out bool hasPu
     float eta = entering ? 1.0 / B.z : B.z;   // n1 / n2 for Snell's law
     vec3 rdir = reflect(p.d, n);
     vec3 tdir = refract(p.d, n, eta);
-    vec3 outside = s.p + ng * EPS, inside = s.p - ng * EPS;
+    vec3 reflectOrigin = s.p + ng * EPS;      // same side as incoming ray
+    vec3 refractOrigin = s.p - ng * EPS;      // opposite side of surface
 
     if (tdir == vec3(0.0)) {
       // Total internal reflection: stay inside without spending a bounce
       p.depth--;
-      p.o = outside; p.d = rdir; p.weight *= B.y;
+      p.o = reflectOrigin; p.d = rdir; p.weight *= B.y;
     } else {
       // Schlick Fresnel approximation using the vacuum-side cosine
       float c  = clamp(entering ? -dot(p.d, n) : -dot(tdir, n), 0.0, 1.0);
@@ -1367,25 +1515,20 @@ bool stepBounce(inout Path p, Surface s, int id, out Path pushed, out bool hasPu
       float F = r0 + (1.0 - r0) * omc * omc * omc * omc * omc;
 
       // Split into reflected (same medium) and refracted (enters/exits glass)
-      Path reflected = Path(outside, rdir, p.weight * B.y * F, p.absorb, p.travelled, p.depth);
-      Path refracted = Path(inside, tdir, p.weight * B.y * (1.0 - F),
+      Path reflected = Path(reflectOrigin, rdir, p.weight * B.y * F, p.absorb, p.travelled, p.depth);
+      Path refracted = Path(refractOrigin, tdir, p.weight * B.y * (1.0 - F),
                             entering ? uMatD[id].rgb : vec3(0.0), p.travelled, p.depth);
 
       // Follow the stronger branch now; queue the weaker branch on the stack
       Path weaker;
       if (F <= 0.5) { p = refracted; weaker = reflected; }
       else          { p = reflected; weaker = refracted; }
-      if (maxComponent(weaker.weight) > 0.01) { pushed = weaker; hasPushed = true; }
+      if (maxComponent(weaker.weight) >= 0.01) { pushed = weaker; hasPushed = true; }
     }
   } else {
     // 3. Mirror reflection (polished hull, mirror planet)
     vec3 n  = faceforward(s.n, p.d, s.ng);
     vec3 ng = faceforward(s.ng, p.d, s.ng);
-    if (uMirrorFresnel > 0.0) {
-      float omc = 1.0 - clamp(-dot(p.d, n), 0.0, 1.0);
-      float f0 = mix(kr, kr * 0.04, uMirrorFresnel);
-      kr = f0 + (kr - f0) * omc * omc * omc * omc * omc;
-    }
     p.o = s.p + ng * EPS;
     p.d = reflect(p.d, n);
     // Keep strongly warped grazing reflections above the geometric surface
@@ -1416,9 +1559,8 @@ void main() {
   for (int i = 0; i < ungrouped; i++) {
     if (uMatB[i].y <= 0.0) continue;
     vec3 po = toObject(i, vec3(0.0), 1.0);
-    bool inside = isWavyHex(i) ? wavyHexEval(po) < 0.0
-      : (uInfo[i].x == HEX_PRISM ? hexPrismEval(po) < 0.0
-      : (uInfo[i].x == BOX ? max(abs(po.x), max(abs(po.y), abs(po.z))) < 1.0 : dot(po, po) < 1.0));
+    bool inside = uInfo[i].x == HEX_PRISM ? hexTorusEval(po, isWavyHex(i)) < 0.0
+      : (uInfo[i].x == BOX ? max(abs(po.x), max(abs(po.y), abs(po.z))) < 1.0 : dot(po, po) < 1.0);
     if (inside) { initAbsorb = uMatD[i].rgb; break; }
   }
   Path p = Path(vec3(0.0), d0, vec3(1.0), initAbsorb, 0.0, 0);

@@ -1,12 +1,16 @@
-const VERTEX_SHADER = `#version 300 es
-in vec3 aPosition;
+// The scene's two shaders, as they appear in the live GLSL editor (#shaderBox).
+// "#version 300 es" and, for the vertex shader, the lens code from camera.js
+// (LENS_GLSL) are prepended when the program is linked (useSceneProgram).
+const VERTEX_SHADER = `in vec3 aPosition;
 in vec3 aNormal;
 in vec3 aTangent;
 in vec2 aTexCoord;
 
 uniform mat4 uModelView;
 uniform mat4 uProjection;
-${LENS_GLSL}
+// project() and the lens uniforms uFisheye, uFishHalfX, uFishStretch and
+// uFishPivot are prepended from camera.js
+
 out vec3 vPosition;
 out vec3 vNormal;
 out vec3 vTangent;
@@ -27,8 +31,7 @@ void main() {
 }
 `;
 
-const FRAGMENT_SHADER = `#version 300 es
-precision mediump float;
+const FRAGMENT_SHADER = `precision mediump float;
 
 in vec3 vPosition;
 in vec3 vNormal;
@@ -160,28 +163,42 @@ function createProgram(vsSource, fsSource) {
   }
 }
 
-const program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
-gl.useProgram(program);
-const uModelView = gl.getUniformLocation(program, "uModelView");
-const uProjection = gl.getUniformLocation(program, "uProjection");
-const uLightPos = gl.getUniformLocation(program, "uLightPos");
-const uLight2Pos = gl.getUniformLocation(program, "uLight2Pos");
-const uMapping = gl.getUniformLocation(program, "uMapping");
-const setLens = lensUniforms(program);
-gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
-gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
-
 // Lights, fixed in the scene: a warm sun off to the side and outside the orbit,
 // so the planet shows a terminator, and a dim cool fill opposite it to lift the
 // night side. The sun's intensity is folded into its color (1.25x warm white).
-// The colors are set once; the positions are carried into view space each frame.
+// The colors are set at link time; the positions are carried into view space
+// each frame.
 const SUN = { pos: [12, 5, 3], color: [1.25, 1.19, 1.06] };
 const FILL = { pos: [-12, -5, -3], color: [0.12, 0.17, 0.3] };
-gl.uniform3fv(gl.getUniformLocation(program, "uLightColor"), SUN.color);
-gl.uniform3fv(gl.getUniformLocation(program, "uLight2Color"), FILL.color);
 
-const uMaterial = Object.fromEntries(["uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere"]
-  .map(name => [name, gl.getUniformLocation(program, name)]));
+// The scene's program, relinked from the GLSL editor on Apply. A source that
+// fails to compile throws before anything is touched, so the last good program
+// keeps drawing. The attribute locations are bound by name (ATTRIBUTES), so the
+// meshes' vertex arrays work with any program.
+const VS_PREFIX = `#version 300 es\n${LENS_GLSL}\n`;
+const FS_PREFIX = `#version 300 es\n`;
+let program = null;
+let uModelView, uProjection, uLightPos, uLight2Pos, uMapping, uMaterial, setLens;
+function useSceneProgram(vsBody, fsBody) {
+  const next = createProgram(VS_PREFIX + vsBody, FS_PREFIX + fsBody);
+  if (program) gl.deleteProgram(program);
+  program = next;
+  gl.useProgram(program);
+  const loc = name => gl.getUniformLocation(program, name);
+  uModelView = loc("uModelView");
+  uProjection = loc("uProjection");
+  uLightPos = loc("uLightPos");
+  uLight2Pos = loc("uLight2Pos");
+  uMapping = loc("uMapping");
+  uMaterial = Object.fromEntries(["uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere"]
+    .map(name => [name, loc(name)]));
+  setLens = lensUniforms(program);
+  gl.uniform1i(loc("uTexture"), 0);
+  gl.uniform1i(loc("uNormalMap"), 1);
+  gl.uniform3fv(loc("uLightColor"), SUN.color);
+  gl.uniform3fv(loc("uLight2Color"), FILL.color);
+}
+useSceneProgram(VERTEX_SHADER, FRAGMENT_SHADER);
 
 // Shiny painted metal, for parts that don't name a material of their own
 const DEFAULT_MATERIAL = { ka: 0.2, kd: 0.8, ks: 0.5, shininess: 32, bumpScale: 3.0, atmosphere: [0, 0, 0] };
@@ -378,7 +395,7 @@ window.addEventListener("mousemove", e => {
 
 const CONTROL_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "s"];
 document.addEventListener("keydown", e => {
-  if (!CONTROL_KEYS.includes(e.key)) return;
+  if (!CONTROL_KEYS.includes(e.key) || e.target instanceof HTMLTextAreaElement) return;
   e.preventDefault();         // arrows would scroll the page even when ignored
   if (offOrbit()) return;
   const step = 0.2;
@@ -532,3 +549,155 @@ function render(time) {
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
+
+// ---------------------------------------------------------------------------
+// Floating live-code GLSL editor (#shaderBox in index.html)
+// ---------------------------------------------------------------------------
+{
+  // Compile errors report lines of the whole source; map them back to the
+  // editor's, past the prepended #version and lens code
+  const PREFIX_LINES = { vertex: VS_PREFIX.split("\n").length - 1, fragment: FS_PREFIX.split("\n").length - 1 };
+  const TAB_NAMES = { vertex: "Vertex", fragment: "Fragment" };
+  function formatCompileError(message, stage) {
+    return String(message || "Shader compilation failed").trim()
+      .replace(/ERROR:\s*\d+:(\d+):/g, (match, raw) => {
+        const line = parseInt(raw, 10) - PREFIX_LINES[stage];
+        return line >= 1 ? `${TAB_NAMES[stage]} (line ${line}):` : match;
+      });
+  }
+  // Each stage is compiled alone first, so a failure is known to be its own
+  let lastCompiled = null;
+  function checkStage(stage, src) {
+    lastCompiled = stage;
+    const type = stage === "vertex" ? gl.VERTEX_SHADER : gl.FRAGMENT_SHADER;
+    const prefix = stage === "vertex" ? VS_PREFIX : FS_PREFIX;
+    gl.deleteShader(compile(type, prefix + src));
+  }
+
+  const escapeHtml = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const GLSL_KW = new Set(["if", "else", "for", "while", "do", "return", "continue", "break", "discard",
+    "struct", "in", "out", "inout", "uniform", "const", "true", "false", "precision", "lowp", "mediump", "highp"]);
+  const GLSL_TY = new Set(["void", "bool", "int", "uint", "float", "vec2", "vec3", "vec4",
+    "bvec2", "bvec3", "bvec4", "ivec2", "ivec3", "ivec4", "mat2", "mat3", "mat4", "sampler2D"]);
+  const GLSL_BI = new Set(["dot", "cross", "normalize", "length", "distance", "reflect", "refract",
+    "faceforward", "clamp", "max", "min", "mix", "pow", "exp", "sqrt", "abs", "smoothstep", "step",
+    "sin", "cos", "acos", "fract", "floor", "texture", "textureSize", "transpose", "inverse",
+    "gl_Position", "project", "phong", "height",
+    "uModelView", "uProjection", "uLightPos", "uLight2Pos", "uLightColor", "uLight2Color",
+    "uKa", "uKd", "uKs", "uShininess", "uBumpScale", "uAtmosphere", "uTexture", "uNormalMap", "uMapping"]);
+  const GLSL_TOKEN = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|^[ \t]*#[^\n]*|(?:\b\d+\.\d*(?:[eE][+-]?\d+)?[fF]?|\B\.\d+(?:[eE][+-]?\d+)?[fF]?|\b\d+(?:[eE][+-]?\d+)?[uUfF]?\b)|\b[A-Za-z_]\w*\b)/gm;
+
+  function highlightGLSL(src) {
+    let out = "", pos = 0;
+    GLSL_TOKEN.lastIndex = 0;
+    for (let m; (m = GLSL_TOKEN.exec(src)); ) {
+      if (m.index > pos) out += escapeHtml(src.slice(pos, m.index));
+      const tok = m[0];
+      let cls = "";
+      if (tok[0] === "/") cls = "tok-com";
+      else if (tok.trimStart()[0] === "#") cls = "tok-pp";
+      else if (tok[0] <= "9" && tok[0] >= "0" || tok[0] === ".") cls = "tok-num";
+      else if (GLSL_KW.has(tok)) cls = "tok-kw";
+      else if (GLSL_TY.has(tok)) cls = "tok-ty";
+      else if (GLSL_BI.has(tok)) cls = "tok-bi";
+      out += cls ? `<span class="${cls}">${escapeHtml(tok)}</span>` : escapeHtml(tok);
+      pos = m.index + tok.length;
+    }
+    if (pos < src.length) out += escapeHtml(src.slice(pos));
+    return out;
+  }
+
+  const TAB_HINTS = {
+    vertex: "Model-view transform, inverse-transpose normals, tangents &amp; the lens. <code>#version</code> and <code>project()</code> are prepended. Uniforms: <code>uModelView</code> <code>uProjection</code>",
+    fragment: "Bump/normal mapping, two-light Phong &amp; the planet's rim glow. Uniforms: <code>uMapping</code> (0 bump, 1 normal, 2 emissive) <code>uKa..uShininess</code> <code>uBumpScale</code> <code>uAtmosphere</code>"
+  };
+
+  const editor = document.getElementById("shaderEditor");
+  const highlightEl = document.getElementById("shaderHighlight");
+  const gutterEl = document.getElementById("shaderGutter");
+  const hintEl = document.getElementById("shaderHint");
+  const applyBtn = document.getElementById("shaderApply");
+  const resetBtn = document.getElementById("shaderReset");
+  const statusEl = document.getElementById("shaderStatus");
+  const errorEl = document.getElementById("shaderError");
+  const tabBtns = [...document.querySelectorAll("#shaderBox .tab")];
+
+  const blocks = { vertex: VERTEX_SHADER, fragment: FRAGMENT_SHADER };
+  let applied = { ...blocks };
+  let activeTab = "fragment";
+
+  function syncScroll() {
+    highlightEl.scrollTop = editor.scrollTop;
+    highlightEl.scrollLeft = editor.scrollLeft;
+    gutterEl.scrollTop = editor.scrollTop;
+  }
+  function renderCodeOverlay() {
+    const code = editor.value;
+    highlightEl.innerHTML = highlightGLSL(code) + "\n";
+    const lines = code.split("\n").length;
+    gutterEl.textContent = Array.from({ length: lines }, (_, i) => i + 1).join("\n") + "\n";
+    syncScroll();
+  }
+  function setStatus(text, cls = "") {
+    statusEl.textContent = text;
+    statusEl.className = cls;
+  }
+  function updateModifiedStatus() {
+    blocks[activeTab] = editor.value;
+    renderCodeOverlay();
+    const dirty = blocks.vertex !== applied.vertex || blocks.fragment !== applied.fragment;
+    applyBtn.classList.toggle("pending", dirty);
+    setStatus(dirty ? "Modified" : "Applied", dirty ? "modified" : "");
+  }
+  function selectTab(tab) {
+    blocks[activeTab] = editor.value;
+    activeTab = tab;
+    editor.value = blocks[tab];
+    hintEl.innerHTML = TAB_HINTS[tab];
+    for (const btn of tabBtns) btn.setAttribute("aria-selected", String(btn.dataset.tab === tab));
+    renderCodeOverlay();
+  }
+  function applyShaders() {
+    blocks[activeTab] = editor.value;
+    try {
+      checkStage("vertex", blocks.vertex);
+      checkStage("fragment", blocks.fragment);
+      lastCompiled = null;   // both compiled: anything left is a link error
+      useSceneProgram(blocks.vertex, blocks.fragment);
+      applied = { ...blocks };
+      applyBtn.classList.remove("pending");
+      errorEl.hidden = true;
+      errorEl.textContent = "";
+      setStatus("Applied");
+    } catch (e) {
+      errorEl.textContent = lastCompiled ? formatCompileError(e.message, lastCompiled) : String(e.message).trim();
+      errorEl.hidden = false;
+      setStatus("Error", "error");
+    }
+  }
+  function resetShaders() {
+    blocks.vertex = VERTEX_SHADER;
+    blocks.fragment = FRAGMENT_SHADER;
+    editor.value = blocks[activeTab];
+    renderCodeOverlay();
+    applyShaders();
+  }
+
+  editor.value = blocks[activeTab];   // selectTab saves the editor's text first
+  selectTab(activeTab);
+  tabBtns.forEach(btn => btn.addEventListener("click", () => selectTab(btn.dataset.tab)));
+  editor.addEventListener("input", updateModifiedStatus);
+  editor.addEventListener("scroll", syncScroll);
+  editor.addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      applyShaders();
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      editor.setRangeText("  ", editor.selectionStart, editor.selectionEnd, "end");
+      updateModifiedStatus();
+    }
+  });
+  applyBtn.addEventListener("click", applyShaders);
+  resetBtn.addEventListener("click", resetShaders);
+}

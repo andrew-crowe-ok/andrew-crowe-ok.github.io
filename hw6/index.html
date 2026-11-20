@@ -73,6 +73,145 @@
       #engageButton { animation: none; }
       #engageButton:not(.revealed) { translate: none; }
     }
+
+    /* Live GLSL editor: a small glass panel in the top-right corner, in the
+       Engage button's style, folded away with summary (as in HW7) */
+    #shaderBox {
+      position: fixed; top: calc(16px + env(safe-area-inset-top));
+      right: calc(16px + env(safe-area-inset-right));
+      max-width: calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right));
+      max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+      overflow-y: auto; overscroll-behavior: contain;
+      box-sizing: border-box; padding: 0.7em 0.95em;
+      font: 500 12px / 1.3 "Segoe UI", system-ui, sans-serif; color: var(--ink);
+      background: linear-gradient(180deg, rgba(14, 34, 58, 0.62), rgba(4, 12, 24, 0.7));
+      border: 1px solid rgba(var(--glow), 0.45); border-radius: 12px;
+      box-shadow: 0 0 12px rgba(var(--glow), 0.2);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    }
+    #shaderBox[open] { width: min(560px, calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right))); }
+    #shaderBox summary {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.9em;
+      white-space: nowrap;
+      cursor: pointer; list-style: none; user-select: none;
+      font: 600 11px / 1 "Orbitron", "Eurostile", "Segoe UI", system-ui, sans-serif;
+      letter-spacing: 0.25em; text-transform: uppercase;
+      text-shadow: 0 0 8px rgba(var(--glow), 0.8);
+    }
+    #shaderBox summary::-webkit-details-marker { display: none; }
+    #shaderBox summary::after { content: "+"; letter-spacing: 0; }
+    #shaderBox[open] summary::after { content: "\2212"; }
+    #shaderBox[open] summary { margin-bottom: 0.7em; }
+    /* No editing on phones and narrow screens */
+    @media (pointer: coarse), (max-width: 600px) {
+      #shaderBox { display: none; }
+    }
+
+    #shaderBox .tabs { display: flex; gap: 0.4em; margin-bottom: 0.45em; }
+    #shaderBox button {
+      font: 600 11px / 1.2 "Segoe UI", system-ui, sans-serif; color: var(--ink);
+      background: rgba(8, 22, 40, 0.75); border: 1px solid rgba(var(--glow), 0.35);
+      border-radius: 7px; padding: 0.42em 0.8em; cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    }
+    #shaderBox button:hover, #shaderBox button:focus-visible {
+      border-color: rgba(var(--glow), 0.85);
+      background: rgba(18, 44, 76, 0.85);
+      outline: none;
+    }
+    #shaderBox .tab { flex: 1; text-align: center; opacity: 0.72; }
+    #shaderBox .tab[aria-selected="true"] {
+      opacity: 1; border-color: rgba(var(--glow), 0.9);
+      background: rgba(20, 52, 90, 0.88);
+      box-shadow: inset 0 0 10px rgba(var(--glow), 0.25);
+    }
+    #shaderHint {
+      margin-bottom: 0.5em; padding: 0.4em 0.6em;
+      font: 11px / 1.35 "Segoe UI", system-ui, sans-serif;
+      color: rgba(212, 238, 255, 0.86);
+      background: rgba(var(--glow), 0.08);
+      border-left: 2px solid rgba(var(--glow), 0.55);
+      border-radius: 0 6px 6px 0;
+    }
+    #shaderHint code {
+      font: 10.5px / 1.2 ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+      color: #ffd27d; background: rgba(0, 0, 0, 0.28);
+      padding: 0.08em 0.32em; border-radius: 4px;
+    }
+    .editorShell {
+      --code-font: 12px / 1.48 ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+      --code-pad-y: 9px;
+      display: grid; grid-template-columns: auto 1fr;
+      height: min(46vh, 360px); min-height: 180px;
+      resize: vertical; overflow: hidden;
+      background: rgba(2, 8, 18, 0.88);
+      border: 1px solid rgba(var(--glow), 0.35); border-radius: 9px;
+      box-shadow: inset 0 0 14px rgba(0, 0, 0, 0.45);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .editorShell:focus-within {
+      border-color: rgba(var(--glow), 0.9);
+      box-shadow: 0 0 10px rgba(var(--glow), 0.2), inset 0 0 14px rgba(0, 0, 0, 0.45);
+    }
+    #shaderGutter {
+      margin: 0; padding: var(--code-pad-y) 8px var(--code-pad-y) 9px;
+      font: var(--code-font); text-align: right; user-select: none; overflow: hidden;
+      color: rgba(var(--glow), 0.42); background: rgba(6, 18, 34, 0.55);
+      border-right: 1px solid rgba(var(--glow), 0.16);
+      font-variant-numeric: tabular-nums;
+    }
+    .editorWrap { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+    /* The textarea's own text is transparent; the highlighted <pre> beneath
+       it, scrolled in step, is what shows */
+    #shaderHighlight, #shaderEditor {
+      position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+      box-sizing: border-box; padding: var(--code-pad-y) 11px;
+      font: var(--code-font); tab-size: 2; white-space: pre;
+      border: 0; letter-spacing: 0;
+    }
+    #shaderHighlight { pointer-events: none; overflow: hidden; color: var(--ink); }
+    #shaderEditor {
+      overflow: auto; resize: none; outline: none; background: transparent;
+      color: transparent; caret-color: #ffffff; -webkit-text-fill-color: transparent;
+      scrollbar-width: thin; scrollbar-color: rgba(var(--glow), 0.35) transparent;
+    }
+    #shaderEditor::selection { background: rgba(var(--glow), 0.28); }
+    #shaderEditor::-webkit-scrollbar { width: 8px; height: 8px; }
+    #shaderEditor::-webkit-scrollbar-thumb {
+      background: rgba(var(--glow), 0.32); border-radius: 999px;
+    }
+    #shaderEditor::-webkit-scrollbar-track { background: transparent; }
+    .tok-com { color: #6f8cad; font-style: italic; }
+    .tok-kw  { color: #66c8ff; font-weight: 600; }
+    .tok-ty  { color: #6be5c8; }
+    .tok-bi  { color: #ffd27d; }
+    .tok-num { color: #ff9e80; }
+    .tok-pp  { color: #c59eff; }
+
+    #shaderBox .actions {
+      display: flex; align-items: center; gap: 0.5em; margin-top: 0.55em;
+    }
+    #shaderApply { border-color: rgba(var(--glow), 0.65); }
+    #shaderApply.pending {
+      border-color: rgba(var(--glow), 1);
+      background: rgba(22, 62, 108, 0.88);
+      box-shadow: 0 0 10px rgba(var(--glow), 0.32);
+    }
+    #shaderBox .shortcut { font-size: 11px; opacity: 0.55; }
+    #shaderStatus {
+      margin-left: auto; font-size: 11px; opacity: 0.75;
+      font-variant-numeric: tabular-nums;
+    }
+    #shaderStatus.modified { color: #ffd98a; opacity: 0.95; }
+    #shaderStatus.error { color: #ff8e8e; opacity: 1; }
+    #shaderError {
+      margin: 0.55em 0 0; padding: 0.55em 0.7em; max-height: 120px; overflow-y: auto;
+      font: 11.5px / 1.4 ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+      color: #ffd6d6; background: rgba(60, 12, 18, 0.82);
+      border: 1px solid rgba(255, 110, 110, 0.55); border-radius: 8px;
+      white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    #shaderError[hidden] { display: none; }
   </style>
 </head>
 
@@ -81,6 +220,29 @@
   <div id="warpFlash" class="wash"></div>
   <div id="fade" class="wash"></div>
   <button id="engageButton">Engage</button>
+
+  <details id="shaderBox">
+    <summary>GLSL Shader</summary>
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab" role="tab" data-tab="vertex" aria-selected="false">Vertex</button>
+      <button type="button" class="tab" role="tab" data-tab="fragment" aria-selected="true">Fragment</button>
+    </div>
+    <div id="shaderHint"></div>
+    <div class="editorShell">
+      <pre id="shaderGutter" aria-hidden="true"></pre>
+      <div class="editorWrap">
+        <pre id="shaderHighlight" aria-hidden="true"></pre>
+        <textarea id="shaderEditor" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="GLSL shader source"></textarea>
+      </div>
+    </div>
+    <div class="actions">
+      <button type="button" id="shaderApply" title="Compile and apply (Ctrl+Enter / Cmd+Enter)">Apply</button>
+      <button type="button" id="shaderReset" title="Restore default GLSL for both tabs">Reset</button>
+      <span class="shortcut">Ctrl/Cmd+Enter &middot; Tab</span>
+      <span id="shaderStatus">Applied</span>
+    </div>
+    <pre id="shaderError" role="alert" hidden></pre>
+  </details>
 
   <script src="transforms.js"></script>
   <script src="models.js"></script>

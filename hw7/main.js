@@ -526,33 +526,93 @@ bindTextures();
 //
 // The pixel cap also adapts automatically to hold the 60 FPS target: every
 // ADAPT.window seconds the mean frame time is checked, and the pixel budget
-// shrinks by ADAPT.step while frames run slower than ADAPT.slow, or grows back
-// toward the cap while they run faster than ADAPT.fast, never below ADAPT.floor.
+// shrinks by ADAPT.stepDown while frames run slower than ADAPT.slow, or grows
+// back toward the cap by ADAPT.stepUp while faster than ADAPT.fast, never below
+// ADAPT.floor. The canvas stays at full cap size and draws into an offscreen
+// FBO sub-viewport upscaled with a clamped linear blit, avoiding swapchain churn.
 const BASE_FOVY = Math.PI / 4, MIN_ASPECT = 1.6;
 const AUTO_PIXELS = MOBILE ? 960 * 540 : 1600 * 900;
-const ADAPT = { window: 1.0, slow: 22, fast: 19, step: 0.8, floor: MOBILE ? 0.25 : 0.36 };
+const ADAPT = { window: 0.3, slow: 22, fast: 19, stepDown: 0.85, stepUp: 0.93, floor: MOBILE ? 0.25 : 0.36 };
 const MAX_FPS = 60;
 let pixelBudget = 1;   // share of AUTO_PIXELS in use
-let projection, renderScale = 1;
+let projection, fullScale = 1, renderScale = 1, cssW = 1, cssH = 1, renderW = 1, renderH = 1;
 const fpsReadout = document.getElementById("fpsReadout");
 const resReadout = document.getElementById("resReadout");
+
+const BLIT_VS = `#version 300 es
+out vec2 vUv;
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  vUv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+const BLIT_FS = `#version 300 es
+precision mediump float;
+uniform sampler2D uSrc;
+uniform vec2 uUvScale, uUvMin, uUvMax;
+in vec2 vUv;
+out vec4 fragColor;
+void main() {
+  vec2 uv = clamp(vUv * uUvScale, uUvMin, uUvMax);
+  fragColor = vec4(texture(uSrc, uv).rgb, 1.0);
+}`;
+const blitProgram = createProgram(BLIT_VS, BLIT_FS);
+const blitUniforms = {
+  uSrc: gl.getUniformLocation(blitProgram, "uSrc"),
+  uUvScale: gl.getUniformLocation(blitProgram, "uUvScale"),
+  uUvMin: gl.getUniformLocation(blitProgram, "uUvMin"),
+  uUvMax: gl.getUniformLocation(blitProgram, "uUvMax")
+};
+gl.useProgram(blitProgram);
+gl.uniform1i(blitUniforms.uSrc, 0);
+gl.useProgram(program);
+
+const sceneFbo = gl.createFramebuffer();
+const sceneTex = gl.createTexture();
+let sceneFboReady = false;
+function allocateSceneTarget(w, h) {
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+  sceneFboReady = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindTexture(gl.TEXTURE_2D, TEXTURES[0]);
+}
+
+function updateRenderSize() {
+  const css = cssW * cssH;
+  renderScale = Math.min(fullScale, Math.sqrt(AUTO_PIXELS * pixelBudget / Math.max(css, 1)));
+  renderW = Math.max(1, Math.min(canvas.width, Math.round(cssW * renderScale)));
+  renderH = Math.max(1, Math.min(canvas.height, Math.round(cssH * renderScale)));
+  if (resReadout) resReadout.textContent = `${Math.min(renderW, renderH)}p`;
+}
+
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
-  const css = w * h;
-  renderScale = Math.min(dpr, Math.sqrt(AUTO_PIXELS * pixelBudget / Math.max(css, 1)));
-  const nextW = Math.max(1, Math.round(w * renderScale));
-  const nextH = Math.max(1, Math.round(h * renderScale));
-  if (canvas.width !== nextW || canvas.height !== nextH) {
-    canvas.width = nextW;
-    canvas.height = nextH;
+  cssW = Math.max(1, canvas.clientWidth);
+  cssH = Math.max(1, canvas.clientHeight);
+  const css = cssW * cssH;
+  fullScale = Math.min(dpr, Math.sqrt(AUTO_PIXELS / Math.max(css, 1)));
+  const fullW = Math.max(1, Math.round(cssW * fullScale));
+  const fullH = Math.max(1, Math.round(cssH * fullScale));
+  if (canvas.width !== fullW || canvas.height !== fullH || !sceneFboReady) {
+    if (canvas.width !== fullW || canvas.height !== fullH) {
+      canvas.width = fullW;
+      canvas.height = fullH;
+    }
+    allocateSceneTarget(fullW, fullH);
   }
-  if (resReadout) resReadout.textContent = `${Math.min(canvas.width, canvas.height)}p`;
-  gl.viewport(0, 0, canvas.width, canvas.height);
-  const aspect = w / h;
+  const aspect = cssW / cssH;
   const fovy = aspect >= MIN_ASPECT ? BASE_FOVY
     : 2 * Math.atan(Math.tan(BASE_FOVY / 2) * MIN_ASPECT / aspect);
   projection = perspective(fovy, aspect, 0.1, 150);   // only its x and y scales matter now
+  updateRenderSize();
 }
 let needsResize = false;
 window.addEventListener("resize", () => { needsResize = true; });
@@ -562,14 +622,12 @@ const adapt = { t0: null, frames: 0, ms: 0 };
 function adaptResolution(now, frameMs) {
   adapt.t0 ??= now;
   adapt.frames++; adapt.ms += frameMs;
-  if (now - adapt.t0 < ADAPT.window) return false;
+  if (now - adapt.t0 < ADAPT.window) return;
   const mean = adapt.ms / adapt.frames;
   adapt.t0 = now; adapt.frames = 0; adapt.ms = 0;
-  const next = mean > ADAPT.slow ? Math.max(ADAPT.floor, pixelBudget * ADAPT.step)
-    : mean < ADAPT.fast ? Math.min(1, pixelBudget / ADAPT.step) : pixelBudget;
-  if (next === pixelBudget) return false;
-  pixelBudget = next;
-  return true;
+  const next = mean > ADAPT.slow ? Math.max(ADAPT.floor, pixelBudget * ADAPT.stepDown)
+    : mean < ADAPT.fast ? Math.min(1, pixelBudget / ADAPT.stepUp) : pixelBudget;
+  if (next !== pixelBudget) { pixelBudget = next; updateRenderSize(); }
 }
 
 const perf = { t0: null, frames: 0, ready: false };
@@ -587,8 +645,8 @@ function updatePerfHud(now) {
 // The angle one pixel spans mid-frame, which sizes the stars and picks
 // mipmap levels: the plain lens's, blended toward the fisheye's as it opens
 function pixelAngle() {
-  const rect = 2 / (projection[5] * canvas.height);
-  const fish = 4 * Math.sin(CHASE.fishHalfX / 2) / Math.max(canvas.width, canvas.height);
+  const rect = 2 / (projection[5] * renderH);
+  const fish = 4 * Math.sin(CHASE.fishHalfX / 2) / Math.max(renderW, renderH);
   return rect + (fish - rect) * lensFisheye;
 }
 
@@ -1012,7 +1070,7 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
 // Hand this frame's scene, lights, lens and controls to the shader
 function uploadScene(view, t, ship) {
   const u = uniforms;
-  gl.uniform2f(u.uResolution, canvas.width, canvas.height);
+  gl.uniform2f(u.uResolution, renderW, renderH);
   gl.uniform1f(u.uProj00, projection[0]);
   gl.uniform1f(u.uProj11, projection[5]);
   gl.uniform1f(u.uFisheye, lensFisheye);
@@ -1080,10 +1138,8 @@ function render(time) {
   lastRafTime = time;
 
   const now = time / 1000;
-  if (adaptResolution(now, frameDelta) || needsResize) {
-    needsResize = false;
-    resize();
-  }
+  if (needsResize) { needsResize = false; resize(); }
+  adaptResolution(now, frameDelta);
   if (sceneStart === null) { sceneStart = now; lastNow = now; }
   const dt = Math.min(Math.max(now - lastNow, 0), 0.1);   // capped, so a stalled tab doesn't lurch
   lastNow = now;
@@ -1109,7 +1165,28 @@ function render(time) {
   plasma.update();
   uploadScene(view, t, ship);
 
-  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const useFbo = sceneFboReady && (renderW < canvas.width || renderH < canvas.height);
+  if (useFbo) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+    gl.viewport(0, 0, renderW, renderH);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(blitProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.uniform2f(blitUniforms.uUvScale, renderW / canvas.width, renderH / canvas.height);
+    gl.uniform2f(blitUniforms.uUvMin, 0.5 / canvas.width, 0.5 / canvas.height);
+    gl.uniform2f(blitUniforms.uUvMax, (renderW - 0.5) / canvas.width, (renderH - 0.5) / canvas.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindTexture(gl.TEXTURE_2D, TEXTURES[0]);
+    gl.useProgram(program);
+  } else {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
 
   updateWashes(t, ship);
   updateReveal(t);

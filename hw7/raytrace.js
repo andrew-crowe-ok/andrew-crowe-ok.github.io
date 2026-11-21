@@ -34,7 +34,8 @@ const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
 // 16 is all WebGL 2 promises.
 const TEXTURE_UNITS = 16;
 // Height-field bump mapping from a texture (Week 9-2). No part pairs a texture
-// with BUMP_MAPPING today -- the planet, moon and dome are untextured -- so it
+// with BUMP_MAPPING today -- the planet is color-mapped only, the moon and dome
+// are untextured -- so it
 // is compiled out: 4 more 16-way texture switches the shader would carry for
 // nothing. drawPrimitive (main.js) refuses a part that would need it.
 const TEXTURED_BUMP = false;
@@ -1018,6 +1019,9 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
     vec3 B = cross(s.ng, T);
     vec3 nt = normalize(sampleTex(info.z, uv, d1, d2).rgb * 2.0 - 1.0);
     s.n = normalize(mat3(T, B, s.ng) * nt);
+  } else if (uMatB[i].x > 0.0 && uMirrorWarp > 0.0) {
+    // A textured mirror (the Mars planet) ripples like the bare one above
+    s.n = normalize(normalToEye * mirrorWarpNormal(po));
   }
   return s;
 }

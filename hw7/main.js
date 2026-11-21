@@ -342,16 +342,16 @@ function applyFilter(texture) {
   if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT, mode.aniso);
 }
 
-// Antelope canyon thumbnail (64x48) as an immediate placeholder on frame 1
-const ANTELOPE_THUMB = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAsICAoIBwsKCQoNDAsNERwSEQ8PESIZGhQcKSQrKigkJyctMkA3LTA9MCcnOEw5PUNFSElIKzZPVU5GVEBHSEX/2wBDAQwNDREPESESEiFFLicuRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUX/wAARCAAwAEADASIAAhEBAxEB/8QAGgABAAMBAQEAAAAAAAAAAAAABAIDBQABBv/EADEQAAIBAwICBwYHAAAAAAAAAAECAwAEESExEmETQUJRcYGRIiOCkqHBBTIzQ3Ki0f/EABgBAQEBAQEAAAAAAAAAAAAAAAECAAME/8QAGREBAQEBAQEAAAAAAAAAAAAAAAERAmES/9oADAMBAAIRAxEAPwD5SEMdnpaJLjR1z4UGN4u/WlI8O3HXrlbDEjlxqwPw1PDDfHy1SvQndyPOrlWMaiQ+ANdNOPeKQbIPUiq3lfrTJ5NUmVcaufWqHiGvvG9a2ixXLcMN0/tRJJ8jUEedWTIg2kOfGgSrJn2SSOdRerBhUUdu26rTI7e2xqn1rCSNSci6xS40I/fIPXpXKdeLkbaW1sNejAFTMNrkDoyTyrKUpsbxge4jH2pCSxxKQLkBj14GlX9RWGvb247JB8aNNDbKNSQObUWRYiMteEcwKFJa25yReyZovXjYTJBatrxE93tUaQRKMK2B/Kiy2UWdLts8hRnhCb3JxzWud68TYUktsu5HoKvWeFiBG2vdpWdGsYP6KfLSozGv5Y08lFEpjRW4gA94VB8RXLcfh6niReJz2qIJFJx0YPLgH+VcJWAyIzywAPtVaogz2wOOIA+NRa4tsaajlVBmlHY+oqDyyYyQB8dOhOS5hGyMfKiyzq2iofE7VzTnY49dqO8y9pgam0Y//9k=";
+// Mars dune thumbnail (64x32) as an immediate placeholder on frame 1
+const MARS_THUMB = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAAgAEADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDzrxLqsWraobm23eUg2ISMfKOBx2rK+zyMolRCysccDPNa03h6S2nktpbiESBsAb8Z/oa6LT7abwx4amvjJbPdeYBAM79ue5qG7aGqi5O7K3w7jvrPXzcmDy7cQsJpZxtRR2yTxnOKua/41P8Awkf2i0l8xIAUQjp6ZrN1nUdY160jiuJnk2chV4UH6Dis6Lwvq7qrNabUbkO8qoP1NCet2ElpyxR0egeNT/wkf2i7l8tJwEcnp6Zqn8RI76818XIg8y3MKiGWAbkYd8EcZzmsiXwvq6KzLabkXkukquP0NaOjajrGg2kkVvM8e/kq3Kk/Q8UN63QRWnLJHLfZ5FUyuhVVOORjmtXw1qsWk6oLm53eU42OQM/KeDx3ro9QtpvE/hqG+Elsl15hE4zs3Y7iudh8PSXM8dtFcQmQtgjfnH9BTTvoDi4u6M6ayu4QDLFJgnhsEj86660jtNQ+G87faB9tikOUI5yOn4EZ/EVu3Ug0uxay0yyLzshDXDgE+h2jNcPZwX1taXEoxsk+Vx7jvQnfcUo22ZFo+ptFcbJBvVhjBp2pRXhkFyocoThcnOPaslSYpwxGCrZr11rS2h8DtqkyRtbRR+YjYGXcjAznnrTehKV3uecabFeCQ3LBwgOGwcZ9qbrGptLcFIxsVRjAr0lbS2m8DrqkKRrbSx+Y7YGUcDBxjnrXkTEyzlgMlmzQtQat1O0u47TT/hvA32gfbZZBhAOcnr+AGPxNcjDZXcwJiikwDy2CB+dad5BfXNpbynGyP5UHue9dxayDVLFbLU7IpOqALcIAD6DcM0m7bFRjf4mf/9k=";
 
 // An image file: immediate low-res placeholder, then the image with mipmaps once decoded off-thread
 function loadTexture(urls, thumbUrl) {
   if (typeof urls === "string") urls = [urls];
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  // Default 1x1 base rock color of Antelope Canyon while the thumbnail parses
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([73, 61, 92, 255]));
+  // Default 1x1 Mars dust color while the thumbnail parses
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([120, 72, 60, 255]));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   texture._size = [1, 1];
 
@@ -429,11 +429,14 @@ function loadTexture(urls, thumbUrl) {
   return texture;
 }
 
-// Phones get half resolution (1024x766), desktops get 2048x1532; WebP with JPEG fallback
-const ANTELOPE_URLS = MOBILE
-  ? ["textures/antelope-mobile.webp", "textures/antelope-mobile.jpg"]
-  : ["textures/antelope.webp", "textures/antelope.jpg"];
-const planetTexture = loadTexture(ANTELOPE_URLS, ANTELOPE_THUMB);
+// The HiRISE dune photo (mars2.jpg), cropped square and set beside its own
+// mirror image: a 2:1 equirectangular map whose left and right edges meet, so
+// the sphere has no seam. Phones get 1024x512, desktops 2048x1024; WebP with
+// JPEG fallback.
+const MARS_URLS = MOBILE
+  ? ["textures/mars-mobile.webp", "textures/mars-mobile.jpg"]
+  : ["textures/mars.webp", "textures/mars.jpg"];
+const planetTexture = loadTexture(MARS_URLS, MARS_THUMB);
 
 // Procedural ship skin, generated on the GPU (textures.js). Every part's
 // texture is sized to the surface it wraps -- the saucer's go around a

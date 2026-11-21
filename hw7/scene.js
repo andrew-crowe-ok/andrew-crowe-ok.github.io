@@ -16,10 +16,11 @@
 
 const PLANET = { radius: 6.24, spin: 0.08 };                     // spin in rad/s
 
-// Mirror sphere: at default 100% reflectivity the dark slate body vanishes;
-// lowering reflectivity reveals the shaded surface beneath
+// Mirror sphere wearing Mars: half the light is mirrored, half lights the dune
+// texture beneath (shadeLocal's body = 1 - kr), so the reflectivity slider
+// fades from bare Mars at 0% to this half-silvered planet at 100%
 const PLANET_MATERIAL = {
-  ka: 0.04, kd: 0.45, ks: 0, shininess: 64, bumpScale: 0, atmosphere: [0, 0, 0], kr: 1.0
+  ka: 0.08, kd: 1.0, ks: 0, shininess: 64, bumpScale: 0, atmosphere: [0, 0, 0], kr: 0.5
 };
 const ORBIT = { radius: 11.6, speed: 0.25, tilt: 0.25, shipScale: 0.24 };
 
@@ -58,10 +59,11 @@ function drawSystem(parent, t, ship) {
   drawOrbit(plane, ship);
 }
 
-// Planet: a smooth perfect-mirror sphere reflecting the ship, glass tube and sky
+// Planet: a Mars-textured mirror sphere reflecting the ship, glass tube and
+// sky. NORMAL_MAPPING with no normal map is plain color mapping.
 function drawPlanet(parent, t) {
   const r = PLANET.radius;
-  drawPrimitive(planetMesh, null, BUMP_MAPPING,
+  drawPrimitive(planetMesh, planetTexture, NORMAL_MAPPING,
     multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r))), PLANET_MATERIAL);
 }
 

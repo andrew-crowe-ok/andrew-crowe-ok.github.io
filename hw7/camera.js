@@ -162,7 +162,7 @@ const ZOOM = {
   // the ship and moon it clears their bounding extents. The prism itself is
   // kept out of from any view (keepOutOfMoon).
   min: { planet: 18, ship: 1.22, moon: 3.4 },
-  max: 32,                        // about where the 45 degree lens frames the whole orbit
+  max: 26,                        // close enough that the orbit fills the frame
   clearPlanet: 0.5,               // nearest the eye comes to the planet's surface
   perPixel: 0.0012,               // about 13% a wheel notch
   ease: 0.12                      // s

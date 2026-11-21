@@ -156,13 +156,13 @@ function updateCamera(t, ship, free, drag) {
 
 const FOCUS = { blend: 1.2 };     // s, the slide onto a newly clicked object
 const ZOOM = {
-  start: 16,                      // distance on load and after a reset
+  start: 10,                      // distance on load and after a reset
   // Nearest the camera may come. Around the planet it stays outside the ship
   // and glass prism's outer sweep, so neither flies through the lens; around
   // the ship and moon it clears their bounding extents. The prism itself is
   // kept out of from any view (keepOutOfMoon).
   min: { planet: 18, ship: 1.22, moon: 3.4 },
-  max: 26,                        // close enough that the orbit fills the frame
+  max: 18,                        // the planet view's own distance (min.planet), so it can't zoom
   clearPlanet: 0.5,               // nearest the eye comes to the planet's surface
   perPixel: 0.0012,               // about 13% a wheel notch
   ease: 0.12                      // s

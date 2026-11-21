@@ -491,7 +491,7 @@ const { color: nacelleTexture, normal: nacelleNormalMap } = generateSkin("platin
 const { color: deflectorGlow } = generateSkin("deflector", {
   size: [1024, 1024], uniforms: { uInner: [0.85, 0.97, 1.0], uOuter: [0.05, 0.3, 0.95], uRings: 9, uSpokes: 24 } });
 const { color: grilleGlow } = generateSkin("strip", {
-  size: [1024, 128], uniforms: { uInner: [0.55, 0.82, 1.0], uOuter: [0.06, 0.22, 0.8],
+  size: [1024, 128], uniforms: { uInner: [0.45, 0.8, 1.0], uOuter: [0.04, 0.3, 1.0],
     uFrame: [0.08, 0.09, 0.12], uSlats: 40, uFlow: 0.35 } });
 const { color: impulseGlow } = generateSkin("strip", {
   size: [512, 128], uniforms: { uInner: [1.0, 0.6, 0.35], uOuter: [0.75, 0.06, 0.03],

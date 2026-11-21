@@ -80,9 +80,9 @@ const NAV_LIGHTS = {
 // the glows' brightness; flow is how fast the grilles' plasma streams aft, in
 // grille-box units/s (2 is one texture length).
 const ENGINES = {
-  orbit:  { impulse: 1.0, coils: 0.55, bussard: 0.8, flow: 0.15 },
-  charge: { impulse: 1.8, coils: 1.15, bussard: 1.1, flow: 0.7 },   // just before the jump
-  warp:   { impulse: 0.35, coils: 1.5, bussard: 1.4, flow: 2.4 },
+  orbit:  { impulse: 1.0, coils: 1.0, bussard: 0.8, flow: 0.15 },
+  charge: { impulse: 1.8, coils: 1.6, bussard: 1.1, flow: 0.7 },    // just before the jump
+  warp:   { impulse: 0.35, coils: 2.0, bussard: 1.4, flow: 2.4 },
   flare: 2.6,          // coils and Bussards at the instant of the jump
   settle: 0.45,        // s for the flare to die down to warp's levels
   spool: 0.8,          // s for the impulse engines to change level

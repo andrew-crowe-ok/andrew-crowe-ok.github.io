@@ -14,13 +14,13 @@
 // smooth departure onto the straight line it was flying when "Engage" was
 // pressed.
 
-const PLANET = { radius: 6.24, spin: 0.08 };                     // spin in rad/s
+const PLANET = { radius: 8.11, spin: 0.08 };                     // spin in rad/s
 
-// Mirror sphere wearing Mars: half the light is mirrored, half lights the dune
+// Mirror sphere wearing Mars: 65% of the light is mirrored, the rest lights the dune
 // texture beneath (shadeLocal's body = 1 - kr), so the reflectivity slider
-// fades from bare Mars at 0% to this half-silvered planet at 100%
+// fades from bare Mars at 0% to this mostly silvered planet at 100%
 const PLANET_MATERIAL = {
-  ka: 0.3, kd: 1.0, ks: 0, shininess: 64, bumpScale: 0, atmosphere: [0, 0, 0], kr: 0.5
+  ka: 0.3, kd: 1.0, ks: 0, shininess: 64, bumpScale: 0, atmosphere: [0, 0, 0], kr: 0.65
 };
 const ORBIT = { radius: 11.6, speed: 0.25, tilt: 0.25, shipScale: 0.24 };
 

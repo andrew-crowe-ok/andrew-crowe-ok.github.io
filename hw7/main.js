@@ -912,8 +912,14 @@ function updateWashes(t, ship) {
 // Everything back the way the page loaded: the ship on its circle, the free
 // camera's controls, and a fresh scene clock starting at `time`. The chase
 // camera lets go by itself once the ship is back in orbit (camera.js).
+// The starting look is about 39 degrees above the orbit plane: steep enough
+// that the line of sight to the ship, wherever it is on the orbit, passes at
+// least 7.3 from the planet's center -- outside the planet (6.24) by more than
+// the ship's half-length (0.74), so the planet never hides it. Zoom can't help
+// there: the sight line runs back from the ship along the same direction
+// however far away the eye is.
 function resetScene(time) {
-  dragRotX = 0.35; dragRotY = -0.5;
+  dragRotX = 0.55; dragRotY = -0.5;
   camX = 0; camY = 0;
   resetFreeCamera();
   sceneStart = time;

@@ -17,17 +17,19 @@
 const PLANET = { radius: 4.8, spin: 0.08 };                     // spin in rad/s
 
 // Mirror sphere: at default 100% reflectivity the dark slate body vanishes;
-// lowering reflectivity or adding Fresnel reveals the shaded surface beneath
+// lowering reflectivity reveals the shaded surface beneath
 const PLANET_MATERIAL = {
   ka: 0.04, kd: 0.45, ks: 0, shininess: 64, bumpScale: 0, atmosphere: [0, 0, 0], kr: 1.0
 };
 const ORBIT = { radius: 11.6, speed: 0.25, tilt: 0.25, shipScale: 0.24 };
 
-// The glass hex prism: doubled in cross-section and length alongside the planet
-// and orbit, drifting gently along the ship's own orbit in the opposite
-// direction so the ship meets and flies straight through it. `phase` places it
-// just ahead of the ship in front of the planet's limb on load.
-const MOON = { halfSize: [2.96, 2.96, 5.92], speed: 0.05, phase: -0.75, spin: 0.6 };
+// The glass hex prism: a curved section of a hexagonal torus spanning one third
+// of the orbit (major radius ORBIT.radius, cross-section apothem 1.48), drifting
+// gently along the ship's own orbit in the opposite direction while spinning
+// about the orbital centerline so the ship meets and flies straight through it.
+// `phase` places its leading end just ahead of the ship in front of the planet's
+// limb on load.
+const MOON = { apothem: 1.48, halfAngle: Math.PI / 3, speed: 0.05, phase: -1.30, spin: 0.6 };
 // Crystal-clear refractive glass with a subtle blue absorption and Fresnel edge
 // gleam so the ship remains clearly visible as it flies through
 const MOON_MATERIAL = {
@@ -63,22 +65,42 @@ function drawPlanet(parent, t) {
     multiply(parent, multiply(rotateY(PLANET.spin * t), scale(r, r, r))), PLANET_MATERIAL);
 }
 
-// The glass hex prism's frame at scene time t (inside the ship's orbital plane
-// at radius ORBIT.radius, +z along the orbital tangent and spinning about it),
-// its center, and its inverse
+// The curved glass hex prism's frame at scene time t: centered on the orbit in
+// the ship's orbital plane, with the arc symmetric about +x at radius ORBIT.radius.
+// Poloidal spin and torus dimensions go to the shader in uHexTorus (main.js).
 const moonAngle = t => MOON.phase + MOON.speed * t;
 const moonSpin = t => MOON.spin * t;
-const moonFrame = t => multiply(rotateX(ORBIT.tilt),
-  multiply(rotateY(moonAngle(t)), multiply(translate(ORBIT.radius, 0, 0), rotateZ(moonSpin(t)))));
-const inverseMoonFrame = t => multiply(rotateZ(-moonSpin(t)),
-  multiply(translate(-ORBIT.radius, 0, 0), multiply(rotateY(-moonAngle(t)), rotateX(-ORBIT.tilt))));
-const moonCenter = t => transformPoint(moonFrame(t), [0, 0, 0]);
+const moonFrame = t => multiply(rotateX(ORBIT.tilt), rotateY(moonAngle(t)));
+const inverseMoonFrame = t => multiply(rotateY(-moonAngle(t)), rotateX(-ORBIT.tilt));
+const moonCenter = t => transformPoint(moonFrame(t), [ORBIT.radius, 0, 0]);
 
-// Glass hexagonal prism: one refractive hex tube, no texture -- what it shows is what's behind or inside it
+// The prism's cross-section about its center line, at p in its own frame:
+// (u, v) are p's offset from the line, turned with the spin, and the hexagon
+// is max(|v|, HEX_S3 |u| + |v| / 2) <= apothem -- the "hex radius" of (u, v).
+// Wavy, the glass's surface ripples in v over time, as in raytrace.js.
+const hexRadius = (u, v) => Math.max(Math.abs(v), HEX_S3 * Math.abs(u) + 0.5 * Math.abs(v));
+function moonSection(p, t, wavy = false) {
+  const rho = Math.hypot(p[0], p[2]), dr = rho - ORBIT.radius;
+  const spin = moonSpin(t), cs = Math.cos(spin), sn = Math.sin(spin);
+  const u = cs * dr + sn * p[1];
+  let v = -sn * dr + cs * p[1];
+  if (wavy) {
+    const theta = rho > 1e-6 ? Math.atan2(p[2], p[0]) : 0;
+    v -= 0.12 * MOON.apothem * Math.sin(t * 3 + (u / MOON.apothem) * 2.5 + theta * 5);
+  }
+  return { rho, dr, u, v };
+}
+// Below 0 inside the glass, as raytrace.js's hexTorusSideEval behind its end caps
+function moonEval(p, t, wavy) {
+  const dCap = Math.cos(MOON.halfAngle) * Math.abs(p[2]) - Math.sin(MOON.halfAngle) * p[0];
+  if (dCap >= 0 || p[0] * p[0] + p[2] * p[2] < 1e-6) return Math.max(dCap, 1);
+  const { u, v } = moonSection(p, t, wavy);
+  return hexRadius(u, v) - MOON.apothem;
+}
+
+// Glass hexagonal torus section: one refractive curved hex tube, no texture
 function drawMoon(parent, t) {
-  const [hx, hy, hz] = MOON.halfSize;
-  drawPrimitive(hexPrismMesh, null, BUMP_MAPPING, multiply(parent, multiply(moonFrame(t), scale(hx, hy, hz))),
-    MOON_MATERIAL);
+  drawPrimitive(hexPrismMesh, null, BUMP_MAPPING, multiply(parent, moonFrame(t)), MOON_MATERIAL);
 }
 
 // ---------------------------------------------------------------------------

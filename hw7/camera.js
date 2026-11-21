@@ -143,6 +143,9 @@ function updateCamera(t, ship, free, drag) {
 // w / s by exp(ZOOM.keyStep), so a step is the same proportion near or far.
 // The distance eases toward that goal with time constant ZOOM.ease, in log
 // space so near and far zooms feel alike, and stays within per-object bounds.
+// At max zoom (nearest distance) on the ship or moon, the camera smoothly locks
+// to that object's orbital heading (keeping the planet world-fixed), so the
+// object holds its orientation while mouse dragging still looks around it.
 //
 // Following the ship, the eye stands a fixed offset from it, so once an orbit
 // that offset can carry it into the planet. Whenever it would come within
@@ -154,29 +157,39 @@ function updateCamera(t, ship, free, drag) {
 const FOCUS = { blend: 1.2 };     // s, the slide onto a newly clicked object
 const ZOOM = {
   start: 16,                      // distance on load and after a reset
-  // Nearest the camera may come. Around the planet it stays outside the ship's
-  // whole sweep (orbit radius + half its length), so the ship never flies
-  // through the lens; around the ship it stays outside the ship's box.
-  min: { planet: 15.4, ship: 1.0, moon: 5.6 },
+  // Nearest the camera may come. Around the planet it stays outside the ship
+  // and glass prism's outer sweep, so neither flies through the lens; around
+  // the ship and moon it clears their bounding extents. The prism itself is
+  // kept out of from any view (keepOutOfMoon).
+  min: { planet: 18, ship: 1.22, moon: 3.4 },
   max: 52,                        // short of the nearest stars (STAR_FIELD.clear) even from the ship
   clearPlanet: 0.5,               // nearest the eye comes to the planet's surface
   perPixel: 0.0012,               // about 13% a wheel notch
   keyStep: 0.015,                 // log distance per w / s, about 1.5%
   ease: 0.12                      // s
 };
+const LOCK = {
+  goalTol: 1.001,                 // zoom.goal within 0.1% of ZOOM.min counts as max zoom
+  distTol: 1.15,                  // wait until zoom.dist has nearly reached max zoom
+  blend: 0.25                     // s, smooth ramp in and out of orbital co-rotation
+};
 
 // `pivot` and `panLeft` are this frame's focus point and the pan still easing
 // away; `from` and `fromPan` are what they were when the slide began
-let camFocus, zoom;
+let camFocus, zoom, camLock;
 function resetFreeCamera() {
   const start = focusPoint("ship", { pos: orbitPoint(orbitAngle(0)) }, null);
   camFocus = { on: "ship", from: start, fromPan: [0, 0], t0: -Infinity,
-               pivot: start, panLeft: [0, 0] };
+               pivot: start, panLeft: [0, 0], switching: false };
   zoom = { dist: ZOOM.start, goal: ZOOM.start };
+  camLock = { angle: 0, u: 0, lastHeading: null };
 }
 
 const focusPoint = (on, ship, moon) =>
   on === "ship" ? transformPoint(rotateX(ORBIT.tilt), ship.pos) : on === "moon" ? moon : [0, 0, 0];
+const focusHeading = (on, ship, t) =>
+  on === "ship" ? ship.heading : on === "moon" ? moonAngle(t) : null;
+const wrapAngle = a => ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
 
 function setZoomGoal(d) {
   zoom.goal = Math.min(ZOOM.max, Math.max(ZOOM.min[camFocus.on], d));
@@ -188,19 +201,47 @@ const zoomPinch = ratio => setZoomGoal(zoom.goal * ratio);
 // Start the slide onto `on`. `pan` is the arrow-key pan as it stands, which
 // the caller zeroes: it is folded into what eases away.
 function focusOn(on, now, pan) {
-  Object.assign(camFocus, { on, from: camFocus.pivot, fromPan: vadd(camFocus.panLeft, pan), t0: now });
+  const switched = on !== camFocus.on;
+  Object.assign(camFocus, { on, from: camFocus.pivot, fromPan: vadd(camFocus.panLeft, pan), t0: now,
+                            switching: switched || camFocus.switching });
+  if (switched) {
+    camLock.u = 0;
+    camLock.lastHeading = null;
+  }
   setZoomGoal(zoom.goal);
 }
 
 // Once a frame, before updateCamera: the free view. `now` is real time (the
-// slide doesn't care about resets), dt the frame's length.
-function freeView(now, dt, ship, moon, rotation, [panX, panY]) {
+// slide doesn't care about resets), `t` the scene clock, dt the frame's length.
+function freeView(now, dt, t, ship, moon, rotation, [panX, panY]) {
   const s = smootherstep((now - camFocus.t0) / FOCUS.blend);
+  if (s >= 1) camFocus.switching = false;
   camFocus.pivot = vadd(camFocus.from, vmul(vsub(focusPoint(camFocus.on, ship, moon), camFocus.from), s));
   camFocus.panLeft = vmul(camFocus.fromPan, 1 - s);
   zoom.dist *= (zoom.goal / zoom.dist) ** (1 - Math.exp(-dt / ZOOM.ease));
+
+  const heading = focusHeading(camFocus.on, ship, t);
+  const minDist = ZOOM.min[camFocus.on];
+  const settled = !camFocus.switching || s >= 0.85;
+  const atMax = heading !== null && settled &&
+    zoom.goal <= minDist * LOCK.goalTol && zoom.dist <= minDist * LOCK.distTol;
+  const step = dt / LOCK.blend;
+  camLock.u = atMax ? Math.min(1, camLock.u + step) : Math.max(0, camLock.u - step);
+  if (heading !== null) {
+    if (camLock.lastHeading !== null) {
+      const w = smootherstep(camLock.u);
+      if (w > 0) camLock.angle = wrapAngle(camLock.angle + w * wrapAngle(heading - camLock.lastHeading));
+    }
+    camLock.lastHeading = heading;
+  } else {
+    camLock.lastHeading = null;
+  }
+
+  const viewRot = camLock.angle === 0 ? rotation
+    : multiply(rotation, multiply(rotateX(ORBIT.tilt),
+        multiply(rotateY(-camLock.angle), rotateX(-ORBIT.tilt))));
   const eye = translate(panX + camFocus.panLeft[0], panY + camFocus.panLeft[1], -zoom.dist);
-  const view = multiply(multiply(eye, rotation), translate(...vmul(camFocus.pivot, -1)));
+  const view = multiply(multiply(eye, viewRot), translate(...vmul(camFocus.pivot, -1)));
 
   // Keep the eye out of the planet: move it to `clear` with the rotation as
   // is, which is view * translate(eye - clear)
@@ -208,6 +249,34 @@ function freeView(now, dt, ship, moon, rotation, [panX, panY]) {
   if (r >= rClear) return view;
   const clear = r > 1e-6 ? vmul(at, rClear / r) : untransformVector(view, [0, 0, rClear]);
   return multiply(view, translate(...vsub(at, clear)));
+}
+
+// The glass prism is solid to the camera, whatever it is doing: free, riding
+// the ship as it flies through the prism, or chasing it at Engage. An eye that
+// would be inside is slid straight out from the prism's center line, in its
+// cross-section, onto the hexagon grown by the surface's ripple (12% of the
+// apothem) and MOON_CLEAR.pad; the view's rotation is kept, as for the planet.
+// Past each end cap that hexagon shrinks away over MOON_CLEAR.ends of arc, so
+// an eye coming at an end rides up over it instead of jumping from the cap
+// face to the side -- the push is continuous everywhere off the center line.
+const MOON_CLEAR = { pad: 0.12, ends: 1.6 };
+function keepOutOfMoon(view, t) {
+  const at = viewParts(view).eye;
+  const p = transformPoint(inverseMoonFrame(t), at);
+  const { rho, dr, u, v } = moonSection(p, t);
+  if (rho < 1e-6) return view;
+  const past = (Math.abs(Math.atan2(p[2], p[0])) - MOON.halfAngle) * rho;   // arc beyond the nearer cap
+  const need = (1 - smootherstep(past / MOON_CLEAR.ends)) * (1.12 * MOON.apothem + MOON_CLEAR.pad);
+  const have = hexRadius(u, v);
+  if (have >= need) return view;
+  // Scale the offset (dr, y) from the center line up to the hexagon; on the
+  // line itself, there is no direction to keep, so go straight out
+  const spin = moonSpin(t);
+  const [ddr, dy, from] = have > 1e-6 ? [dr, p[1], have] : [1, 0, hexRadius(Math.cos(spin), -Math.sin(spin))];
+  const k = need / from;
+  const out = (ORBIT.radius + ddr * k) / rho;
+  const target = transformPoint(moonFrame(t), [p[0] * out, dy * k, p[2] * out]);
+  return multiply(view, translate(...vsub(at, target)));
 }
 
 // Where the ray o + t d (t >= 0) enters the box |p_i| <= half_i, as t, or null
@@ -229,23 +298,100 @@ function rayHitsBox(o, d, half) {
 }
 
 const HEX_S3 = Math.sqrt(3) / 2;
-function rayHitsHexPrism(o, d, half) {
-  const ox = o[0] / half[0], oy = o[1] / half[1], oz = o[2] / half[2];
-  const dx = d[0] / half[0], dy = d[1] / half[1], dz = d[2] / half[2];
-  const os = [oy, HEX_S3 * ox + 0.5 * oy, -HEX_S3 * ox + 0.5 * oy, oz];
-  const ds = [dy, HEX_S3 * dx + 0.5 * dy, -HEX_S3 * dx + 0.5 * dy, dz];
-  let near = 0, far = Infinity;
-  for (let i = 0; i < 4; i++) {
-    if (Math.abs(ds[i]) < 1e-12) {
-      if (Math.abs(os[i]) > 1) return null;
-      continue;
+function rayHitsHexTorus(o, d, R, r, halfAngle, spin) {
+  const len = Math.hypot(d[0], d[1], d[2]);
+  if (len < 1e-12) return null;
+  const u = [d[0] / len, d[1] / len, d[2] / len];
+  const sinA = Math.sin(halfAngle), cosA = Math.cos(halfAngle);
+  let w0 = 0, w1 = Infinity, hole0 = Infinity, hole1 = -Infinity;
+
+  for (const nz of [cosA, -cosA]) {
+    const op = -sinA * o[0] + nz * o[2];
+    const dp = -sinA * u[0] + nz * u[2];
+    if (Math.abs(dp) < 1e-12) {
+      if (op > 0) return null;
+    } else {
+      const tc = -op / dp;
+      if (dp < 0) w0 = Math.max(w0, tc);
+      else w1 = Math.min(w1, tc);
     }
-    const a = (-1 - os[i]) / ds[i], b = (1 - os[i]) / ds[i];
-    near = Math.max(near, Math.min(a, b));
-    far = Math.min(far, Math.max(a, b));
-    if (near > far) return null;
   }
-  return near;
+  if (w0 >= w1) return null;
+
+  const rBound = 1.16 * r;
+  if (Math.abs(u[1]) < 1e-12) {
+    if (Math.abs(o[1]) > rBound) return null;
+  } else {
+    const ya = (-rBound - o[1]) / u[1], yb = (rBound - o[1]) / u[1];
+    w0 = Math.max(w0, Math.min(ya, yb));
+    w1 = Math.min(w1, Math.max(ya, yb));
+    if (w0 >= w1) return null;
+  }
+
+  const rOut = R + rBound, rIn = Math.max(R - rBound, 0);
+  const a = u[0] * u[0] + u[2] * u[2];
+  const b = o[0] * u[0] + o[2] * u[2];
+  const oo2 = o[0] * o[0] + o[2] * o[2];
+  const cOut = oo2 - rOut * rOut;
+  if (a < 1e-12) {
+    if (cOut > 0 || (rIn > 0 && oo2 < rIn * rIn)) return null;
+  } else {
+    const discOut = b * b - a * cOut;
+    if (discOut < 0) return null;
+    const sqOut = Math.sqrt(discOut);
+    w0 = Math.max(w0, (-b - sqOut) / a);
+    w1 = Math.min(w1, (-b + sqOut) / a);
+    if (w0 >= w1) return null;
+
+    if (rIn > 0) {
+      const discIn = b * b - a * (oo2 - rIn * rIn);
+      if (discIn > 0) {
+        const sqIn = Math.sqrt(discIn);
+        const i0 = (-b - sqIn) / a, i1 = (-b + sqIn) / a;
+        if (i0 <= w0 && i1 >= w1) return null;
+        if (i0 <= w0 && i1 > w0) w0 = i1;
+        else if (i1 >= w1 && i0 < w1) w1 = i0;
+        else if (i0 > w0 && i1 < w1) { hole0 = i0; hole1 = i1; }
+      }
+    }
+  }
+  if (w0 >= w1) return null;
+
+  const cs = Math.cos(spin), sn = Math.sin(spin);
+  const sideEval = x => {
+    const px = o[0] + u[0] * x, py = o[1] + u[1] * x, pz = o[2] + u[2] * x;
+    const dr = Math.hypot(px, pz) - R;
+    const hu = cs * dr + sn * py, hv = -sn * dr + cs * py;
+    const dY = Math.abs(hv);
+    return Math.max(dY, HEX_S3 * Math.abs(hu) + 0.5 * dY) - r;
+  };
+
+  let prevX = w0, prevV = sideEval(prevX);
+  if (prevV <= 0) return prevX / len;
+
+  for (let k = 0; k < 64; k++) {
+    if (prevX >= hole0 && prevX < hole1) {
+      prevX = hole1;
+      prevV = sideEval(prevX);
+    }
+    let x = prevX + Math.max(prevV * 0.95, k === 0 ? 0.005 : 0.03);
+    if (prevX < hole0 && x > hole0) x = hole0;
+    if (x > w1) x = w1;
+    const v = sideEval(x);
+    if (v <= 0) {
+      let lo = prevX, hi = x;
+      for (let j = 0; j < 8; j++) {
+        const mid = 0.5 * (lo + hi);
+        if (sideEval(mid) <= 0) hi = mid;
+        else lo = mid;
+      }
+      return 0.5 * (lo + hi) / len;
+    }
+    if (x >= w1) return null;
+    prevX = x;
+    prevV = v;
+  }
+  return null;
 }
 
 // The same for the sphere |p| <= r about the origin: the smaller root of
@@ -273,7 +419,8 @@ function pickObject(x, y, view, ship, t) {
     ["ship", rayHitsBox(transformPoint(toShip, o), transformVector(toShip, d),
       vmul(SHIP_HALF_EXTENT, ORBIT.shipScale))],
     ["planet", rayHitsSphere(o, d, PLANET.radius)],
-    ["moon", rayHitsHexPrism(transformPoint(toMoon, o), transformVector(toMoon, d), MOON.halfSize)]
+    ["moon", rayHitsHexTorus(transformPoint(toMoon, o), transformVector(toMoon, d),
+      ORBIT.radius, MOON.apothem, MOON.halfAngle, moonSpin(t))]
   ].filter(([, t]) => t !== null);
   if (!hits.length) return null;
   return hits.reduce((a, b) => b[1] < a[1] ? b : a)[0];

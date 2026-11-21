@@ -157,6 +157,8 @@ const unitOf = texture => texture ? (texture._unitIndex ?? -1) : -1;
 
 function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL, normalMap = null) {
   if (scene.count >= MAX_PRIMS) throw new Error(`more than ${MAX_PRIMS} primitives`);
+  if (mapping === BUMP_MAPPING && texture && !TEXTURED_BUMP)
+    throw new Error("a textured BUMP_MAPPING part needs TEXTURED_BUMP (raytrace.js)");
   const i = scene.count++;
   const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb = [0, 0, 0], glow = 0,
     power = 1, scroll = 0 } = material;
@@ -240,9 +242,10 @@ function fitGroup(mesh, modelView) {
   const cy = a1 * b12 + a5 * b13 + a9 * b14 + a13;
   const cz = a2 * b12 + a6 * b13 + a10 * b14 + a14;
 
-  const rx = mesh.shape === TORUS ? 1 + mesh.tube : mesh.shape === HEX_PRISM ? 2 / Math.sqrt(3) : 1;
-  const ry = mesh.shape === TORUS ? mesh.tube : 1;
-  const rz = mesh.shape === TORUS ? 1 + mesh.tube : 1;
+  const hexBound = 1.27 * MOON.apothem;
+  const rx = mesh.shape === TORUS ? 1 + mesh.tube : mesh.shape === HEX_PRISM ? ORBIT.radius + hexBound : 1;
+  const ry = mesh.shape === TORUS ? mesh.tube : mesh.shape === HEX_PRISM ? hexBound : 1;
+  const rz = mesh.shape === TORUS ? 1 + mesh.tube : mesh.shape === HEX_PRISM ? ORBIT.radius + hexBound : 1;
 
   // Arvo's transformed AABB extents along x, y, z
   const ex = Math.abs(m0) * rx + Math.abs(m4) * ry + Math.abs(m8) * rz;
@@ -350,6 +353,7 @@ function loadTexture(urls, thumbUrl) {
   // Default 1x1 base rock color of Antelope Canyon while the thumbnail parses
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([73, 61, 92, 255]));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  texture._size = [1, 1];
 
   let fullLoaded = false;
   function upload(img, isFlipped = false) {
@@ -365,6 +369,7 @@ function loadTexture(urls, thumbUrl) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
     gl.generateMipmap(gl.TEXTURE_2D);
     texture._mipmapped = true;
+    texture._size = [img.naturalWidth || img.width, img.naturalHeight || img.height];
     applyFilter(texture);   // the panel's current mode, not just the default
   }
 
@@ -502,6 +507,7 @@ function loadVideoTexture(sources) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 60, 20, 255]));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  texture._size = [1, 1];
 
   const video = document.createElement("video");
   Object.assign(video, { muted: true, loop: true, playsInline: true, autoplay: true, crossOrigin: "anonymous" });
@@ -516,7 +522,15 @@ function loadVideoTexture(sources) {
     gl.activeTexture(gl.TEXTURE0 + (texture._unitIndex ?? 14));
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    // Storage is (re)allocated only when the frame size changes; every other
+    // frame overwrites it in place instead of reallocating it
+    const w = video.videoWidth, h = video.videoHeight;
+    if (w !== texture._size[0] || h !== texture._size[1]) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+      texture._size = [w, h];
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    }
   }
   // Playback speed; only touched when it changes, since every change makes
   // the browser re-time the stream
@@ -685,12 +699,10 @@ function pixelAngle() {
 // ---------------------------------------------------------------------------
 // Ray tracer controls (index.html)
 // ---------------------------------------------------------------------------
-const ENABLE_MIRROR_FRESNEL = false;
 const controls = {};
 const CONTROL_INPUTS = {
   bounces:       { read: el => parseInt(el.value), show: v => `${v}` },
   mirrorReflect: { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
-  mirrorFresnel: { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
   mirrorWarp:    { read: el => parseFloat(el.value), show: v => `${Math.round(v * 100)}%` },
   ior:           { read: el => parseFloat(el.value), show: v => v.toFixed(2) },
   shadows:       { read: el => el.checked },
@@ -699,17 +711,12 @@ const CONTROL_INPUTS = {
   showLod:       { read: el => el.checked }
 };
 // The panel starts folded on small screens, where it would cover the scene
-if (MOBILE || innerWidth < 560) document.getElementById("controls").open = false;
+if (MOBILE || innerWidth <= 600) document.getElementById("controls").open = false;
 
 // The page's query string can preset any of them, e.g. ?bounces=0&shadows=0
 const presets = new URLSearchParams(location.search);
 for (const [id, { read, show, apply }] of Object.entries(CONTROL_INPUTS)) {
   const input = document.getElementById(id);
-  if (id === "mirrorFresnel" && !ENABLE_MIRROR_FRESNEL) {
-    if (input) input.closest(".row").hidden = true;
-    controls.mirrorFresnel = 0;
-    continue;
-  }
   const output = document.querySelector(`output[for="${id}"]`);
   if (MOBILE && id === "bounces" && !presets.has(id)) input.value = "2";
   if (presets.has(id)) {
@@ -981,7 +988,7 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
     "faceforward", "clamp", "max", "min", "mix", "pow", "exp", "sqrt", "abs", "smoothstep", "step",
     "maxComponent", "transmittance", "uMatA", "uMatB", "uMatC", "uMatD", "uMatE",
     "uLightPos", "uLightColor", "uLightRange", "uShadows", "uAttenuation",
-    "uMirrorReflect", "uMirrorFresnel", "uMirrorWarp",
+    "uMirrorReflect", "uMirrorWarp",
     "uBounces", "NUM_LIGHTS", "EPS", "STACK_SIZE"]);
   const GLSL_TOKEN = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|^[ \t]*#[^\n]*|(?:\b\d+\.\d*(?:[eE][+-]?\d+)?[fF]?|\B\.\d+(?:[eE][+-]?\d+)?[fF]?|\b\d+(?:[eE][+-]?\d+)?[uUfF]?\b)|\b[A-Za-z_]\w*\b)/gm;
 
@@ -1006,8 +1013,8 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
   }
 
   const TAB_HINTS = {
-    shadeLocal: "Direct Phong lighting, shadow rays, distance falloff, emission &amp; limb glow. Uniforms: <code>uShadows</code> <code>uAttenuation</code> <code>uMirrorReflect</code> <code>uMirrorFresnel</code> <code>uMatA..E</code>",
-    stepBounce: "Ray-tree recursion step: mirror reflection, Snell refraction, TIR &amp; Schlick Fresnel. Uniforms: <code>uBounces</code> <code>uMirrorReflect</code> <code>uMirrorFresnel</code> <code>B.x</code> (mirror) <code>B.y</code> (glass) <code>B.z</code> (IOR) <code>uMatD</code> (absorb)"
+    shadeLocal: "Direct Phong lighting, shadow rays, distance falloff, emission &amp; edge gleam. Uniforms: <code>uShadows</code> <code>uAttenuation</code> <code>uMirrorReflect</code> <code>uMatA..E</code>",
+    stepBounce: "Ray-tree recursion step: mirror reflection, Snell refraction, TIR &amp; Schlick Fresnel. Uniforms: <code>uBounces</code> <code>uMirrorReflect</code> <code>uMatB</code> (kr, kt, IOR) <code>uMatD</code> (absorb)"
   };
 
   const editor = document.getElementById("shaderEditor");
@@ -1102,6 +1109,28 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
   resetBtn.addEventListener("click", resetShaders);
 }
 
+// Which glass the eye starts in, if any: the same answer for every pixel, so
+// it is found here, once a frame, and handed to the shader as uInitAbsorb.
+// Only parts outside the groups count, as in the shader's trace (the ship's
+// own glass is never around the eye). Each one's matrix rows end in where
+// the eye's origin lands in that part's own space.
+const NO_ABSORB = new Float32Array(3);
+function eyeAbsorb(t) {
+  const ungrouped = scene.groupCount > 0 ? scene.groupRange[0] : scene.count;
+  for (let i = 0; i < ungrouped; i++) {
+    if (scene.matB[4 * i + 1] <= 0) continue;
+    const at = 12 * i, shape = scene.info[4 * i];
+    const p = [scene.inv[at + 3], scene.inv[at + 7], scene.inv[at + 11]];
+    const inside = shape === HEX_PRISM ? moonEval(p, t, scene.matE[4 * i + 1] < -0.5) < 0
+      : shape === BOX ? Math.max(Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2])) < 1 : vdot(p, p) < 1;
+    if (inside) return scene.matD.subarray(4 * i, 4 * i + 3);
+  }
+  return NO_ABSORB;
+}
+
+// Each unit's level-0 size, for the shader's mip-level overlay
+const texSizeBuf = new Float32Array(2 * TEXTURE_UNITS);
+
 // Hand this frame's scene, lights, lens and controls to the shader
 function uploadScene(view, t, ship) {
   const u = uniforms;
@@ -1147,9 +1176,14 @@ function uploadScene(view, t, ship) {
   gl.uniform1i(u.uAttenuation, controls.attenuation);
   gl.uniform1i(u.uShowLod, controls.showLod);
   gl.uniform1f(u.uMirrorReflect, controls.mirrorReflect);
-  gl.uniform1f(u.uMirrorFresnel, ENABLE_MIRROR_FRESNEL ? controls.mirrorFresnel : 0);
   gl.uniform1f(u.uMirrorWarp, controls.mirrorWarp);
   gl.uniform1f(u.uTime, t);
+  gl.uniform4f(u.uHexTorus, ORBIT.radius, MOON.apothem, MOON.halfAngle, moonSpin(t));
+  const spin = moonSpin(t);
+  gl.uniform4f(u.uHexTrig, Math.cos(spin), Math.sin(spin), Math.cos(MOON.halfAngle), Math.sin(MOON.halfAngle));
+  gl.uniform3fv(u.uInitAbsorb, eyeAbsorb(t));
+  TEXTURES.forEach((tex, i) => texSizeBuf.set(tex?._size ?? [1, 1], 2 * i));
+  gl.uniform2fv(u.uTexSize, texSizeBuf);
 
   gl.uniform3fv(u.uSkyCenter, scene.sky.center);
   gl.uniformMatrix3fv(u.uSkyRot, false, scene.sky.rot);
@@ -1188,8 +1222,8 @@ function render(time) {
   // where the ship is before anything is drawn.
   const ship = shipState(t);
   const moon = moonCenter(t);
-  const view = updateCamera(t, ship, freeView(now, dt, ship, moon, rotation, [camX, camY]),
-    { x: dragRotX, y: dragRotY });
+  const view = keepOutOfMoon(updateCamera(t, ship, freeView(now, dt, t, ship, moon, rotation, [camX, camY]),
+    { x: dragRotX, y: dragRotY }), t);
   lastView = view; lastShip = ship; lastTime = t;
 
   // Walk the hierarchy to collect this frame's primitives, then trace them all

@@ -157,6 +157,8 @@ const unitOf = texture => texture ? (texture._unitIndex ?? -1) : -1;
 
 function drawPrimitive(mesh, texture, mapping, modelView, material = DEFAULT_MATERIAL, normalMap = null) {
   if (scene.count >= MAX_PRIMS) throw new Error(`more than ${MAX_PRIMS} primitives`);
+  if (mapping === BUMP_MAPPING && texture && !TEXTURED_BUMP)
+    throw new Error("a textured BUMP_MAPPING part needs TEXTURED_BUMP (raytrace.js)");
   const i = scene.count++;
   const { ka, kd, ks, shininess, bumpScale, atmosphere, kr = 0, kt = 0, absorb = [0, 0, 0], glow = 0,
     power = 1, scroll = 0 } = material;
@@ -351,6 +353,7 @@ function loadTexture(urls, thumbUrl) {
   // Default 1x1 base rock color of Antelope Canyon while the thumbnail parses
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([73, 61, 92, 255]));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  texture._size = [1, 1];
 
   let fullLoaded = false;
   function upload(img, isFlipped = false) {
@@ -366,6 +369,7 @@ function loadTexture(urls, thumbUrl) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
     gl.generateMipmap(gl.TEXTURE_2D);
     texture._mipmapped = true;
+    texture._size = [img.naturalWidth || img.width, img.naturalHeight || img.height];
     applyFilter(texture);   // the panel's current mode, not just the default
   }
 
@@ -503,6 +507,7 @@ function loadVideoTexture(sources) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 60, 20, 255]));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  texture._size = [1, 1];
 
   const video = document.createElement("video");
   Object.assign(video, { muted: true, loop: true, playsInline: true, autoplay: true, crossOrigin: "anonymous" });
@@ -517,7 +522,15 @@ function loadVideoTexture(sources) {
     gl.activeTexture(gl.TEXTURE0 + (texture._unitIndex ?? 14));
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    // Storage is (re)allocated only when the frame size changes; every other
+    // frame overwrites it in place instead of reallocating it
+    const w = video.videoWidth, h = video.videoHeight;
+    if (w !== texture._size[0] || h !== texture._size[1]) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+      texture._size = [w, h];
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    }
   }
   // Playback speed; only touched when it changes, since every change makes
   // the browser re-time the stream
@@ -1096,6 +1109,28 @@ function rebuildProgram(shadeLocalGlsl, stepBounceGlsl) {
   resetBtn.addEventListener("click", resetShaders);
 }
 
+// Which glass the eye starts in, if any: the same answer for every pixel, so
+// it is found here, once a frame, and handed to the shader as uInitAbsorb.
+// Only parts outside the groups count, as in the shader's trace (the ship's
+// own glass is never around the eye). Each one's matrix rows end in where
+// the eye's origin lands in that part's own space.
+const NO_ABSORB = new Float32Array(3);
+function eyeAbsorb(t) {
+  const ungrouped = scene.groupCount > 0 ? scene.groupRange[0] : scene.count;
+  for (let i = 0; i < ungrouped; i++) {
+    if (scene.matB[4 * i + 1] <= 0) continue;
+    const at = 12 * i, shape = scene.info[4 * i];
+    const p = [scene.inv[at + 3], scene.inv[at + 7], scene.inv[at + 11]];
+    const inside = shape === HEX_PRISM ? moonEval(p, t, scene.matE[4 * i + 1] < -0.5) < 0
+      : shape === BOX ? Math.max(Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2])) < 1 : vdot(p, p) < 1;
+    if (inside) return scene.matD.subarray(4 * i, 4 * i + 3);
+  }
+  return NO_ABSORB;
+}
+
+// Each unit's level-0 size, for the shader's mip-level overlay
+const texSizeBuf = new Float32Array(2 * TEXTURE_UNITS);
+
 // Hand this frame's scene, lights, lens and controls to the shader
 function uploadScene(view, t, ship) {
   const u = uniforms;
@@ -1144,6 +1179,11 @@ function uploadScene(view, t, ship) {
   gl.uniform1f(u.uMirrorWarp, controls.mirrorWarp);
   gl.uniform1f(u.uTime, t);
   gl.uniform4f(u.uHexTorus, ORBIT.radius, MOON.apothem, MOON.halfAngle, moonSpin(t));
+  const spin = moonSpin(t);
+  gl.uniform4f(u.uHexTrig, Math.cos(spin), Math.sin(spin), Math.cos(MOON.halfAngle), Math.sin(MOON.halfAngle));
+  gl.uniform3fv(u.uInitAbsorb, eyeAbsorb(t));
+  TEXTURES.forEach((tex, i) => texSizeBuf.set(tex?._size ?? [1, 1], 2 * i));
+  gl.uniform2fv(u.uTexSize, texSizeBuf);
 
   gl.uniform3fv(u.uSkyCenter, scene.sky.center);
   gl.uniformMatrix3fv(u.uSkyRot, false, scene.sky.rot);
@@ -1182,8 +1222,8 @@ function render(time) {
   // where the ship is before anything is drawn.
   const ship = shipState(t);
   const moon = moonCenter(t);
-  const view = updateCamera(t, ship, freeView(now, dt, t, ship, moon, rotation, [camX, camY]),
-    { x: dragRotX, y: dragRotY });
+  const view = keepOutOfMoon(updateCamera(t, ship, freeView(now, dt, t, ship, moon, rotation, [camX, camY]),
+    { x: dragRotX, y: dragRotY }), t);
   lastView = view; lastShip = ship; lastTime = t;
 
   // Walk the hierarchy to collect this frame's primitives, then trace them all

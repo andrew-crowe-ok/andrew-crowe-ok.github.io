@@ -159,8 +159,9 @@ const ZOOM = {
   start: 16,                      // distance on load and after a reset
   // Nearest the camera may come. Around the planet it stays outside the ship
   // and glass prism's outer sweep, so neither flies through the lens; around
-  // the ship and moon it clears their bounding extents.
-  min: { planet: 16.6, ship: 1.12, moon: 6.3 },
+  // the ship and moon it clears their bounding extents. The prism itself is
+  // kept out of from any view (keepOutOfMoon).
+  min: { planet: 18, ship: 1.22, moon: 3.4 },
   max: 52,                        // short of the nearest stars (STAR_FIELD.clear) even from the ship
   clearPlanet: 0.5,               // nearest the eye comes to the planet's surface
   perPixel: 0.0012,               // about 13% a wheel notch
@@ -248,6 +249,34 @@ function freeView(now, dt, t, ship, moon, rotation, [panX, panY]) {
   if (r >= rClear) return view;
   const clear = r > 1e-6 ? vmul(at, rClear / r) : untransformVector(view, [0, 0, rClear]);
   return multiply(view, translate(...vsub(at, clear)));
+}
+
+// The glass prism is solid to the camera, whatever it is doing: free, riding
+// the ship as it flies through the prism, or chasing it at Engage. An eye that
+// would be inside is slid straight out from the prism's center line, in its
+// cross-section, onto the hexagon grown by the surface's ripple (12% of the
+// apothem) and MOON_CLEAR.pad; the view's rotation is kept, as for the planet.
+// Past each end cap that hexagon shrinks away over MOON_CLEAR.ends of arc, so
+// an eye coming at an end rides up over it instead of jumping from the cap
+// face to the side -- the push is continuous everywhere off the center line.
+const MOON_CLEAR = { pad: 0.12, ends: 1.6 };
+function keepOutOfMoon(view, t) {
+  const at = viewParts(view).eye;
+  const p = transformPoint(inverseMoonFrame(t), at);
+  const { rho, dr, u, v } = moonSection(p, t);
+  if (rho < 1e-6) return view;
+  const past = (Math.abs(Math.atan2(p[2], p[0])) - MOON.halfAngle) * rho;   // arc beyond the nearer cap
+  const need = (1 - smootherstep(past / MOON_CLEAR.ends)) * (1.12 * MOON.apothem + MOON_CLEAR.pad);
+  const have = hexRadius(u, v);
+  if (have >= need) return view;
+  // Scale the offset (dr, y) from the center line up to the hexagon; on the
+  // line itself, there is no direction to keep, so go straight out
+  const spin = moonSpin(t);
+  const [ddr, dy, from] = have > 1e-6 ? [dr, p[1], have] : [1, 0, hexRadius(Math.cos(spin), -Math.sin(spin))];
+  const k = need / from;
+  const out = (ORBIT.radius + ddr * k) / rho;
+  const target = transformPoint(moonFrame(t), [p[0] * out, dy * k, p[2] * out]);
+  return multiply(view, translate(...vsub(at, target)));
 }
 
 // Where the ray o + t d (t >= 0) enters the box |p_i| <= half_i, as t, or null

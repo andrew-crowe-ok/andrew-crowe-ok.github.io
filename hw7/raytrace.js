@@ -33,6 +33,11 @@ const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, EMISSIVE = 2;
 // constant index, since GLSL ES can't index a sampler array with a variable.
 // 16 is all WebGL 2 promises.
 const TEXTURE_UNITS = 16;
+// Height-field bump mapping from a texture (Week 9-2). No part pairs a texture
+// with BUMP_MAPPING today -- the planet, moon and dome are untextured -- so it
+// is compiled out: 4 more 16-way texture switches the shader would carry for
+// nothing. drawPrimitive (main.js) refuses a part that would need it.
+const TEXTURED_BUMP = false;
 
 // Warp streaks, as in HW6's point sprites: each star is smeared over the path
 // it covers in `shutter` seconds, at most `max` CSS pixels long, and dims as
@@ -75,6 +80,7 @@ precision highp int;
 #define STACK_SIZE ${STACK_SIZE}
 #define NUM_LIGHTS ${NUM_LIGHTS}
 #define TEXTURE_UNITS ${TEXTURE_UNITS}
+#define TEXTURED_BUMP ${TEXTURED_BUMP ? 1 : 0}
 #define SPHERE ${SPHERE}
 #define CYLINDER ${CYLINDER}
 #define CONE ${CONE}
@@ -128,8 +134,11 @@ uniform bool uShowLod;          // tint textured surfaces by mip level
 uniform float uMirrorReflect, uMirrorWarp;
 
 uniform sampler2D uTex[TEXTURE_UNITS];
+uniform vec2 uTexSize[TEXTURE_UNITS];   // each unit's level-0 size (main.js)
 uniform float uTime;
 uniform vec4 uHexTorus;   // major radius R, minor apothem r, half arc angle, poloidal spin
+uniform vec4 uHexTrig;    // cos, sin of the spin, then of the half arc angle (main.js)
+uniform vec3 uInitAbsorb; // absorption of the glass the eye starts in, or 0 (main.js)
 
 // ---- sky -------------------------------------------------------------------
 uniform vec3 uSkyCenter;      // the system's center, eye space
@@ -153,16 +162,10 @@ ${textureSwitch(s => `textureGrad(${s}, uv, gx, gy)`)}
   }
   return vec4(1.0);
 }
-vec2 texSize(int unit) {
-  switch (unit) {
-${textureSwitch(s => `vec2(textureSize(${s}, 0))`)}
-  }
-  return vec2(1.0);
-}
 // The mip level isotropic filtering picks: log2 of the footprint's longer axis
 // in texels. Below 0 the texture is magnified; GLSL ES has no textureQueryLod.
 float mipLevel(int unit, vec2 gx, vec2 gy) {
-  vec2 size = texSize(unit);
+  vec2 size = uTexSize[unit];
   return log2(max(length(gx * size), length(gy * size)));
 }
 // Show-mip-levels overlay colors: magnified (level 0 and below) white, then
@@ -366,10 +369,10 @@ bool isWavyHex(int i) {
 }
 
 float hexTorusSideEval(vec3 p, bool wavy) {
-  float R = uHexTorus.x, r = uHexTorus.y, spin = uHexTorus.w;
+  float R = uHexTorus.x, r = uHexTorus.y;
   float rho = length(p.xz);
   float dr = rho - R;
-  float cs = cos(spin), sn = sin(spin);
+  float cs = uHexTrig.x, sn = uHexTrig.y;
   float u = cs * dr + sn * p.y;
   float v = -sn * dr + cs * p.y;
   if (wavy) {
@@ -380,18 +383,11 @@ float hexTorusSideEval(vec3 p, bool wavy) {
   return max(dY, HEX_S3 * abs(u) + 0.5 * dY) - r;
 }
 
-float hexTorusEval(vec3 p, bool wavy) {
-  float halfA = uHexTorus.z;
-  float dCap = cos(halfA) * abs(p.z) - sin(halfA) * p.x;
-  if (dCap >= 0.0 || dot(p.xz, p.xz) < 1e-6) return max(dCap, 1.0);
-  return hexTorusSideEval(p, wavy);
-}
-
 vec3 hexTorusSideNormal(vec3 p, bool wavy, out int part) {
-  float R = uHexTorus.x, r = uHexTorus.y, spin = uHexTorus.w;
+  float R = uHexTorus.x, r = uHexTorus.y;
   float rho = max(length(p.xz), 1e-6);
   float dr = rho - R;
-  float cs = cos(spin), sn = sin(spin);
+  float cs = uHexTrig.x, sn = uHexTrig.y;
   float u = cs * dr + sn * p.y;
   float v = -sn * dr + cs * p.y;
   float ph = 0.0;
@@ -437,8 +433,7 @@ bool hexTorusBound(vec3 o, vec3 u, float tmin, float tmax, float rBound,
   cap0 = 0; cap1 = 0;
   hole0 = INF; hole1 = -INF;
 
-  float halfA = uHexTorus.z;
-  float sinA = sin(halfA), cosA = cos(halfA);
+  float sinA = uHexTrig.w, cosA = uHexTrig.z;
   for (int cid = 1; cid <= 2; cid++) {
     float nz = cid == 1 ? cosA : -cosA;
     float op = -sinA * o.x + nz * o.z;
@@ -500,8 +495,7 @@ bool hexTorusBound(vec3 o, vec3 u, float tmin, float tmax, float rBound,
 }
 
 vec3 hexTorusCapNormal(int cap) {
-  float halfA = uHexTorus.z;
-  return vec3(-sin(halfA), 0.0, cap == 1 ? cos(halfA) : -cos(halfA));
+  return vec3(-uHexTrig.w, 0.0, cap == 1 ? uHexTrig.z : -uHexTrig.z);
 }
 
 bool hitHexTorus(vec3 o, vec3 d, float tmin, inout float t, out vec3 n, out int part, bool wavy) {
@@ -875,7 +869,7 @@ vec2 uvAt(int shape, int part, vec3 p, float repeats) {
   if (shape == HEX_PRISM) {
     float rho = length(p.xz);
     float dr = rho - uHexTorus.x;
-    float cs = cos(uHexTorus.w), sn = sin(uHexTorus.w);
+    float cs = uHexTrig.x, sn = uHexTrig.y;
     float u = cs * dr + sn * p.y;
     float v = -sn * dr + cs * p.y;
     if (part < 2) return vec2(part == 0 ? u : -u, v) / (2.0 * uHexTorus.y) + 0.5;
@@ -908,7 +902,7 @@ vec3 tangentAt(int shape, int part, vec3 p) {
   }
   if (shape == HEX_PRISM) {
     vec2 er = length(p.xz) > 1e-6 ? normalize(p.xz) : vec2(1.0, 0.0);
-    float cs = cos(uHexTorus.w), sn = sin(uHexTorus.w);
+    float cs = uHexTrig.x, sn = uHexTrig.y;
     vec3 eU = vec3(cs * er.x, sn, cs * er.y);
     if (part < 2) return part == 0 ? eU : -eU;
     vec3 t = vec3(-p.y * er.x, length(p.xz) - uHexTorus.x, -p.y * er.y);
@@ -930,10 +924,12 @@ struct Surface {
   bool emissive;
 };
 
+#if TEXTURED_BUMP
 // Bump height, as in HW6: dark is high (1 - Rec. 601 luminance)
 float height(int unit, vec2 uv, vec2 gx, vec2 gy) {
   return 1.0 - dot(sampleTex(unit, uv, gx, gy).rgb, vec3(0.299, 0.587, 0.114));
 }
+#endif
 
 // Smooth multi-directional 3D ripples on the unit sphere (liquid mercury / funhouse warp)
 vec3 mirrorWarpNormal(vec3 p) {
@@ -996,13 +992,14 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
   if (uShowLod) s.base = mipTint(mipLevel(info.y, d1, d2)) * (0.25 + 0.75 * dot(s.base, vec3(0.3, 0.59, 0.11)));
   if (s.emissive) return s;
 
+#if TEXTURED_BUMP
   if (info.w == BUMP_MAPPING) {
     float bump = uMatB[i].w;
     if (bump != 0.0) {
       vec3 T = inverse(transpose(normalToEye)) * tangentAt(info.x, h.part, po);
       T = normalize(T - dot(T, s.ng) * s.ng);
       vec3 B = cross(s.ng, T);
-      vec2 size = texSize(info.y);
+      vec2 size = uTexSize[info.y];
       float lod = max(mipLevel(info.y, d1, d2), 0.0);
       float scaleExp = exp2(lod);
       vec2 texel = scaleExp / size;
@@ -1013,7 +1010,9 @@ Surface surfaceAt(vec3 o, vec3 d, Hit h, float footprint) {
       vec3 nt = normalize(vec3(-bump * dhdu, -bump * dhdv, 1.0));
       s.n = normalize(mat3(T, B, s.ng) * nt);
     }
-  } else if (info.z >= 0) {
+  } else
+#endif
+  if (info.z >= 0) {
     vec3 T = inverse(transpose(normalToEye)) * tangentAt(info.x, h.part, po);
     T = normalize(T - dot(T, s.ng) * s.ng);
     vec3 B = cross(s.ng, T);
@@ -1414,10 +1413,6 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
       float diff = dot(n, L);
       if (diff <= 0.0 || dot(ng, L) <= 0.0) continue;
 
-      // Shadow ray: transmittance() attenuates through glass & blocks opaque hits
-      vec3 vis = uShadows ? transmittance(s.p + ng * EPS, L, dist) : vec3(1.0);
-      if (vis == vec3(0.0)) continue;
-
       // Inverse-square attenuation normalized to 1 at light ref distance,
       // clamped beyond reach so the ship stays lit during warp
       float ref2 = uLightRange[j].x * uLightRange[j].x;
@@ -1427,7 +1422,16 @@ vec3 shadeLocal(Surface s, vec3 d, int i) {
       // Specular highlight is added in full so glass still glints
       float rdotv = max(dot(V, reflect(-L, n)), 0.0);
       float spec  = rdotv > 0.0 ? pow(rdotv, A.w) : 0.0;
-      color += uLightColor[j] * vis * att * (A.y * body * s.base * diff + A.z * spec);
+      vec3 lit = uLightColor[j] * att * (A.y * body * s.base * diff + A.z * spec);
+
+      // A shadow can only take light away, so a light too faint to show here
+      // (under half an 8-bit step) needs no shadow ray: the nav lights from
+      // across the system, or the glass moon's thin diffuse share
+      if (max(lit.r, max(lit.g, lit.b)) < 1.0 / 512.0) continue;
+
+      // Shadow ray: transmittance() attenuates through glass & blocks opaque hits
+      vec3 vis = uShadows ? transmittance(s.p + ng * EPS, L, dist) : vec3(1.0);
+      color += lit * vis;
     }
   }
 
@@ -1554,16 +1558,8 @@ void main() {
 
   Path stack[STACK_SIZE];
   int top = 0;
-  vec3 initAbsorb = vec3(0.0);
-  int ungrouped = uGroupCount > 0 ? uGroupRange[0].x : uCount;
-  for (int i = 0; i < ungrouped; i++) {
-    if (uMatB[i].y <= 0.0) continue;
-    vec3 po = toObject(i, vec3(0.0), 1.0);
-    bool inside = uInfo[i].x == HEX_PRISM ? hexTorusEval(po, isWavyHex(i)) < 0.0
-      : (uInfo[i].x == BOX ? max(abs(po.x), max(abs(po.y), abs(po.z))) < 1.0 : dot(po, po) < 1.0);
-    if (inside) { initAbsorb = uMatD[i].rgb; break; }
-  }
-  Path p = Path(vec3(0.0), d0, vec3(1.0), initAbsorb, 0.0, 0);
+  // The eye's own glass, if it starts in some, is the same for every pixel (main.js)
+  Path p = Path(vec3(0.0), d0, vec3(1.0), uInitAbsorb, 0.0, 0);
   bool live = true;
   vec3 color = vec3(0.0);
 

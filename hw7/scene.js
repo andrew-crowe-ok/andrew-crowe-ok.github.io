@@ -14,7 +14,7 @@
 // smooth departure onto the straight line it was flying when "Engage" was
 // pressed.
 
-const PLANET = { radius: 4.8, spin: 0.08 };                     // spin in rad/s
+const PLANET = { radius: 6.24, spin: 0.08 };                     // spin in rad/s
 
 // Mirror sphere: at default 100% reflectivity the dark slate body vanishes;
 // lowering reflectivity reveals the shaded surface beneath
@@ -24,12 +24,12 @@ const PLANET_MATERIAL = {
 const ORBIT = { radius: 11.6, speed: 0.25, tilt: 0.25, shipScale: 0.24 };
 
 // The glass hex prism: a curved section of a hexagonal torus spanning one third
-// of the orbit (major radius ORBIT.radius, cross-section apothem 1.48), drifting
+// of the orbit (major radius ORBIT.radius, cross-section apothem 1.04), drifting
 // gently along the ship's own orbit in the opposite direction while spinning
 // about the orbital centerline so the ship meets and flies straight through it.
 // `phase` places its leading end just ahead of the ship in front of the planet's
 // limb on load.
-const MOON = { apothem: 1.48, halfAngle: Math.PI / 3, speed: 0.05, phase: -1.30, spin: 0.6 };
+const MOON = { apothem: 1.04, halfAngle: Math.PI / 3, speed: 0.05, phase: -1.30, spin: 0.6 };
 // Crystal-clear refractive glass with a subtle blue absorption and Fresnel edge
 // gleam so the ship remains clearly visible as it flies through
 const MOON_MATERIAL = {

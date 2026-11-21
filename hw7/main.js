@@ -320,17 +320,18 @@ const MAX_ANISO = ANISO ? gl.getParameter(ANISO.MAX_TEXTURE_MAX_ANISOTROPY_EXT) 
 //   linear     bilinear blend of the 4 nearest texels, mip level 0 only, so
 //              still aliases under minification
 //   trilinear  bilinear within the two nearest mip levels, blended between them
-//   aniso      trilinear, plus up to MAX_ANISO taps along the footprint's long
-//              axis, so surfaces at a slant stay sharp
+//   aniso      trilinear, plus up to anisoLevel taps (the panel's slider, at
+//              most MAX_ANISO) along the footprint's long axis, so surfaces at
+//              a slant stay sharp
 // Only mipmapped textures (tagged _mipmapped) are switched: the video frame
 // and the sky backdrop have no mip chain, and the backdrop is sampled at level 0.
 const FILTER_MODES = {
-  nearest:   { min: gl.NEAREST, mag: gl.NEAREST, aniso: 1 },
-  linear:    { min: gl.LINEAR, mag: gl.LINEAR, aniso: 1 },
-  trilinear: { min: gl.LINEAR_MIPMAP_LINEAR, mag: gl.LINEAR, aniso: 1 },
-  aniso:     { min: gl.LINEAR_MIPMAP_LINEAR, mag: gl.LINEAR, aniso: MAX_ANISO }
+  nearest:   { min: gl.NEAREST, mag: gl.NEAREST, aniso: false },
+  linear:    { min: gl.LINEAR, mag: gl.LINEAR, aniso: false },
+  trilinear: { min: gl.LINEAR_MIPMAP_LINEAR, mag: gl.LINEAR, aniso: false },
+  aniso:     { min: gl.LINEAR_MIPMAP_LINEAR, mag: gl.LINEAR, aniso: true }
 };
-let textureFilter = "aniso";
+let textureFilter = "aniso", anisoLevel = MAX_ANISO;
 // Binds to the texture's own unit, which keeps every unit's binding intact
 function applyFilter(texture) {
   if (!texture?._mipmapped || texture._unitIndex === undefined) return;
@@ -339,19 +340,19 @@ function applyFilter(texture) {
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mode.min);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, mode.mag);
-  if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT, mode.aniso);
+  if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT, mode.aniso ? anisoLevel : 1);
 }
 
-// Antelope canyon thumbnail (64x48) as an immediate placeholder on frame 1
-const ANTELOPE_THUMB = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAsICAoIBwsKCQoNDAsNERwSEQ8PESIZGhQcKSQrKigkJyctMkA3LTA9MCcnOEw5PUNFSElIKzZPVU5GVEBHSEX/2wBDAQwNDREPESESEiFFLicuRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUX/wAARCAAwAEADASIAAhEBAxEB/8QAGgABAAMBAQEAAAAAAAAAAAAABAIDBQABBv/EADEQAAIBAwICBwYHAAAAAAAAAAECAwAEESExEmETQUJRcYGRIiOCkqHBBTIzQ3Ki0f/EABgBAQEBAQEAAAAAAAAAAAAAAAECAAME/8QAGREBAQEBAQEAAAAAAAAAAAAAAAERAmES/9oADAMBAAIRAxEAPwD5SEMdnpaJLjR1z4UGN4u/WlI8O3HXrlbDEjlxqwPw1PDDfHy1SvQndyPOrlWMaiQ+ANdNOPeKQbIPUiq3lfrTJ5NUmVcaufWqHiGvvG9a2ixXLcMN0/tRJJ8jUEedWTIg2kOfGgSrJn2SSOdRerBhUUdu26rTI7e2xqn1rCSNSci6xS40I/fIPXpXKdeLkbaW1sNejAFTMNrkDoyTyrKUpsbxge4jH2pCSxxKQLkBj14GlX9RWGvb247JB8aNNDbKNSQObUWRYiMteEcwKFJa25yReyZovXjYTJBatrxE93tUaQRKMK2B/Kiy2UWdLts8hRnhCb3JxzWud68TYUktsu5HoKvWeFiBG2vdpWdGsYP6KfLSozGv5Y08lFEpjRW4gA94VB8RXLcfh6niReJz2qIJFJx0YPLgH+VcJWAyIzywAPtVaogz2wOOIA+NRa4tsaajlVBmlHY+oqDyyYyQB8dOhOS5hGyMfKiyzq2iofE7VzTnY49dqO8y9pgam0Y//9k=";
+// Mars dune thumbnail (64x32) as an immediate placeholder on frame 1
+const MARS_THUMB = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCAAgAEADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDzrxLqsWraobm23eUg2ISMfKOBx2rK+zyMolRCysccDPNa03h6S2nktpbiESBsAb8Z/oa6LT7abwx4amvjJbPdeYBAM79ue5qG7aGqi5O7K3w7jvrPXzcmDy7cQsJpZxtRR2yTxnOKua/41P8Awkf2i0l8xIAUQjp6ZrN1nUdY160jiuJnk2chV4UH6Dis6Lwvq7qrNabUbkO8qoP1NCet2ElpyxR0egeNT/wkf2i7l8tJwEcnp6Zqn8RI76818XIg8y3MKiGWAbkYd8EcZzmsiXwvq6KzLabkXkukquP0NaOjajrGg2kkVvM8e/kq3Kk/Q8UN63QRWnLJHLfZ5FUyuhVVOORjmtXw1qsWk6oLm53eU42OQM/KeDx3ro9QtpvE/hqG+Elsl15hE4zs3Y7iudh8PSXM8dtFcQmQtgjfnH9BTTvoDi4u6M6ayu4QDLFJgnhsEj86660jtNQ+G87faB9tikOUI5yOn4EZ/EVu3Ug0uxay0yyLzshDXDgE+h2jNcPZwX1taXEoxsk+Vx7jvQnfcUo22ZFo+ptFcbJBvVhjBp2pRXhkFyocoThcnOPaslSYpwxGCrZr11rS2h8DtqkyRtbRR+YjYGXcjAznnrTehKV3uecabFeCQ3LBwgOGwcZ9qbrGptLcFIxsVRjAr0lbS2m8DrqkKRrbSx+Y7YGUcDBxjnrXkTEyzlgMlmzQtQat1O0u47TT/hvA32gfbZZBhAOcnr+AGPxNcjDZXcwJiikwDy2CB+dad5BfXNpbynGyP5UHue9dxayDVLFbLU7IpOqALcIAD6DcM0m7bFRjf4mf/9k=";
 
 // An image file: immediate low-res placeholder, then the image with mipmaps once decoded off-thread
 function loadTexture(urls, thumbUrl) {
   if (typeof urls === "string") urls = [urls];
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  // Default 1x1 base rock color of Antelope Canyon while the thumbnail parses
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([73, 61, 92, 255]));
+  // Default 1x1 Mars dust color while the thumbnail parses
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([120, 72, 60, 255]));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   texture._size = [1, 1];
 
@@ -429,11 +430,14 @@ function loadTexture(urls, thumbUrl) {
   return texture;
 }
 
-// Phones get half resolution (1024x766), desktops get 2048x1532; WebP with JPEG fallback
-const ANTELOPE_URLS = MOBILE
-  ? ["textures/antelope-mobile.webp", "textures/antelope-mobile.jpg"]
-  : ["textures/antelope.webp", "textures/antelope.jpg"];
-const planetTexture = loadTexture(ANTELOPE_URLS, ANTELOPE_THUMB);
+// The HiRISE dune photo (mars2.jpg), cropped square and set beside its own
+// mirror image: a 2:1 equirectangular map whose left and right edges meet, so
+// the sphere has no seam. Phones get 1024x512, desktops 2048x1024; WebP with
+// JPEG fallback.
+const MARS_URLS = MOBILE
+  ? ["textures/mars-mobile.webp", "textures/mars-mobile.jpg"]
+  : ["textures/mars.webp", "textures/mars.jpg"];
+const planetTexture = loadTexture(MARS_URLS, MARS_THUMB);
 
 // Procedural ship skin, generated on the GPU (textures.js). Every part's
 // texture is sized to the surface it wraps -- the saucer's go around a
@@ -548,10 +552,19 @@ const TEXTURES = [planetTexture, saucerTexture, saucerNormalMap, deckTexture, de
   deflectorGlow, grilleGlow, impulseGlow, plasma.texture, backdropTexture];
 if (TEXTURES.length !== TEXTURE_UNITS) throw new Error("TEXTURE_UNITS is out of date");
 TEXTURES.forEach((texture, i) => { if (texture) texture._unitIndex = i; });
+// The anisotropy slider only means something in the anisotropic mode
+const anisoInput = document.getElementById("aniso");
 function setTextureFilter(mode) {
-  if (!(mode in FILTER_MODES) || mode === textureFilter) return;
+  if (!(mode in FILTER_MODES)) return;
+  anisoInput.disabled = !FILTER_MODES[mode].aniso || MAX_ANISO <= 1;
+  if (mode === textureFilter) return;
   textureFilter = mode;
   TEXTURES.forEach(applyFilter);
+}
+function setAnisoLevel(level) {
+  if (level === anisoLevel) return;
+  anisoLevel = level;
+  if (FILTER_MODES[textureFilter].aniso) TEXTURES.forEach(applyFilter);
 }
 function bindTextures() {
   TEXTURES.forEach((texture, i) => {
@@ -708,8 +721,12 @@ const CONTROL_INPUTS = {
   shadows:       { read: el => el.checked },
   attenuation:   { read: el => el.checked },
   filter:        { read: el => el.value, apply: setTextureFilter },
+  // The slider steps through powers of two, 1x up to the GPU's MAX_ANISO
+  aniso:         { read: el => Math.min(2 ** parseInt(el.value), MAX_ANISO), show: v => `${v}×`,
+                   apply: setAnisoLevel },
   showLod:       { read: el => el.checked }
 };
+anisoInput.max = anisoInput.value = Math.floor(Math.log2(MAX_ANISO));
 // The panel starts folded on small screens, where it would cover the scene
 if (MOBILE || innerWidth <= 600) document.getElementById("controls").open = false;
 
@@ -734,16 +751,17 @@ for (const [id, { read, show, apply }] of Object.entries(CONTROL_INPUTS)) {
 
 // Interactive controls. While the chase camera has the view, the drag angles
 // steer it around the ship instead of turning the scene (until warp, when all
-// camera movement is locked), and clicks, the wheel and the keys are ignored (camera.js).
+// camera movement is locked), and clicks and the wheel are ignored (camera.js).
+// There are no keyboard controls.
 let dragRotX, dragRotY;      // mouse drag
-let camX, camY;              // arrow keys; w, s and the wheel zoom (camera.js)
+let camX, camY;              // two-finger pan; the wheel and pinch zoom (camera.js)
 // The scene's own clock starts on frame 1, so a reset restarts the orbit and the
 // planet's spin along with everything else
 let sceneStart = null;
 
 // Pointer input, mouse and touch alike. One pointer down drags the view
 // around. Two (fingers) pinch to zoom, as the wheel does, and move together to
-// pan, as the arrow keys do, the pan scaled so the focus point tracks the
+// pan, the pan scaled so the focus point tracks the
 // fingers. A press that strays more than CLICK_SLOP pixels from where it
 // started, or that ever has a second finger, is a drag, and its release is not
 // a click.
@@ -795,24 +813,6 @@ function liftPointer(e) {
 }
 canvas.addEventListener("pointerup", liftPointer);
 canvas.addEventListener("pointercancel", liftPointer);
-
-const CONTROL_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "s"];
-document.addEventListener("keydown", e => {
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement ||
-      e.target instanceof HTMLTextAreaElement) return;
-  if (!CONTROL_KEYS.includes(e.key)) return;
-  e.preventDefault();         // arrows would scroll the page even when ignored
-  if (offOrbit()) return;
-  const step = 0.2;
-  switch (e.key) {
-    case "ArrowUp": camY -= step; break;
-    case "ArrowDown": camY += step; break;
-    case "ArrowLeft": camX += step; break;
-    case "ArrowRight": camX -= step; break;
-    case "w": zoomKey(-1); break;
-    case "s": zoomKey(1); break;
-  }
-});
 
 // Clicking the ship, the planet or the moon centers the view on it. Picking
 // reads the view, ship and moon of the last frame drawn, which is what was

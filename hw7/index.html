@@ -8,8 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600&display=swap" rel="stylesheet">
-  <link rel="preload" as="fetch" crossorigin="anonymous" href="textures/antelope.webp" media="not all and (pointer: coarse)">
-  <link rel="preload" as="fetch" crossorigin="anonymous" href="textures/antelope-mobile.webp" media="(pointer: coarse)">
+  <link rel="preload" as="fetch" crossorigin="anonymous" href="textures/mars.webp" media="not all and (pointer: coarse)">
+  <link rel="preload" as="fetch" crossorigin="anonymous" href="textures/mars-mobile.webp" media="(pointer: coarse)">
   <style>
     :root {
       --glow: 110, 200, 255;          /* warp-field blue, as rgb triplet */
@@ -308,6 +308,8 @@
         <option value="trilinear">Mipmap (trilinear)</option>
         <option value="aniso" selected>Mipmap + anisotropic</option>
       </select></label>
+    <label class="row">Anisotropy <output for="aniso"></output>
+      <input type="range" id="aniso" min="0" max="4" step="1" value="4"></label>
     <div class="checks">
       <label><input type="checkbox" id="shadows" checked> Shadows</label>
       <label><input type="checkbox" id="attenuation" checked> Attenuation</label>
@@ -344,13 +346,13 @@
 
   <!-- ?v= changes with each deploy, so a browser never runs a cached script
        from the last one alongside new ones -->
-  <script src="transforms.js?v=47"></script>
-  <script src="raytrace.js?v=47"></script>
-  <script src="textures.js?v=47"></script>
-  <script src="ship.js?v=47"></script>
-  <script src="camera.js?v=47"></script>
-  <script src="scene.js?v=47"></script>
-  <script src="main.js?v=47"></script>
+  <script src="transforms.js?v=49"></script>
+  <script src="raytrace.js?v=49"></script>
+  <script src="textures.js?v=49"></script>
+  <script src="ship.js?v=49"></script>
+  <script src="camera.js?v=49"></script>
+  <script src="scene.js?v=49"></script>
+  <script src="main.js?v=49"></script>
 </body>
 
 </html>

@@ -308,6 +308,8 @@
         <option value="trilinear">Mipmap (trilinear)</option>
         <option value="aniso" selected>Mipmap + anisotropic</option>
       </select></label>
+    <label class="row">Anisotropy <output for="aniso"></output>
+      <input type="range" id="aniso" min="0" max="4" step="1" value="4"></label>
     <div class="checks">
       <label><input type="checkbox" id="shadows" checked> Shadows</label>
       <label><input type="checkbox" id="attenuation" checked> Attenuation</label>
@@ -344,13 +346,13 @@
 
   <!-- ?v= changes with each deploy, so a browser never runs a cached script
        from the last one alongside new ones -->
-  <script src="transforms.js?v=48"></script>
-  <script src="raytrace.js?v=48"></script>
-  <script src="textures.js?v=48"></script>
-  <script src="ship.js?v=48"></script>
-  <script src="camera.js?v=48"></script>
-  <script src="scene.js?v=48"></script>
-  <script src="main.js?v=48"></script>
+  <script src="transforms.js?v=49"></script>
+  <script src="raytrace.js?v=49"></script>
+  <script src="textures.js?v=49"></script>
+  <script src="ship.js?v=49"></script>
+  <script src="camera.js?v=49"></script>
+  <script src="scene.js?v=49"></script>
+  <script src="main.js?v=49"></script>
 </body>
 
 </html>

@@ -1,7 +1,7 @@
 // Chase camera and lens.
 //
 // In orbit the view is the free one: the scene turns under the mouse and the
-// arrow keys walk the camera around, through a 45 degree rectilinear lens.
+// a two-finger drag walks the camera around, through a 45 degree rectilinear lens.
 // The moment "Engage" is pressed the camera swings in behind the ship, to a
 // chase position far enough back for the plain lens to frame it:
 //
@@ -132,15 +132,15 @@ function updateCamera(t, ship, free, drag) {
 //
 // The focus starts on the ship. Clicking the ship, the planet or the moon slides it
 // onto that object over FOCUS.blend (smootherstep), from wherever it was; on
-// the ship or the moon it then rides along. The arrow-key pan eases back to zero
+// the ship or the moon it then rides along. The two-finger pan eases back to zero
 // over the same slide, so the object ends up dead center.
 //
 // A click hits the planet's or the moon's own sphere, or a box around the ship in its own
 // frame that holds every vertex, and the nearer hit along the ray wins: the
 // ship in front of the planet is picked, the ship hidden behind it is not.
 //
-// The scroll wheel scales the distance by exp(ZOOM.perPixel * deltaY), and
-// w / s by exp(ZOOM.keyStep), so a step is the same proportion near or far.
+// The scroll wheel scales the distance by exp(ZOOM.perPixel * deltaY), so a
+// notch is the same proportion near or far; a pinch scales it by the spread.
 // The distance eases toward that goal with time constant ZOOM.ease, in log
 // space so near and far zooms feel alike, and stays within per-object bounds.
 // At max zoom (nearest distance) on the ship or moon, the camera smoothly locks
@@ -162,10 +162,9 @@ const ZOOM = {
   // the ship and moon it clears their bounding extents. The prism itself is
   // kept out of from any view (keepOutOfMoon).
   min: { planet: 18, ship: 1.22, moon: 3.4 },
-  max: 52,                        // short of the nearest stars (STAR_FIELD.clear) even from the ship
+  max: 32,                        // about where the 45 degree lens frames the whole orbit
   clearPlanet: 0.5,               // nearest the eye comes to the planet's surface
   perPixel: 0.0012,               // about 13% a wheel notch
-  keyStep: 0.015,                 // log distance per w / s, about 1.5%
   ease: 0.12                      // s
 };
 const LOCK = {
@@ -195,10 +194,9 @@ function setZoomGoal(d) {
   zoom.goal = Math.min(ZOOM.max, Math.max(ZOOM.min[camFocus.on], d));
 }
 const zoomWheel = px => setZoomGoal(zoom.goal * Math.exp(ZOOM.perPixel * px));
-const zoomKey = dir => setZoomGoal(zoom.goal * Math.exp(dir * ZOOM.keyStep));
 const zoomPinch = ratio => setZoomGoal(zoom.goal * ratio);
 
-// Start the slide onto `on`. `pan` is the arrow-key pan as it stands, which
+// Start the slide onto `on`. `pan` is the two-finger pan as it stands, which
 // the caller zeroes: it is folded into what eases away.
 function focusOn(on, now, pan) {
   const switched = on !== camFocus.on;

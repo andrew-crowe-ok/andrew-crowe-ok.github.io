@@ -20,7 +20,7 @@ const PLANET = { radius: 6.24, spin: 0.08 };                     // spin in rad/
 // texture beneath (shadeLocal's body = 1 - kr), so the reflectivity slider
 // fades from bare Mars at 0% to this half-silvered planet at 100%
 const PLANET_MATERIAL = {
-  ka: 0.08, kd: 1.0, ks: 0, shininess: 64, bumpScale: 0, atmosphere: [0, 0, 0], kr: 0.5
+  ka: 0.3, kd: 1.0, ks: 0, shininess: 64, bumpScale: 0, atmosphere: [0, 0, 0], kr: 0.5
 };
 const ORBIT = { radius: 11.6, speed: 0.25, tilt: 0.25, shipScale: 0.24 };
 
